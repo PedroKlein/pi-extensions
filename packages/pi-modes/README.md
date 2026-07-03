@@ -60,6 +60,22 @@ The choice is injected into the system prompt for that build session. If you dis
 
 The current mode survives session reloads. On `session_start`, the extension replays the last persisted mode entry from session storage. New sessions default to **Ask**.
 
+## Configuration
+
+No `settings.json` configuration needed.
+
+Mode prompts are loaded from `prompts/` inside the package. When installed via npm, these are the bundled defaults. To customize a mode's system prompt injection, place override files at:
+
+```
+~/.pi/agent/extensions/pi-modes/prompts/
+├── ask.md
+├── brainstorm.md
+├── plan.md
+└── build.md
+```
+
+Any file present overrides the bundled prompt for that mode. `none` mode has no prompt (it's raw pi with zero injection).
+
 ## How it works
 
 The extension hooks `before_agent_start` to inject the mode prompt and handle build scope. It hooks `tool_call` for write filtering and subagent gating. Mode state is stored via `pi.appendEntry` with type `pi-mode`.

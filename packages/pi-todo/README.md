@@ -153,6 +153,8 @@ Tasks are stored in `~/.config/todo/` as per-scope JSON files:
 └── work.json                   # work tasks
 ```
 
+This is the same storage used by the [`todo` CLI](https://github.com/PedroKlein/tools/tree/main/cmd/todo) — they share the same data. You can use the standalone TUI (`todo`) to manage tasks from the terminal, and this extension to manage them from inside pi. Changes made in either are immediately visible to the other.
+
 IDs are per-scope (each scope has its own 1-based numbering).
 
 Migrates automatically from the old single-file format at
