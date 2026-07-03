@@ -1,0 +1,27 @@
+{
+  "name": "@pedroklein/pi-games",
+  "version": "0.1.0",
+  "description": "Play games while Pi runs — Snake, Flappy Bird",
+  "type": "module",
+  "main": "./index.ts",
+  "files": ["dist", "*.ts"],
+  "scripts": {
+    "build": "tsup index.ts --format esm --dts",
+    "clean": "rm -rf dist"
+  },
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
+  "keywords": ["pi-package", "pi", "games", "snake", "flappy", "coding-agent"],
+  "license": "MIT",
+  "author": "Pedro Klein",
+  "engines": { "node": ">=20.0.0" },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "devDependencies": {
+    "tsup": "^8.0.0",
+    "typescript": "^5.7.0"
+  }
+}

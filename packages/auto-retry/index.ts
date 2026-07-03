@@ -1,0 +1,90 @@
+/**
+ * Auto-Retry Extension
+ *
+ * Detects when the LLM produces a malformed tool call (JSON parse error)
+ * and automatically sends a follow-up user message asking it to retry
+ * with smaller, simpler edits.
+ *
+ * The error surfaces as an AssistantMessage with:
+ *   stopReason: "error"
+ *   errorMessage containing "JSON" or "Unexpected" parse errors
+ *
+ * Retry behavior:
+ *   - Max 2 consecutive retries per agent run (resets on success)
+ *   - Flash notification on retry so you know what happened
+ *   - Gives up after max retries to avoid infinite loops
+ */
+
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+
+const MAX_RETRIES = 2;
+
+const RETRY_MESSAGE =
+	"Your last tool call failed because it produced malformed JSON. " +
+	"This usually happens with large edit blocks containing special characters. " +
+	"Please retry the same change, but break it into smaller, separate edit calls — " +
+	"each with a short, targeted oldText. Do not combine many changes into one large edit.";
+
+function isJsonParseError(errorMessage: string): boolean {
+	const lower = errorMessage.toLowerCase();
+	return (
+		lower.includes("unexpected") && (lower.includes("json") || lower.includes("position")) ||
+		lower.includes("json") && lower.includes("parse") ||
+		lower.includes("unterminated string") ||
+		lower.includes("bad control character") ||
+		lower.includes("expected ',' or '}'")
+	);
+}
+
+export default function (pi: ExtensionAPI) {
+	let consecutiveRetries = 0;
+
+	// Reset counter on successful turns
+	pi.on("turn_end", async (event) => {
+		const msg = event.message;
+		if (msg.role === "assistant" && msg.stopReason !== "error") {
+			consecutiveRetries = 0;
+		}
+	});
+
+	// Detect malformed tool call errors and retry
+	pi.on("agent_end", async (event, ctx) => {
+		const messages = event.messages;
+		if (!messages || messages.length === 0) return;
+
+		// Check the last assistant message
+		const last = messages[messages.length - 1];
+		if (last.role !== "assistant") return;
+
+		const assistant = last as {
+			role: "assistant";
+			stopReason: string;
+			errorMessage?: string;
+		};
+
+		if (assistant.stopReason !== "error" || !assistant.errorMessage) return;
+		if (!isJsonParseError(assistant.errorMessage)) return;
+
+		// Enforce retry limit
+		if (consecutiveRetries >= MAX_RETRIES) {
+			const theme = ctx.ui.theme;
+			ctx.ui.notify(
+				theme.fg("error", `⛔ Auto-retry gave up after ${MAX_RETRIES} attempts — malformed JSON persists`),
+				"error",
+			);
+			consecutiveRetries = 0;
+			return;
+		}
+
+		consecutiveRetries++;
+
+		const theme = ctx.ui.theme;
+		ctx.ui.notify(
+			theme.fg("warning", `🔄 Malformed tool call JSON — auto-retrying (${consecutiveRetries}/${MAX_RETRIES})`),
+			"warning",
+		);
+
+		// Send as a new user message to trigger a fresh turn
+		pi.sendUserMessage(RETRY_MESSAGE, { deliverAs: "followUp" });
+	});
+}

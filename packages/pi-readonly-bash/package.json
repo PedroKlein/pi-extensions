@@ -1,0 +1,12 @@
+{
+  "name": "@pedroklein/pi-readonly-bash",
+  "version": "0.1.0",
+  "description": "Pi extension providing a bash_readonly tool with readonly policy enforcement",
+  "type": "module",
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "name": "@pedroklein/pi-todo",
+  "version": "0.1.0",
+  "description": "Terminal-first TODO board for Pi — tasks, PR reviews, and project tracking",
+  "type": "module",
+  "main": "./index.ts",
+  "files": ["dist", "*.ts"],
+  "scripts": {
+    "build": "tsup index.ts --format esm --dts",
+    "clean": "rm -rf dist"
+  },
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
+  "keywords": ["pi-package", "pi", "todo", "task-board", "pr-review", "coding-agent"],
+  "license": "MIT",
+  "author": "Pedro Klein",
+  "engines": { "node": ">=20.0.0" },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "devDependencies": {
+    "tsup": "^8.0.0",
+    "typescript": "^5.7.0"
+  }
+}
