@@ -12,7 +12,7 @@
     }
   },
   "files": [
-    "dist",
+    "src",
     "skills",
     "examples"
   ],
@@ -43,9 +43,18 @@
     "coding-agent"
   ],
   "license": "MIT",
-  "author": "",
+  "author": "Pedro Klein",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/PedroKlein/pi-extensions",
+    "directory": "packages/pi-baml"
+  },
+  "homepage": "https://github.com/PedroKlein/pi-extensions/tree/main/packages/pi-baml",
   "engines": {
     "node": ">=20.0.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
   },
   "dependencies": {
     "@boundaryml/baml": "^0.85.0",

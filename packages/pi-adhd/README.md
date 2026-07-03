@@ -1,8 +1,14 @@
 # pi-adhd
 
-Sticky notes, side-chat, and reminders for [Pi](https://github.com/mariozechner/pi-coding-agent).
+Sticky notes, side-chat, and reminders for [Pi](https://github.com/earendil-works/pi-coding-agent).
 
 You know how you're deep in a conversation with the agent, and you think "oh, I should ask it to generate ADRs at the end" but you don't want to inject that now? This is for that. Capture the thought, keep working, inject it later.
+
+## Install
+
+```bash
+pi install npm:@pedroklein/pi-adhd
+```
 
 ## Features
 
@@ -36,15 +42,17 @@ When you close the session, an overlay shows any orphan notes (not pinned, not i
 
 ## Installation
 
-Add to your Pi `settings.json`:
+```bash
+pi install npm:@pedroklein/pi-adhd
+```
+
+Or add to `~/.pi/agent/settings.json` manually:
 
 ```json
 {
-  "packages": ["git:github.com/PedroKlein/pi-adhd"]
+  "packages": ["npm:@pedroklein/pi-adhd"]
 }
 ```
-
-Pi clones the repo and builds it automatically.
 
 ## Commands and shortcuts
 
@@ -100,16 +108,20 @@ In Pi's `settings.json`:
 If [pi-baml](https://github.com/PedroKlein/pi-baml) is installed, pi-adhd uses it for structured note classification via inline BAML (no `.baml` files needed). Otherwise it calls the LLM directly or falls back to a simple heuristic (everything defaults to "prompt").
 
 To install pi-baml alongside:
-```json
-{
-  "packages": [
-    "git:github.com/PedroKlein/pi-baml",
-    "git:github.com/PedroKlein/pi-adhd"
-  ]
-}
+```bash
+pi install npm:@pedroklein/pi-baml
+pi install npm:@pedroklein/pi-adhd
 ```
 
 No hard dependencies on any other extension. pi-adhd works fine without pi-baml.
+
+## Development
+
+```bash
+pnpm test        # run tests
+pnpm build       # build for publish
+pnpm typecheck   # type-check without emitting
+```
 
 ## License
 

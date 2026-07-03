@@ -4,27 +4,30 @@
   "keywords": ["pi-package"],
   "pi": {
     "extensions": [
-      "packages/auto-retry",
-      "packages/caffeinate",
-      "packages/pi-adhd",
-      "packages/pi-ask",
-      "packages/pi-baml",
-      "packages/pi-games",
-      "packages/pi-memory",
-      "packages/pi-modes",
-      "packages/pi-readonly-bash",
-      "packages/pi-repos",
-      "packages/pi-status",
-      "packages/pi-task",
-      "packages/pi-term",
-      "packages/pi-todo"
+      "packages/auto-retry/src/index.ts",
+      "packages/caffeinate/src/index.ts",
+      "packages/pi-adhd/src/index.ts",
+      "packages/pi-ask/src/index.ts",
+      "packages/pi-baml/src/index.ts",
+      "packages/pi-games/src/index.ts",
+      "packages/pi-memory/src/index.ts",
+      "packages/pi-modes/src/index.ts",
+      "packages/pi-readonly-bash/src/index.ts",
+      "packages/pi-repos/src/index.ts",
+      "packages/pi-status/src/index.ts",
+      "packages/pi-task/src/index.ts",
+      "packages/pi-term/src/index.ts",
+      "packages/pi-todo/src/index.ts"
     ],
     "skills": [
-      "packages/pi-baml/skills"
+      "packages/pi-baml/skills",
+      "packages/pi-repos/skills"
     ]
   },
   "scripts": {
     "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
     "changeset": "changeset",
     "version": "changeset version",
     "release": "pnpm build && changeset publish"
@@ -33,6 +36,7 @@
   "devDependencies": {
     "@changesets/cli": "^2.27.0",
     "tsup": "^8.0.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
   }
 }

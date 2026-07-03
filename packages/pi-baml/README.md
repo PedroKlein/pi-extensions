@@ -2,6 +2,12 @@
 
 Typed structured output from LLMs for the [Pi coding agent](https://github.com/earendil-works/pi-coding-agent). Connects [BAML](https://github.com/BoundaryML/baml) (a DSL for defining typed LLM functions) to Pi's provider system, so the agent and extensions get schema-validated responses without manual JSON parsing.
 
+## Install
+
+```bash
+pi install npm:@pedroklein/pi-baml
+```
+
 ## How it works
 
 pi-baml registers three tools (`baml_list`, `baml_run`, `baml_exec`) and injects an `<available_baml_functions>` block into the system prompt, following the same pattern Pi uses for `<available_skills>`. The agent sees what functions exist, calls `baml_list` to get signatures, and calls `baml_run` to execute them.
@@ -9,20 +15,6 @@ pi-baml registers three tools (`baml_list`, `baml_run`, `baml_exec`) and injects
 Functions live in `.baml` files organized into groups (directories). Groups are discovered from standard paths at startup and compiled on demand at call time. Credentials come from Pi's ModelRegistry; there's no separate API key management.
 
 The package also ships a bundled **BAML authoring skill** (`skills/baml/`) that teaches the agent how to write correct BAML code for `baml_exec`.
-
-## Installation
-
-```bash
-pi install https://github.com/PedroKlein/pi-baml
-```
-
-Or pin to a release:
-
-```bash
-pi install https://github.com/PedroKlein/pi-baml@v0.1.0
-```
-
-Pi clones the repo, installs dependencies, and builds automatically.
 
 ## Configuration
 
@@ -237,7 +229,7 @@ Declared in `package.json`:
 ```json
 {
   "pi": {
-    "extensions": ["dist/index.js"],
+    "extensions": ["./src/index.ts"],
     "skills": ["skills/baml"]
   }
 }
@@ -246,12 +238,12 @@ Declared in `package.json`:
 ## Development
 
 ```bash
-npm install
-npm run build          # tsup -> dist/
-npm run typecheck      # tsc --noEmit
-npm run lint           # eslint src/ tests/
-npm test               # vitest (unit tests)
-npm run test:integration  # real BAML compilation
+pnpm install
+pnpm build             # tsup -> dist/
+pnpm typecheck         # tsc --noEmit
+pnpm lint              # eslint src/ tests/
+pnpm test              # vitest (unit tests)
+pnpm test:integration  # real BAML compilation
 ```
 
 Integration tests with live LLM calls:

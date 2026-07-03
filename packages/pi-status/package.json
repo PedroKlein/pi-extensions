@@ -3,25 +3,44 @@
   "version": "0.1.0",
   "description": "Context bar compositor + LLM environment injection for Pi",
   "type": "module",
-  "main": "./index.ts",
-  "files": ["dist", "*.ts"],
+  "main": "./src/index.ts",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": ["src"],
   "scripts": {
-    "build": "tsup index.ts --format esm --dts",
+    "build": "tsup",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist"
   },
   "pi": {
-    "extensions": ["./index.ts"]
+    "extensions": ["./src/index.ts"]
   },
-  "keywords": ["pi-package", "pi", "status", "context-bar", "coding-agent"],
+  "keywords": ["pi-package", "pi", "status", "context-bar", "environment", "coding-agent"],
   "license": "MIT",
   "author": "Pedro Klein",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/PedroKlein/pi-extensions",
+    "directory": "packages/pi-status"
+  },
+  "homepage": "https://github.com/PedroKlein/pi-extensions/tree/main/packages/pi-status",
   "engines": { "node": ">=20.0.0" },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*"
   },
   "devDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
     "tsup": "^8.0.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
   }
 }

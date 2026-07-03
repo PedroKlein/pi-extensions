@@ -1,29 +1,50 @@
-# Auto-Retry Extension
+# pi-auto-retry
 
-Detects malformed tool call JSON errors and automatically retries.
+Automatically retries when the LLM generates malformed tool call JSON. Saves you from having to manually tell the agent to try again.
 
-## Problem
+## Install
 
-Sometimes the LLM generates invalid JSON in tool call parameters — especially with large `edit` calls containing code with template literals, backticks, unicode escapes, or nested quotes. When this happens, pi shows:
-
-```
-Unexpected non-whitespace character after JSON at position 4210 (line 1 column 4211)
+```bash
+pi install npm:@pedroklein/pi-auto-retry
 ```
 
-The agent stops dead, requiring manual intervention.
+## What it provides
 
-## Solution
+- **Events:** Hooks into `agent_end` to detect JSON parse errors and auto-retry
+- **Notifications:** Shows a flash when retrying so you know what happened
 
-This extension hooks into `agent_end`, checks if the last assistant message failed with a JSON parse error, and automatically sends a follow-up user message asking the LLM to retry with smaller, simpler edits.
+No tools or commands registered — this extension works silently in the background.
 
-## Behavior
+## How it works
 
-- Detects JSON parse errors in `AssistantMessage.errorMessage` (covers `Unexpected token`, `unterminated string`, `bad control character`, etc.)
+Sometimes the LLM generates invalid JSON in tool call parameters — especially with large `edit` calls containing template literals, backticks, unicode escapes, or nested quotes. When this happens, pi shows an error like:
+
+```
+Unexpected non-whitespace character after JSON at position 4210
+```
+
+This extension detects JSON parse errors in the assistant message's `errorMessage` field and sends a follow-up message asking the LLM to retry with smaller, simpler edits.
+
+**Behavior:**
+- Detects: `Unexpected token`, `unterminated string`, `bad control character`, etc.
 - Sends a retry message instructing the model to break the edit into smaller pieces
-- Max **2 consecutive retries** per agent run — resets on any successful turn
-- Shows a flash notification on retry so you know what happened
+- Max **2 consecutive retries** — resets on any successful turn
 - Gives up with an error notification after max retries to avoid loops
 
 ## Configuration
 
-Edit `MAX_RETRIES` in `index.ts` to change the retry limit (default: 2).
+No configuration required — works out of the box.
+
+To change the retry limit, edit `MAX_RETRIES` in the source (default: 2).
+
+## Development
+
+```bash
+pnpm test           # run tests
+pnpm build          # build for publish
+pnpm typecheck      # type-check without emitting
+```
+
+## License
+
+MIT

@@ -1,26 +1,44 @@
 {
   "name": "@pedroklein/pi-caffeinate",
   "version": "0.1.0",
-  "description": "Prevent macOS sleep during Pi agent work",
+  "description": "Prevent macOS and Linux from sleeping during Pi agent work",
   "type": "module",
-  "main": "./index.ts",
-  "files": ["dist", "index.ts"],
+  "main": "./src/index.ts",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": ["src"],
   "scripts": {
-    "build": "tsup index.ts --format esm --dts",
+    "build": "tsup",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist"
   },
   "pi": {
-    "extensions": ["./index.ts"]
+    "extensions": ["./src/index.ts"]
   },
-  "keywords": ["pi-package", "pi", "caffeinate", "macos", "coding-agent"],
+  "keywords": ["pi-package", "pi", "caffeinate", "macos", "linux", "sleep-prevention", "coding-agent"],
   "license": "MIT",
   "author": "Pedro Klein",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/PedroKlein/pi-extensions",
+    "directory": "packages/caffeinate"
+  },
+  "homepage": "https://github.com/PedroKlein/pi-extensions/tree/main/packages/caffeinate",
   "engines": { "node": ">=20.0.0" },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"
   },
   "devDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
     "tsup": "^8.0.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
   }
 }

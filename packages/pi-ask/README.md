@@ -1,29 +1,52 @@
-# Pi Ask Extension
+# pi-ask
 
-Interactive TUI questionnaire tool for structured decision-making between the agent and the user.
+Interactive TUI questionnaire for [Pi](https://github.com/earendil-works/pi-coding-agent). Instead of the agent listing options as plain text and asking you to reply with a number, this gives you a proper interactive form — tabs for multi-question flows, a detail panel, LLM explanations per option, and annotations.
 
-## Components
+## Install
 
-### `ask_user` Tool
+```bash
+pi install npm:@pedroklein/pi-ask
+```
 
-The agent calls this tool to present structured questions instead of listing options as plain text. The system prompt enforces this behavior.
+## What it provides
 
-**Question types:**
-- **single** — Radio select (pick one)
-- **multi** — Checkbox select (pick many)
-- **text** — Free-form text input
+- **Tool:** `ask_user` — the agent calls this to present structured questions
+- **Command:** `/answer` — parse the last assistant message into the same TUI form
+- **Prompt enforcement:** injects a `before_agent_start` hook instructing the agent to always use `ask_user` instead of plain-text numbered lists
 
-### `/answer` Command
+## Tool: ask_user
 
-Parses the last assistant message into a structured questionnaire via a quick LLM call. Useful when the agent outputs questions as plain text (e.g., in a model that doesn't support tools well) — `/answer` extracts them and opens the same interactive TUI.
+The agent calls `ask_user` with an array of questions. Pi renders the TUI form and returns answers as structured text.
 
-### Prompt Enforcement
+**Parameters:**
 
-Injects a `before_agent_start` hook that appends to the system prompt: agents must always use `ask_user` for decisions, never plain-text numbered lists.
+```ts
+{
+  questions: Array<{
+    id: string            // unique identifier
+    prompt: string        // full question text
+    type: "single"        // pick one (radio)
+         | "multi"        // pick many (checkbox)
+         | "text"         // free-form input
+    label?: string        // short tab label (defaults to Q1, Q2…)
+    context?: string      // help text shown below the prompt
+    options?: Array<{
+      value: string
+      label: string
+      description?: string   // shown in detail panel when highlighted
+      recommended?: boolean  // shows ★ badge
+      action?: {
+        type: "mode-switch"
+        mode: string         // e.g. "build", "plan", "ask"
+      }
+    }>
+  }>
+}
+```
 
-## UI Layout
+Options with an `action` field automatically fire that action when the user selects and submits. The `mode-switch` action emits a `pi-ask:mode-switch` event (consumed by [pi-modes](../pi-modes)).
 
-Split-panel interface with tabs for multi-question flows:
+## UI layout
 
 ```
 ╭── ask_user ──────────────────────────────────────────────────╮
@@ -39,8 +62,8 @@ Split-panel interface with tabs for multi-question flows:
 │                            │ ★ Recommended                    │
 │     📝 "my annotation"    │                                  │
 │                            │ 💬 Auto-explain                  │
-│                            │ LLM explanation of this option   │
-│                            │ appears here after pressing ?    │
+│                            │ LLM explanation appears here     │
+│                            │ after pressing ?                 │
 │                                                              │
 │  ↑↓ navigate • Space select • a annotate • ? explain • ...  │
 ╰──────────────────────────────────────────────────────────────╯
@@ -48,33 +71,38 @@ Split-panel interface with tabs for multi-question flows:
 
 ## Features
 
-- **Option descriptions** — Detail panel on the right shows description when an option is highlighted
-- **Recommended badge** (★) — Agent marks preferred options with reasoning in the description
-- **Annotations** (`a` key) — Add a one-liner note to any selected option (auto-selects if not already selected)
-- **Global note** (`n` key) — Add an optional free-form note to the entire questionnaire before submitting. Accessible from any question or the Submit tab.
-- **LLM explain** (`?` key) — Ask the model to explain an option's trade-offs; answers are cached per option. Press `?` with empty input for auto-explain, or type a specific question
-- **Custom input** ("Other") — Type a custom answer if none of the options fit
-- **Multi-question tabs** — Tab/←→ to navigate between questions; submit tab shows review summary
-- **Scroll** (J/K) — Scroll the detail panel when content overflows
-- **Left panel scroll** — Options list auto-scrolls with cursor when there are many options
+- **Detail panel** — descriptions shown on the right when an option is highlighted
+- **Recommended badge** (★) — the agent marks preferred options; reasoning goes in the description
+- **Annotations** (`a`) — add a one-liner note to any selected option; auto-selects if not already selected
+- **Global note** (`n`) — add a free-form note to the whole questionnaire before submitting
+- **LLM explain** (`?`) — ask the model to explain an option's trade-offs; answers are cached per option. Empty input = auto-explain, or type a specific question
+- **Custom input** ("Other") — type a custom answer when none of the options fit
+- **Multi-question tabs** — Tab/←→ to navigate; Submit tab shows a review before confirming
+- **Scroll** — J/K scrolls the detail panel; left panel auto-scrolls with the cursor
 
 ## Keybindings
 
 | Key | Action |
 |-----|--------|
-| `↑/↓` | Navigate options |
-| `Space` | Toggle selection (auto-advances for single-select) |
-| `Enter` | Confirm and advance (single: select + next, multi: next if selections exist) |
-| `a` | Annotate selected option |
-| `n` | Add/edit global note (available from any question or Submit tab) |
-| `?` | Ask about / explain option (LLM call) |
-| `J/K` | Scroll detail panel |
-| `Tab/←→` | Switch between questions (multi-question) |
-| `Esc` | Cancel questionnaire |
+| `↑ / ↓` | Navigate options |
+| `Space` | Toggle selection (auto-advances for single) |
+| `Enter` | Confirm and advance |
+| `a` | Annotate highlighted option |
+| `n` | Add/edit global note |
+| `?` | Ask about / explain option |
+| `J / K` | Scroll detail panel |
+| `Tab / ← →` | Switch between questions |
+| `Esc` | Cancel |
 
-## Output to Agent
+## Command: /answer
 
-The tool returns structured text to the agent:
+Parses the last assistant message into a questionnaire using a quick LLM call, then opens the same TUI form. Useful when the agent produces plain-text options — `/answer` extracts and structures them.
+
+Requires an active model and interactive mode.
+
+## Output format
+
+The tool returns plain text to the agent:
 
 ```
 User answers:
@@ -84,3 +112,23 @@ User answers:
 - Testing: Option X
 - Additional notes: some context I wanted to add
 ```
+
+Cancelled questionnaires return a message instructing the agent to use recommended options and proceed.
+
+## Configuration
+
+No configuration required — works out of the box.
+
+The prompt enforcement (`ask_user` always, never plain-text lists) is injected automatically on every agent start.
+
+## Development
+
+```bash
+pnpm test           # run tests
+pnpm build          # build for publish
+pnpm typecheck      # type-check without emitting
+```
+
+## License
+
+MIT

@@ -1,34 +1,53 @@
-# Pi-Term Extension
+# pi-term
 
-Launch TUI applications in floating terminal overlays inside pi. Run lazygit, k9s, nvim, or any terminal command without leaving your agent session.
+Floating terminal panel inside pi's TUI. Launch shells, TUI tools, or any CLI program in an overlay without leaving your agent session.
 
-## Features
+I built this because switching windows while pi is working breaks my flow. With pi-term, I can run `lazygit`, a shell, or `htop` right inside the pi interface — and close it when I'm done.
 
-- **Floating overlays** — apps render in bordered, resizable overlays with full color/cursor support
-- **Keyboard shortcuts** — bind apps to key combos for instant toggle access
-- **Toggle mode** — press the same shortcut again to hide/show a persistent app
-- **Conditional apps** — only show apps when their binary exists (`if` field)
-- **Feed context** — run a command on exit and send its output back to the agent
-- **Ad-hoc commands** — run any command with `/term -- <command>`
-- **App picker** — `/term` with no args shows a fuzzy picker of all configured apps
+## Install
+
+```bash
+pi install npm:@pedroklein/pi-term
+```
+
+> **Note:** `node-pty` requires native compilation. If install fails, make sure you have a C++ build toolchain (`xcode-select --install` on macOS, `build-essential` on Linux).
+
+## What it provides
+
+- **Command `/term`** — launch, pick from a list, or run an ad-hoc command
+- **Shortcuts** — per-app keybindings registered at session start
+- **Widget `/term keys`** — shows active keybindings in the context bar
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `/term` | Open app picker |
+| `/term <name>` | Launch app by name |
+| `/term -- <cmd>` | Run any command in a floating terminal |
+| `/term keys` | Toggle keybinding overlay in context bar |
+
+## How it works
+
+Each app opens as an overlay on top of pi's TUI. It's a real PTY — full color, interactive shells, curses apps, everything works. Press the configured close key (default `ctrl+q`) to dismiss.
+
+Apps can be toggled (show/hide without killing the process) or one-shot (close on exit). Conditional apps (`if` field) are checked lazily at launch time so startup stays fast.
+
+When a command exits, you can optionally:
+- Get a notification with exit code
+- Feed the command's output as context to the agent (`feedContext`)
 
 ## Configuration
 
-Two config files, merged with local overrides taking priority:
-
-| File | Scope |
-|------|-------|
-| `~/.pi/agent/pi-term.json` | Global defaults and apps |
-| `<project>/.pi/pi-term.json` | Project-specific overrides |
-
-### Config Structure
+Create `~/.pi/agent/pi-term.json` for global apps, or `.pi/pi-term.json` in any project for project-local apps. Both are merged — project-local wins on name collisions.
 
 ```json
 {
   "defaults": {
-    "width": "95%",
-    "height": "95%",
+    "width": "80%",
+    "height": "80%",
     "anchor": "center",
+    "shell": "/bin/zsh",
     "closeKey": "ctrl+q",
     "holdOnExit": false,
     "toggle": false,
@@ -37,74 +56,62 @@ Two config files, merged with local overrides taking priority:
   },
   "apps": [
     {
+      "name": "shell",
+      "cmd": "$SHELL",
+      "key": "ctrl+shift+t",
+      "toggle": true
+    },
+    {
       "name": "lazygit",
-      "key": "ctrl+shift+g",
       "cmd": "lazygit",
-      "width": "90%",
-      "height": "85%",
+      "key": "ctrl+shift+g",
+      "if": "command -v lazygit",
+      "width": "95%",
+      "height": "95%"
+    },
+    {
+      "name": "htop",
+      "cmd": "htop",
       "notify": true,
-      "feedContext": "git log --oneline -3"
+      "feedContext": "echo 'Process check complete'"
     }
   ]
 }
 ```
 
-### App Fields
+### App fields
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `name` | string | *required* | Display name and identifier |
-| `cmd` | string | *required* | Shell command to run |
-| `key` | string | — | Keyboard shortcut (e.g. `ctrl+shift+g`) |
-| `width` | string | from defaults | Overlay width (`"90%"` or pixel count) |
-| `height` | string | from defaults | Overlay height |
-| `anchor` | string | `"center"` | Overlay position |
-| `closeKey` | string | `"ctrl+q"` | Key to close the overlay |
-| `cwd` | string | project dir | Working directory |
-| `env` | object | — | Extra environment variables |
-| `shell` | string | `$SHELL` | Shell to use for command execution |
-| `toggle` | boolean | `false` | Keep process alive when hidden, toggle with same key |
-| `holdOnExit` | boolean | `false` | Keep overlay open after process exits |
-| `notify` | boolean | `false` | Show notification on exit |
-| `feedContext` | string | — | Shell command to run on exit; stdout is sent to the agent |
-| `borderColor` | string | `"accent"` | Border color (theme color name) |
-| `if` | string | — | Condition command; app only available if exit code is 0 |
+| Field | Default | Description |
+|-------|---------|-------------|
+| `name` | required | Display name and `/term <name>` identifier |
+| `cmd` | required | Command to run. Use `$SHELL` for an interactive shell |
+| `key` | — | Keybinding to toggle/launch (e.g. `ctrl+shift+t`) |
+| `width` | `"80%"` | Overlay width — percentage or absolute columns |
+| `height` | `"80%"` | Overlay height — percentage or absolute rows |
+| `anchor` | `"center"` | Overlay position: `center`, `top`, `bottom`, `left`, `right` |
+| `closeKey` | `"ctrl+q"` | Key to close the overlay |
+| `shell` | `$SHELL` | Shell used to run `cmd` |
+| `toggle` | `false` | If true, re-pressing the key hides/shows instead of reopening |
+| `holdOnExit` | `false` | Keep overlay open after the process exits |
+| `notify` | `false` | Show exit code notification when process exits |
+| `feedContext` | — | Shell command whose stdout is sent to the agent after exit |
+| `if` | — | Condition checked before launching; skips if non-zero exit |
+| `cwd` | session cwd | Working directory for the process |
+| `env` | — | Extra environment variables |
+| `borderColor` | `"accent"` | Border color (any pi theme color) |
 
-## Configured Apps
+### Defaults
 
-| App | Shortcut | Description |
-|-----|----------|-------------|
-| lazygit | `Ctrl+Shift+G` | Git TUI with context feedback (last 3 commits) |
-| lazydocker | `Ctrl+Shift+D` | Docker management (conditional: requires lazydocker) |
-| k9s | `Ctrl+Shift+K` | Kubernetes management (conditional: requires k9s) |
-| nvim | `Ctrl+Shift+E` | Neovim editor in overlay |
-| terminal | `` Ctrl+` `` | Toggle-mode shell session |
+All app fields except `name` and `cmd` fall back to the `defaults` block. Override defaults globally, then tweak per-app only what's different.
 
-## Commands
+## Development
 
-| Command | Description |
-|---------|-------------|
-| `/term` | Show app picker |
-| `/term <name>` | Launch app by name |
-| `/term -- <command>` | Run arbitrary command in overlay |
-| `/term keys` | Toggle keybinding reference widget |
-
-## How It Works
-
-Each app spawns a real PTY process (via `node-pty`) and renders through `@xterm/headless`. Terminal output is translated to pi's TUI rendering system with full SGR color support, cursor display, and proper resize handling. The overlay is drawn with a bordered frame showing the app name and close key hint.
-
-When `feedContext` is set, the specified command runs after the app exits and its stdout is injected into the agent conversation — useful for feeding git state back after a lazygit session.
-
-## Architecture
-
-```
-index.ts              — Extension entry: commands, shortcuts, lifecycle
-config.ts             — Config loading, merging (global + local), app resolution
-terminal-component.ts — PTY + xterm.js rendering, overlay frame, input handling
-keys.ts               — Key event translation for PTY forwarding
+```bash
+pnpm test           # run tests
+pnpm build          # build for publish
+pnpm typecheck      # type-check without emitting
 ```
 
-## Dependencies
+## License
 
-- `node-pty` — Native PTY bindings for spawning terminal processes
-- `@xterm/headless` — Headless xterm.js for terminal state management
+MIT

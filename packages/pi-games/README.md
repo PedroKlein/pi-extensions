@@ -1,33 +1,26 @@
 # pi-games
 
-Play games while the agent runs. Centered overlay modals with high score tracking.
+Something to do while Pi works on your code. Snake and Flappy Bird as centered TUI overlays, with high scores that persist across sessions.
 
-## Features
+## Install
 
-- **Game selector**: Centered overlay listing available games with high scores
-- **Direct launch**: `/game flappy` or `/game snake` to skip the selector
-- **Tab completion**: `/game ` shows available games
-- **High scores**: Persisted per session via `appendEntry`, shown in selector and game headers
-- **Live score tracking**: Scores saved as you play, not just on exit
-- **New high score notification**: Toast when you beat your best
-- **Context filtering**: Game messages never enter LLM context
+```bash
+pi install npm:@pedroklein/pi-games
+```
 
-## Games
+## What it provides
 
-### 🐦 Flappy Bird
+**Commands:**
 
-Navigate through pipe gaps by flapping. Gravity pulls you down, space/↑ gives you a boost.
+| Command | Action |
+|---------|--------|
+| `/game` | Open the game selector — returns to selector after each game |
+| `/game snake` | Launch Snake directly |
+| `/game flappy` | Launch Flappy Bird directly |
 
-| Key | Action |
-|-----|--------|
-| `Space` / `↑` / `W` | Flap (also starts the game) |
-| `R` | Restart (on game over) |
-| `Q` / `Esc` | Quit |
+Tab completion works: `/game ` shows available games with icons.
 
-- 33ms tick (~30fps) for smooth physics
-- Score = pipes passed
-- Pipes rendered with gap edges (`▓▓`) and bodies (`██`)
-- Bird rendered as `◄►`
+## Available Games
 
 ### 🐍 Snake
 
@@ -35,72 +28,50 @@ Eat food to grow. Don't hit walls or yourself.
 
 | Key | Action |
 |-----|--------|
-| `↑↓←→` / `WASD` | Move (also starts the game) |
-| `R` / `Space` | Restart (on game over) |
+| `↑↓←→` or `WASD` | Move (also starts the game) |
+| `R` / `Space` | Restart after game over |
 | `Q` / `Esc` | Quit |
 
-- 100ms tick
-- Score = food eaten × 10
-- Snake head `██`, body `▓▓`, food `◆`
+Score = food eaten × 10. 100ms tick.
 
-## Commands
+### 🐦 Flappy Bird
 
-| Command | Action |
-|---------|--------|
-| `/game` | Open game selector (returns to selector after each game) |
-| `/game flappy` | Play Flappy Bird directly |
-| `/game snake` | Play Snake directly |
+Navigate through pipe gaps. Gravity pulls the bird down; flap to push back up.
 
-## Adding a New Game
+| Key | Action |
+|-----|--------|
+| `Space` / `↑` / `W` | Flap (also starts the game) |
+| `R` / `Space` | Restart after game over |
+| `Q` / `Esc` | Quit |
 
-1. Create `my-game.ts` implementing `GameDef` from `types.ts`:
+Score = pipes passed. 33ms tick (~30fps) for smooth physics.
 
-```typescript
-import type { GameDef, GameComponent, GameResult } from "./types.js";
+## High Scores
 
-export const myGame: GameDef = {
-  id: "mygame",
-  name: "My Game",
-  description: "Short description",
-  icon: "🎯",
-  createComponent(tui, theme, onExit, highScore, onScoreUpdate) {
-    return new MyGameComponent(tui, theme, onExit, highScore, onScoreUpdate);
-  },
-};
+Scores are persisted per session using pi's `appendEntry` mechanism — they survive conversation compaction and are available as long as the session is open. The selector shows your best score for each game. A toast notification fires when you beat your high score.
+
+Scores do not persist across sessions. Each new pi session starts fresh.
+
+## Configuration
+
+No configuration required — works out of the box.
+
+## How it works
+
+Games render as overlay modals on top of the conversation. Game state and messages are filtered from LLM context, so playing a game doesn't pollute the agent's conversation history.
+
+`/game` enters a selector loop — after each game ends, you're returned to the selector. `/game snake` or `/game flappy` launches directly and exits to the terminal on quit.
+
+## Development
+
+```bash
+pnpm test           # run tests
+pnpm build          # build for publish
+pnpm typecheck      # type-check without emitting
 ```
 
-2. Add it to the `GAMES` array in `index.ts`:
+To add a new game, implement `GameDef` from `src/types.ts` and add it to the `GAMES` array in `src/index.ts`.
 
-```typescript
-import { myGame } from "./my-game.js";
-const GAMES: GameDef[] = [flappyGame, snakeGame, myGame];
-```
+## License
 
-The `GameComponent` interface:
-- `render(width): string[]` — render the game at the given width
-- `handleInput(data): void` — handle keyboard input
-- `invalidate(): void` — clear render cache
-- `dispose?(): void` — cleanup timers on exit
-
-Call `onScoreUpdate(score)` during gameplay to persist scores live. Call `onExit({ score })` with `bestThisSession` when quitting.
-
-## Architecture
-
-```
-index.ts      Entry point: /game command, selector loop, game launcher, score wiring
-selector.ts   Game picker overlay with high scores
-flappy.ts     Flappy Bird game component
-snake.ts      Snake game component
-scores.ts     High score persistence via appendEntry
-types.ts      GameDef, GameComponent, GameResult, ScoresState interfaces
-```
-
-## Design Decisions
-
-- **Overlay modals** — games render on top of conversation, don't replace the screen
-- **Selector loop** — `/game` returns to selector after each game; direct launch exits to terminal
-- **Live score persistence** — `onScoreUpdate` callback fires on each new high score, not just on exit
-- **`bestThisSession` tracking** — games track best score across restarts within one session, ensuring accurate reporting even after multiple R-restarts
-- **No context pollution** — game messages filtered from LLM context via `context` event handler
-- **Consistent visual style** — both games use `dim` borders, `theme.fg` colors, double-width cells (`██`) for square appearance
-- **Theme-aware rendering** — all colors via `theme.fg()`, adapts to any pi theme
+MIT

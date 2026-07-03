@@ -1,240 +1,193 @@
 # pi-todo
 
-Terminal-first TODO extension for Pi with AI-powered task capture, PR review tracking, and AI review actions.
+Terminal-first TODO board for Pi — tasks, PR reviews, and project tracking, all
+without leaving the agent.
 
-## Features
+I built this because I wanted task management that lives where I actually work.
+Tasks are repo-scoped automatically (detected from `git remote origin`), PR reviews
+are first-class items with AI summary and clone-review actions, and the board shows
+up as a startup snapshot so I always know what's open.
 
-- **Startup snapshot**: Multi-column board grouped by task type
-  - Branded header banner with counters (`╭─ 📋 TODO ─── 3 open · 1 overdue ─╮`)
-  - Type icons: 🚀 Feature, 🐛 Bug, 🔧 Chore, 🔬 Research, 👀 Review, 👤 Personal
-  - Priority dots: `●` high, `◦` medium, `·` low
-  - Blocked marker: `⚠` shown only for blocked tasks
-  - Due date badges: `3d`, `today`, `2d!` (color-coded by urgency)
-  - Rounded corners with accent-colored borders
-  - Framed empty and all-done states
-  - Stacked fallback for narrow terminals
-  - **Displayed visually but filtered from LLM context** (zero token cost)
-- **Interactive board**: Centered overlay modal (`/todo` or `Ctrl+Shift+B`)
-  - Single-type view with vim-style navigation (h/l switch type, j/k tasks)
-  - Field-by-field inline editing in details panel
-  - Read-only repo field in details view
-  - Repo tag shown per task in all-repos scope
-  - PR metadata and actions section for review tasks
-  - Open URLs with `o` key
-  - Status filter cycling, repo scope toggle
-  - Delete tasks with `x`, toggle done with `d`
-- **AI capture**: Natural language → structured task with loading indicator
-  - `/todo Fix the auth bug by next Friday` → parses into title, type, priority, due date, description
-  - Uses Pi's current LLM provider with current date context for accurate date resolution
-  - Preview modal before saving with inline field editing (Save / Discard)
-  - Heuristic fallback when LLM is unavailable
-  - AI-generated concise 2-3 sentence description from brain dump input
-- **PR review tracking**: `/todo <pr-url>` creates a review task
-  - Detects GitHub and GitLab PR/MR URLs (including GitHub Enterprise)
-  - Fetches PR metadata via GitHub API (title, author, state, branch)
-  - Token discovery: `GH_TOKEN`, `GITHUB_TOKEN`, `gh auth token`
-  - Falls back to URL parsing if API unavailable
-  - Review tasks are always global (visible in all repos)
-- **AI review actions** (from the board, on review tasks):
-  - **`s` — AI Summary**: Fetches diff via `gh pr diff`, generates a structured review (What / Why / Scope / Risks / Verdict), shown in a modal with inline Q&A follow-ups
-  - **`o` — Open in browser**: Opens the PR URL
-  - **`c` — Clone & Review**: Clones the repo to `/tmp/pi-review-*/`, opens a new pi session with the diff injected, AI auto-generates a full file-by-file review
-- **AI tool**: `todo` tool for LLM to read/write tasks (only way todos enter context)
-  - Actions: `list`, `add`, `update`, `complete`, `delete`
-  - Scoped to current repo or all repos
-- **Status bar**: Open task count shown in footer (non-context, purely visual)
-- **Repo-scoped tasks**: Auto-detected from git remote origin (org-repo slug)
-  - Personal tasks go to `global/` scope, review tasks go to `reviews/` scope
-  - Other task types go to `<org>-<repo>/` scope
-  - IDs are per-scope (each scope numbers independently from 1)
-- **Split-file persistence** under `~/.pi/todo/`
-  - `<org-repo>.json` — repo-scoped tasks
-  - `global.json` — personal tasks
-  - `reviews.json` — review tasks (work-related, separately gitignored)
+## Install
 
-## Task Model
+```bash
+pi install npm:@pedroklein/pi-todo
+```
 
-| Field | Values |
-|-------|--------|
-| title | string |
-| type | feature / bug / chore / research / review / personal |
-| status | open / blocked / done |
-| priority | low / medium / high |
-| due date | YYYY-MM-DD (optional) |
-| description | AI-generated concise summary (optional) |
-| url | URL associated with the task (optional, used by review tasks) |
-| prMeta | PR metadata: title, author, state, branch, host, owner, repo, number (optional) |
-| note | string (optional) |
-| repoId | auto-detected slug ("global" for personal, "reviews" for review types) |
+## What it provides
 
-**No lanes** — the board groups tasks by type. Due dates handle all time-based urgency via color coding.
+**Tools**
 
-**Global types** — `personal` tasks are always scoped to `global/` and `review` tasks to `reviews/`. Both appear in the snapshot regardless of which repo you're working in. Changing a task's type to/from a global type auto-moves its repo scope and re-numbers its ID.
+- **`todo`** — Read and write tasks. The agent calls this to manage your board.
+  - `list` — list tasks for the current repo (or all scopes with `scope: "all"`)
+  - `add` — create a task with title, type, priority, description, due date, url, note
+  - `update` — update any field on a task by ID
+  - `complete` — mark a task done by ID
+  - `delete` — remove a task by ID
 
-## Commands
+**Commands**
 
-| Command | Action |
-|---------|--------|
-| `/todo` | Open the interactive board (centered overlay) |
-| `/todo <text>` | Create a task from natural language via AI parsing |
-| `/todo <pr-url>` | Create a review task from a GitHub/GitLab PR URL |
-| `/todo-repo` | Show current repo scope |
-| `/todo-clone-review` | Internal: clone PR and open review session (triggered from board) |
-| `Ctrl+Shift+B` | Open the board (keyboard shortcut) |
+- **`/todo`** — Open the interactive board (TUI overlay)
+- **`/todo <description>`** — AI-capture a task from natural language (e.g. `/todo fix the auth bug before Friday`)
+- **`/todo <PR-URL>`** — Create a PR review task from a GitHub/GitHub Enterprise URL
+- **`/todo-repo`** — Show the current repo scope used for task association
 
-## AI Tool
+**Shortcuts**
 
-The `todo` tool is callable by the LLM. It's the **only** way task data enters the LLM context window.
+- **`Ctrl+Shift+B`** — Open the board from anywhere
 
-| Action | Description |
-|--------|-------------|
-| `list` | List tasks (repo-scoped or all) |
-| `add` | Create a new task (supports url field) |
-| `update` | Modify task fields |
-| `complete` | Mark a task as done |
-| `delete` | Remove a task |
+**Startup snapshot**
 
-## Board Keys
+Every session start prints a multi-column board to the chat (grouped by task type,
+color-coded by urgency). The snapshot is filtered out of LLM context — the agent
+only sees tasks you explicitly surface via the `todo` tool.
 
-### List View
+## Task model
+
+**Types**
+
+| Type | Scope | Description |
+|------|-------|-------------|
+| `feature` | repo | New capability or improvement |
+| `bug` | repo | Something broken |
+| `chore` | repo | Maintenance, refactoring |
+| `research` | repo | Investigation or exploration |
+| `review` | reviews (global) | PR review — always cross-repo |
+| `personal` | personal (global) | Non-work task |
+
+**Priorities:** `low` · `medium` · `high`
+
+**Statuses:** `open` · `blocked` · `done`
+
+**Urgency** (drives sort order and color):
+- overdue — past due date → red
+- due-soon — within 48h → yellow
+- blocked → muted
+- normal → default
+- done → dim
+
+## Scoping
+
+Tasks are associated with the current git repo (detected from `git remote origin`).
+The repo slug format is `owner__repo` (e.g. `pedroklein__dotfiles`).
+
+Special scopes that are always visible regardless of current repo:
+- `personal` — personal/non-work tasks
+- `work` — cross-project work tasks
+- `reviews` — PR review tasks
+
+When in a specific repo, the board shows that repo's tasks plus all three global scopes.
+
+## PR review workflow
+
+Paste a PR URL into `/todo` to create a review task:
+
+```
+/todo https://github.com/owner/repo/pull/123
+```
+
+Pi fetches PR metadata (title, author, branch, state) from the GitHub API, creates
+a review task, and adds it to the `reviews` scope. From the board, review tasks
+have three actions:
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `s` | AI Summary | Fetch the PR diff and generate a structured review with Q&A |
+| `o` | Open in browser | Open the PR URL |
+| `c` | Clone & Review | Clone the repo to `/tmp`, open a new Pi session for deep review |
+
+Requires a GitHub token discoverable via `gh auth token`, `GITHUB_TOKEN`, or
+`GH_TOKEN`. Without a token, falls back to unauthenticated API calls (rate-limited).
+
+## AI task capture
+
+`/todo <text>` uses a three-tier strategy to parse natural language into structured tasks:
+
+1. **BAML** (if `@pedroklein/pi-baml` is installed) — typed structured extraction
+2. **LLM** — call Pi's current model with a structured prompt
+3. **Heuristics** — keyword matching fallback (always available)
+
+The parsed task shows in a preview modal where you can edit fields before saving.
+Relative dates ("next Friday", "in 2 weeks") are resolved to `YYYY-MM-DD`.
+
+## Board TUI
+
+Open with `/todo` or `Ctrl+Shift+B`.
+
+**List view**
 
 | Key | Action |
 |-----|--------|
-| `h/l` or `←/→` | Switch type tab |
-| `j/k` or `↑/↓` | Move task selection |
-| `Enter` | Open details view |
-| `d` | Toggle done/open |
+| `h` / `l` | Switch scope tab |
+| `j` / `k` | Move task selection |
+| `Enter` | Open task details |
+| `d` | Toggle done |
 | `x` | Delete task |
-| `o` | Open URL in browser (if task has a URL) |
-| `s` | AI Summary modal (review tasks only) |
-| `c` | Clone & Review session (review tasks only) |
-| `n` | Annotate (jump to note field in edit mode) |
+| `n` | Add/edit note |
 | `f` | Cycle status filter (active → open → blocked → done → all) |
-| `Tab` | Toggle scope (current repo / all repos) |
-| `r` | Refresh |
-| `Esc` / `q` | Close board |
+| `i` | Inject task into conversation |
+| `o` | Open URL in browser |
+| `s` | AI summary (review tasks) |
+| `c` | Clone & review (review tasks) |
+| `Esc` / `q` | Close |
 
-### Details View
+**Details view**
 
 | Key | Action |
 |-----|--------|
-| `j/k` or `↑/↓` | Navigate fields |
-| `Enter` | Edit field (text) or cycle value (type/priority/status) |
-| `o` | Open URL in browser |
-| `s` | AI Summary modal (review tasks) |
-| `c` | Clone & Review session (review tasks) |
-| `d` | Toggle done/open |
+| `j` / `k` | Navigate fields |
+| `Enter` | Edit text fields / cycle enum fields |
+| `d` | Toggle done |
+| `o` / `s` / `c` | Same as list view |
 | `Esc` / `q` | Back to list |
 
-### AI Summary Modal
+## Persistence
 
-| Key | Action |
-|-----|--------|
-| `j/k` or `↑/↓` | Scroll content |
-| `?` or `a` | Ask a follow-up question about the PR |
-| `Esc` / `q` | Close modal |
-
-## PR Review Workflow
-
-### Quick review (AI Summary)
-1. `/todo https://github.com/owner/repo/pull/123` — creates review task
-2. Open board (`Ctrl+Shift+B`), navigate to 👀 Review tab
-3. Press `s` — fetches diff, generates structured AI summary
-4. Read the What / Why / Scope / Risks / Verdict sections
-5. Press `?` to ask follow-up questions inline
-6. Press `Esc` to close, `d` to mark as done
-
-### Deep review (Clone & Review)
-1. Same as above, but press `c` instead of `s`
-2. Extension clones the repo to `/tmp/pi-review-*/`
-3. Opens a new pi session in the cloned directory
-4. AI auto-generates a comprehensive file-by-file review
-5. Ask follow-up questions with full codebase access (grep, read files, run tests)
-6. Use `/resume` to return to your original session
-
-### Simple review
-1. `/todo <pr-url>` — creates review task
-2. Press `o` in the board to open PR in browser
-3. Review manually, press `d` when done
-
-## Supported URL Formats
-
-- `https://github.com/owner/repo/pull/123`
-- `https://github.example.com/owner/repo/pull/123` (GitHub Enterprise)
-- `https://gitlab.com/owner/repo/-/merge_requests/123`
-
-## Token & CLI Requirements
-
-**PR metadata fetching** (on task creation):
-1. `GH_TOKEN` environment variable
-2. `GITHUB_TOKEN` environment variable
-3. `gh auth token --hostname <host>` (GitHub CLI)
-
-**AI Summary & Clone Review** (diff fetching):
-- Requires `gh` CLI installed and authenticated (`gh auth login`)
-- Uses `gh pr diff <number> --repo <owner/repo>`
-- For GitHub Enterprise: automatically sets `GH_HOST=<host>` env var when invoking `gh`
-- Authenticate GHE with `gh auth login --hostname github.example.com`
-
-**Clone & Review** (repository cloning):
-- Requires `git` CLI
-- Clones to system temp directory (`/tmp/pi-review-*/`)
-- For private repos: git must have access (SSH keys or credential helper)
-
-## Context Strategy
-
-The extension is designed to **never pollute the LLM context** automatically:
-
-- **Startup snapshot** → displayed as a custom message, filtered out by the `context` event handler
-- **Task preview modal** → overlay UI, never a message
-- **AI Summary modal** → overlay UI, never a message
-- **Status bar** → `setStatus()`, purely visual
-- **Clone & Review** → opens a separate session, original session untouched
-- **AI tool** → the only way task data enters context, and only when explicitly invoked
-
-## Visual Language
-
-| Symbol | Meaning |
-|--------|---------|
-| `●` | High priority |
-| `◦` | Medium priority |
-| `·` | Low priority |
-| `⚠` | Blocked (only shown when blocked) |
-| `3d` / `today` / `2d!` | Due date badge (dim/yellow/red) |
-| 🚀 🐛 🔧 🔬 👀 👤 | Feature, Bug, Chore, Research, Review, Personal |
-
-## Architecture
+Tasks are stored in `~/.config/todo/` as per-scope JSON files:
 
 ```
-index.ts        Entry point: lifecycle, commands, shortcuts, AI capture, PR capture, tool, context filtering
-model.ts        Task types, PR metadata, actions, urgency sorting, filtering, counters, global type handling
-board.ts        Interactive overlay board UI with vim nav, details editing, PR info, and action keys
-snapshot.ts     Multi-column kanban snapshot with icons, priority dots, due badges, branded header
-capture.ts      LLM-based task parsing + heuristic fallback
-github.ts       PR URL parsing, GitHub API fetch (supports GHE), token discovery, diff fetching, repo cloning
-review.ts       AI summary modal with inline Q&A, clone & review session creation
-persistence.ts  Split-file persistence under ~/.pi/todo/<scope>.json (with migration from old format)
+~/.config/todo/
+├── pedroklein__dotfiles.json   # repo-specific tasks
+├── global.json                 # personal tasks
+├── reviews.json                # PR reviews
+└── work.json                   # work tasks
 ```
 
-## Design Decisions
+IDs are per-scope (each scope has its own 1-based numbering).
 
-- **No context pollution** — startup snapshot, previews, and AI summary modal are filtered from LLM context
-- **AI tool for LLM access** — tasks only enter context when the AI explicitly calls the `todo` tool
-- **Global types** — personal and review tasks are always global, auto-move repo on type change
-- **PR reviews as first-class tasks** — own type, own icon, own section with metadata and AI-powered actions
-- **AI summary = structured sections** — What / Why / Scope / Risks / Verdict format, with inline Q&A follow-ups
-- **Clone & Review = new session** — clones to tmp, opens isolated pi session with diff context, AI auto-reviews
-- **Extensible actions** — `REVIEW_ACTIONS` array in model.ts, easy to add new actions (diff view, CI check, etc.)
-- **gh CLI for diffs** — simpler than raw API, handles auth automatically. For GHE hosts, `GH_HOST` env var is set automatically when invoking `gh`
-- **No lanes** — type is the grouping dimension; due dates handle urgency via color coding
-- **No tags** — type + priority + repo scoping provide enough categorization
-- **No duplicate detection** — simple for v1, add later if needed
-- **No subcommands** — `/todo` opens the board, `/todo <text>` or `/todo <url>` creates a task
-- **Preview modal** — every AI-captured task is shown in a modal for review before saving
-- **Description over first-step** — AI generates a concise summary instead of an actionable first step
-- **Last-write-wins persistence** — no file locking or concurrency handling
-- **Done tasks kept forever** — filtered by status, no auto-archiving
-- **Blocked = simple flag** — no linked reason or dependency tracking
-- **Task ordering** — urgency-first, then priority descending, then creation date
-- **Current date in LLM prompt** — enables accurate relative date resolution ("next Friday")
-- **Filter key changed to `f`** — `s` freed up for AI Summary action
+Migrates automatically from the old single-file format at
+`~/.pi/agent/todo/pi-todo.json` on first run.
+
+## GitHub integration
+
+Supports GitHub.com and GitHub Enterprise. Token discovery order:
+1. `gh auth token` (GitHub CLI)
+2. `GITHUB_TOKEN` env var
+3. `GH_TOKEN` env var
+4. Unauthenticated (rate-limited to 60 req/hr)
+
+GitHub Enterprise URLs (`https://github.yourcompany.com/...`) are detected
+automatically from the PR URL host.
+
+## Configuration
+
+No required configuration — works out of the box with git repos.
+
+**Optional integrations:**
+
+- `@pedroklein/pi-baml` — enables BAML tier for AI task capture and PR review summaries. Install separately:
+  ```bash
+  pi install npm:@pedroklein/pi-baml
+  ```
+
+## Development
+
+```bash
+pnpm test           # run tests
+pnpm build          # build for publish
+pnpm typecheck      # type-check without emitting
+```
+
+## License
+
+MIT
