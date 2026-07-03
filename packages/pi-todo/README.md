@@ -11,7 +11,7 @@ up as a startup snapshot so I always know what's open.
 ## Install
 
 ```bash
-pi install npm:@pedroklein/pi-todo
+pi install npm:@pedro_klein/pi-todo
 ```
 
 ## What it provides
@@ -103,7 +103,7 @@ Requires a GitHub token discoverable via `gh auth token`, `GITHUB_TOKEN`, or
 
 `/todo <text>` uses a three-tier strategy to parse natural language into structured tasks:
 
-1. **BAML** (if `@pedroklein/pi-baml` is installed) — typed structured extraction
+1. **BAML** (if `@pedro_klein/pi-baml` is installed) — typed structured extraction
 2. **LLM** — call Pi's current model with a structured prompt
 3. **Heuristics** — keyword matching fallback (always available)
 
@@ -177,9 +177,9 @@ No required configuration — works out of the box with git repos.
 
 **Optional integrations:**
 
-- `@pedroklein/pi-baml` — enables BAML tier for AI task capture and PR review summaries. Install separately:
+- `@pedro_klein/pi-baml` — enables BAML tier for AI task capture and PR review summaries. Install separately:
   ```bash
-  pi install npm:@pedroklein/pi-baml
+  pi install npm:@pedro_klein/pi-baml
   ```
 
 ## Development

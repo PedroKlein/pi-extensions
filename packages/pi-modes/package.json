@@ -1,6 +1,6 @@
 {
-  "name": "@pedroklein/pi-modes",
-  "version": "0.1.0",
+  "name": "@pedro_klein/pi-modes",
+  "version": "0.2.0",
   "description": "5-mode system for Pi — Ask, Brainstorm, Plan, Build, None with tool gating",
   "type": "module",
   "main": "./src/index.ts",
@@ -11,7 +11,10 @@
       "types": "./dist/index.d.ts"
     }
   },
-  "files": ["src", "prompts"],
+  "files": [
+    "src",
+    "prompts"
+  ],
   "scripts": {
     "build": "tsup",
     "test": "vitest run",
@@ -20,10 +23,21 @@
     "clean": "rm -rf dist"
   },
   "pi": {
-    "extensions": ["./src/index.ts"],
-    "prompts": ["./prompts"]
+    "extensions": [
+      "./src/index.ts"
+    ],
+    "prompts": [
+      "./prompts"
+    ]
   },
-  "keywords": ["pi-package", "pi", "modes", "workflow", "tool-gating", "coding-agent"],
+  "keywords": [
+    "pi-package",
+    "pi",
+    "modes",
+    "workflow",
+    "tool-gating",
+    "coding-agent"
+  ],
   "license": "MIT",
   "author": "Pedro Klein",
   "repository": {
@@ -32,7 +46,9 @@
     "directory": "packages/pi-modes"
   },
   "homepage": "https://github.com/PedroKlein/pi-extensions/tree/main/packages/pi-modes",
-  "engines": { "node": ">=20.0.0" },
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*"

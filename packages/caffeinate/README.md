@@ -9,7 +9,7 @@ the process. This extension solves that without requiring any manual interventio
 ## Install
 
 ```bash
-pi install npm:@pedroklein/pi-caffeinate
+pi install npm:@pedro_klein/pi-caffeinate
 ```
 
 ## What it provides

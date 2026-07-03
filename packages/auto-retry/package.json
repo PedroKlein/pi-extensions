@@ -1,6 +1,6 @@
 {
-  "name": "@pedroklein/pi-auto-retry",
-  "version": "0.1.0",
+  "name": "@pedro_klein/pi-auto-retry",
+  "version": "0.2.0",
   "description": "Auto-retry extension for Pi — retries on malformed tool calls",
   "type": "module",
   "main": "./src/index.ts",
@@ -11,7 +11,9 @@
       "types": "./dist/index.d.ts"
     }
   },
-  "files": ["src"],
+  "files": [
+    "src"
+  ],
   "scripts": {
     "build": "tsup",
     "test": "vitest run",
@@ -20,9 +22,17 @@
     "clean": "rm -rf dist"
   },
   "pi": {
-    "extensions": ["./src/index.ts"]
+    "extensions": [
+      "./src/index.ts"
+    ]
   },
-  "keywords": ["pi-package", "pi", "retry", "error-recovery", "coding-agent"],
+  "keywords": [
+    "pi-package",
+    "pi",
+    "retry",
+    "error-recovery",
+    "coding-agent"
+  ],
   "license": "MIT",
   "author": "Pedro Klein",
   "repository": {
@@ -31,7 +41,9 @@
     "directory": "packages/auto-retry"
   },
   "homepage": "https://github.com/PedroKlein/pi-extensions/tree/main/packages/auto-retry",
-  "engines": { "node": ">=20.0.0" },
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"
   },

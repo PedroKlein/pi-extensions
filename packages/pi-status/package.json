@@ -1,6 +1,6 @@
 {
-  "name": "@pedroklein/pi-status",
-  "version": "0.1.0",
+  "name": "@pedro_klein/pi-status",
+  "version": "0.2.0",
   "description": "Context bar compositor + LLM environment injection for Pi",
   "type": "module",
   "main": "./src/index.ts",
@@ -11,7 +11,9 @@
       "types": "./dist/index.d.ts"
     }
   },
-  "files": ["src"],
+  "files": [
+    "src"
+  ],
   "scripts": {
     "build": "tsup",
     "test": "vitest run",
@@ -20,9 +22,18 @@
     "clean": "rm -rf dist"
   },
   "pi": {
-    "extensions": ["./src/index.ts"]
+    "extensions": [
+      "./src/index.ts"
+    ]
   },
-  "keywords": ["pi-package", "pi", "status", "context-bar", "environment", "coding-agent"],
+  "keywords": [
+    "pi-package",
+    "pi",
+    "status",
+    "context-bar",
+    "environment",
+    "coding-agent"
+  ],
   "license": "MIT",
   "author": "Pedro Klein",
   "repository": {
@@ -31,7 +42,9 @@
     "directory": "packages/pi-status"
   },
   "homepage": "https://github.com/PedroKlein/pi-extensions/tree/main/packages/pi-status",
-  "engines": { "node": ">=20.0.0" },
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*"

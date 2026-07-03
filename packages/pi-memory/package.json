@@ -1,6 +1,6 @@
 {
-  "name": "@pedroklein/pi-memory",
-  "version": "0.1.0",
+  "name": "@pedro_klein/pi-memory",
+  "version": "0.2.0",
   "description": "Persistent memory for Pi with Dream async session mining",
   "type": "module",
   "main": "./src/index.ts",

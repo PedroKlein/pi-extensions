@@ -5,7 +5,7 @@ Something to do while Pi works on your code. Snake and Flappy Bird as centered T
 ## Install
 
 ```bash
-pi install npm:@pedroklein/pi-games
+pi install npm:@pedro_klein/pi-games
 ```
 
 ## What it provides

@@ -7,7 +7,7 @@ You know how you're deep in a conversation with the agent, and you think "oh, I 
 ## Install
 
 ```bash
-pi install npm:@pedroklein/pi-adhd
+pi install npm:@pedro_klein/pi-adhd
 ```
 
 ## Features
@@ -43,14 +43,14 @@ When you close the session, an overlay shows any orphan notes (not pinned, not i
 ## Installation
 
 ```bash
-pi install npm:@pedroklein/pi-adhd
+pi install npm:@pedro_klein/pi-adhd
 ```
 
 Or add to `~/.pi/agent/settings.json` manually:
 
 ```json
 {
-  "packages": ["npm:@pedroklein/pi-adhd"]
+  "packages": ["npm:@pedro_klein/pi-adhd"]
 }
 ```
 
@@ -109,8 +109,8 @@ If [pi-baml](https://github.com/PedroKlein/pi-baml) is installed, pi-adhd uses i
 
 To install pi-baml alongside:
 ```bash
-pi install npm:@pedroklein/pi-baml
-pi install npm:@pedroklein/pi-adhd
+pi install npm:@pedro_klein/pi-baml
+pi install npm:@pedro_klein/pi-adhd
 ```
 
 No hard dependencies on any other extension. pi-adhd works fine without pi-baml.

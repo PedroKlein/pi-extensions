@@ -8,7 +8,7 @@ when I start working in a directory.
 ## Install
 
 ```bash
-pi install npm:@pedroklein/pi-repos
+pi install npm:@pedro_klein/pi-repos
 ```
 
 ## What it provides

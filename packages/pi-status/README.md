@@ -7,7 +7,7 @@ I built this because Pi's default status display was minimal, and I kept needing
 ## Install
 
 ```bash
-pi install npm:@pedroklein/pi-status
+pi install npm:@pedro_klein/pi-status
 ```
 
 ## What it provides

@@ -7,7 +7,7 @@ I built this because switching windows while pi is working breaks my flow. With 
 ## Install
 
 ```bash
-pi install npm:@pedroklein/pi-term
+pi install npm:@pedro_klein/pi-term
 ```
 
 > **Note:** `node-pty` requires native compilation. If install fails, make sure you have a C++ build toolchain (`xcode-select --install` on macOS, `build-essential` on Linux).

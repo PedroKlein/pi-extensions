@@ -1,6 +1,6 @@
 {
-  "name": "@pedroklein/pi-todo",
-  "version": "0.1.0",
+  "name": "@pedro_klein/pi-todo",
+  "version": "0.2.0",
   "description": "Terminal-first TODO board for Pi — tasks, PR reviews, and project tracking",
   "type": "module",
   "main": "./src/index.ts",
@@ -11,7 +11,9 @@
       "types": "./dist/index.d.ts"
     }
   },
-  "files": ["src"],
+  "files": [
+    "src"
+  ],
   "scripts": {
     "build": "tsup",
     "test": "vitest run",
@@ -20,9 +22,19 @@
     "clean": "rm -rf dist"
   },
   "pi": {
-    "extensions": ["./src/index.ts"]
+    "extensions": [
+      "./src/index.ts"
+    ]
   },
-  "keywords": ["pi-package", "pi", "todo", "task-board", "pr-review", "project-tracking", "coding-agent"],
+  "keywords": [
+    "pi-package",
+    "pi",
+    "todo",
+    "task-board",
+    "pr-review",
+    "project-tracking",
+    "coding-agent"
+  ],
   "license": "MIT",
   "author": "Pedro Klein",
   "repository": {
@@ -31,7 +43,9 @@
     "directory": "packages/pi-todo"
   },
   "homepage": "https://github.com/PedroKlein/pi-extensions/tree/main/packages/pi-todo",
-  "engines": { "node": ">=20.0.0" },
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*"

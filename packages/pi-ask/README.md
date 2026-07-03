@@ -5,7 +5,7 @@ Interactive TUI questionnaire for [Pi](https://github.com/earendil-works/pi-codi
 ## Install
 
 ```bash
-pi install npm:@pedroklein/pi-ask
+pi install npm:@pedro_klein/pi-ask
 ```
 
 ## What it provides

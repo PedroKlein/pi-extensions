@@ -7,7 +7,7 @@ I built this for use with pi-modes, where Ask and Brainstorm modes should let th
 ## Install
 
 ```bash
-pi install npm:@pedroklein/pi-readonly-bash
+pi install npm:@pedro_klein/pi-readonly-bash
 ```
 
 ## What it provides

@@ -1,6 +1,6 @@
 {
-  "name": "@pedroklein/pi-adhd",
-  "version": "0.1.0",
+  "name": "@pedro_klein/pi-adhd",
+  "version": "0.2.0",
   "description": "Attention management for Pi — sticky notes, side-chat, and reminders",
   "type": "module",
   "main": "./src/index.ts",

@@ -5,7 +5,7 @@ Automatically retries when the LLM generates malformed tool call JSON. Saves you
 ## Install
 
 ```bash
-pi install npm:@pedroklein/pi-auto-retry
+pi install npm:@pedro_klein/pi-auto-retry
 ```
 
 ## What it provides

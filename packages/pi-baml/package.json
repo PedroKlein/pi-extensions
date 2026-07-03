@@ -1,6 +1,6 @@
 {
-  "name": "@pedroklein/pi-baml",
-  "version": "0.1.0",
+  "name": "@pedro_klein/pi-baml",
+  "version": "0.2.0",
   "description": "BAML integration for Pi coding agent — typed structured output from LLMs",
   "type": "module",
   "main": "./src/index.ts",

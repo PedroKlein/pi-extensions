@@ -7,7 +7,7 @@ I built this because I was tired of re-explaining my project conventions and per
 ## Install
 
 ```bash
-pi install npm:@pedroklein/pi-memory
+pi install npm:@pedro_klein/pi-memory
 ```
 
 ## What it provides

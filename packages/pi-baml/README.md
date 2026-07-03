@@ -5,7 +5,7 @@ Typed structured output from LLMs for the [Pi coding agent](https://github.com/e
 ## Install
 
 ```bash
-pi install npm:@pedroklein/pi-baml
+pi install npm:@pedro_klein/pi-baml
 ```
 
 ## How it works

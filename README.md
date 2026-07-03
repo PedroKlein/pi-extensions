@@ -8,29 +8,29 @@ or steal ideas.
 
 | Package | Description |
 |---------|-------------|
-| [`@pedroklein/pi-auto-retry`](packages/auto-retry) | Auto-retry on malformed tool call JSON |
-| [`@pedroklein/pi-caffeinate`](packages/caffeinate) | Prevent sleep during agent work (macOS/Linux) |
-| [`@pedroklein/pi-adhd`](packages/pi-adhd) | Attention management — sticky notes, side-chat, reminders |
-| [`@pedroklein/pi-ask`](packages/pi-ask) | Interactive TUI questionnaire tool |
-| [`@pedroklein/pi-baml`](packages/pi-baml) | BAML integration for typed structured LLM output |
-| [`@pedroklein/pi-games`](packages/pi-games) | Snake & Flappy Bird while the agent works |
-| [`@pedroklein/pi-memory`](packages/pi-memory) | Persistent memory with Dream async session mining |
-| [`@pedroklein/pi-modes`](packages/pi-modes) | 5-mode system (Ask/Brainstorm/Plan/Build/None) with tool gating |
-| [`@pedroklein/pi-readonly-bash`](packages/pi-readonly-bash) | Bash policy enforcement — read-only shell for safe modes |
-| [`@pedroklein/pi-repos`](packages/pi-repos) | Repo management + orchestration layer |
-| [`@pedroklein/pi-status`](packages/pi-status) | Context bar compositor + LLM environment injection |
-| [`@pedroklein/pi-task`](packages/pi-task) | Task graph manager — DAG plans with parallel groups |
-| [`@pedroklein/pi-term`](packages/pi-term) | Floating terminal panel for TUI |
-| [`@pedroklein/pi-todo`](packages/pi-todo) | TODO board with PR review tracking |
+| [`@pedro_klein/pi-auto-retry`](packages/auto-retry) | Auto-retry on malformed tool call JSON |
+| [`@pedro_klein/pi-caffeinate`](packages/caffeinate) | Prevent sleep during agent work (macOS/Linux) |
+| [`@pedro_klein/pi-adhd`](packages/pi-adhd) | Attention management — sticky notes, side-chat, reminders |
+| [`@pedro_klein/pi-ask`](packages/pi-ask) | Interactive TUI questionnaire tool |
+| [`@pedro_klein/pi-baml`](packages/pi-baml) | BAML integration for typed structured LLM output |
+| [`@pedro_klein/pi-games`](packages/pi-games) | Snake & Flappy Bird while the agent works |
+| [`@pedro_klein/pi-memory`](packages/pi-memory) | Persistent memory with Dream async session mining |
+| [`@pedro_klein/pi-modes`](packages/pi-modes) | 5-mode system (Ask/Brainstorm/Plan/Build/None) with tool gating |
+| [`@pedro_klein/pi-readonly-bash`](packages/pi-readonly-bash) | Bash policy enforcement — read-only shell for safe modes |
+| [`@pedro_klein/pi-repos`](packages/pi-repos) | Repo management + orchestration layer |
+| [`@pedro_klein/pi-status`](packages/pi-status) | Context bar compositor + LLM environment injection |
+| [`@pedro_klein/pi-task`](packages/pi-task) | Task graph manager — DAG plans with parallel groups |
+| [`@pedro_klein/pi-term`](packages/pi-term) | Floating terminal panel for TUI |
+| [`@pedro_klein/pi-todo`](packages/pi-todo) | TODO board with PR review tracking |
 
 ## Install
 
 Individual packages:
 
 ```bash
-pi install npm:@pedroklein/pi-modes
-pi install npm:@pedroklein/pi-memory
-pi install npm:@pedroklein/pi-repos
+pi install npm:@pedro_klein/pi-modes
+pi install npm:@pedro_klein/pi-memory
+pi install npm:@pedro_klein/pi-repos
 ```
 
 All extensions (local git install):

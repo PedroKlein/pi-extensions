@@ -7,10 +7,10 @@ I built this because I wanted distinct operating modes with hard guarantees: a r
 ## Install
 
 ```bash
-pi install npm:@pedroklein/pi-modes
+pi install npm:@pedro_klein/pi-modes
 ```
 
-Also install [`@pedroklein/pi-readonly-bash`](https://github.com/PedroKlein/pi-extensions/tree/main/packages/pi-readonly-bash) — the read-only modes swap `bash` for `bash_readonly`, which requires that extension to be present.
+Also install [`@pedro_klein/pi-readonly-bash`](https://github.com/PedroKlein/pi-extensions/tree/main/packages/pi-readonly-bash) — the read-only modes swap `bash` for `bash_readonly`, which requires that extension to be present.
 
 ## What it provides
 
@@ -19,10 +19,10 @@ Also install [`@pedroklein/pi-readonly-bash`](https://github.com/PedroKlein/pi-e
 
 **Events emitted:**
 - `pi-modes:changed` — fired on every mode switch with `{ mode, previousMode }`
-- `pi-status:register` — updates the status bar segment (integrates with `@pedroklein/pi-status`)
+- `pi-status:register` — updates the status bar segment (integrates with `@pedro_klein/pi-status`)
 
 **Events consumed:**
-- `pi-ask:mode-switch` — switches mode programmatically from an `ask_user` action (integrates with `@pedroklein/pi-ask`)
+- `pi-ask:mode-switch` — switches mode programmatically from an `ask_user` action (integrates with `@pedro_klein/pi-ask`)
 
 **Prompts:** ships mode-specific system prompt fragments in `prompts/`. Each prompt is injected into the system prompt when that mode is active.
 

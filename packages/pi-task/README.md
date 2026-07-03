@@ -7,7 +7,7 @@ I built this to keep implementation work structured across sessions. The agent c
 ## Install
 
 ```bash
-pi install npm:@pedroklein/pi-task
+pi install npm:@pedro_klein/pi-task
 ```
 
 ## What it provides
