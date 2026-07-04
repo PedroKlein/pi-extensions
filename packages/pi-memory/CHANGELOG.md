@@ -1,5 +1,21 @@
 # @pedro_klein/pi-memory
 
+## 0.2.1
+
+### Patch Changes
+
+- pi-task: Improve tool usability for agents with 6 new actions:
+
+  - `add` — append tasks to existing plan (no more recreating the whole plan)
+  - `start` — mark task as in-progress
+  - `add-subtasks` — clearer alias for `expand`
+  - `bulk-complete` / `bulk-skip` — complete/skip multiple tasks at once
+  - `delete-plan` — permanently remove a plan from disk
+
+  Also improved promptGuidelines to teach agents the full lifecycle.
+
+  pi-memory: Add `dev` watch script.
+
 ## 0.2.0
 
 ### Minor Changes
