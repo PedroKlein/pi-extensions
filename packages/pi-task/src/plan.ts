@@ -477,6 +477,56 @@ export function updateTask(
 	};
 }
 
+/**
+ * Add new tasks to an existing plan. Returns a new graph.
+ * Validates that new task IDs don't conflict with existing ones.
+ */
+export function addTasks(graph: PlanGraph, newTasks: PlanTask[]): PlanGraph {
+	const existingIds = new Set(graph.tasks.map((t) => t.id));
+	const conflicts = newTasks.filter((t) => existingIds.has(t.id));
+	if (conflicts.length > 0) {
+		throw new Error(`Duplicate task IDs: ${conflicts.map((t) => t.id).join(", ")}. Use 'update' to modify existing tasks.`);
+	}
+
+	const allTasks = [...graph.tasks, ...newTasks];
+	return {
+		...graph,
+		tasks: resolveTaskStatuses(allTasks),
+		updatedAt: Date.now(),
+	};
+}
+
+/**
+ * Set multiple tasks to a given status at once. Returns a new graph.
+ * Cascades to sub-tasks like setTaskStatus does.
+ */
+export function bulkSetTaskStatus(graph: PlanGraph, taskIds: string[], status: TaskStatus): PlanGraph {
+	const idSet = new Set(taskIds);
+	const updatedTasks = graph.tasks.map((task) => {
+		if (!idSet.has(task.id)) return task;
+
+		if (status === "done" && task.subtasks.length > 0) {
+			const updatedSubtasks = task.subtasks.map((s) =>
+				s.status === "done" || s.status === "skipped" ? s : { ...s, status: "done" as TaskStatus },
+			);
+			return { ...task, status, subtasks: updatedSubtasks };
+		}
+		if (status === "skipped" && task.subtasks.length > 0) {
+			const updatedSubtasks = task.subtasks.map((s) =>
+				s.status === "done" || s.status === "skipped" ? s : { ...s, status: "skipped" as TaskStatus },
+			);
+			return { ...task, status, subtasks: updatedSubtasks };
+		}
+		return { ...task, status };
+	});
+
+	return {
+		...graph,
+		tasks: resolveTaskStatuses(updatedTasks),
+		updatedAt: Date.now(),
+	};
+}
+
 // ─── Plan Diff ─────────────────────────────────────────────────────────
 
 /**

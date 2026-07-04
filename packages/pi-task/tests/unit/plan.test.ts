@@ -12,6 +12,8 @@ import {
   setSubtaskStatus,
   expandTaskSubtasks,
   updateTask,
+  addTasks,
+  bulkSetTaskStatus,
   addTaskAnnotation,
   computePlanDiff,
   savePreviousRevision,
@@ -385,5 +387,100 @@ describe("matchTasksByFiles", () => {
     const task = { ...createPlanTask({ id: "a", title: "A", description: "D", order: 1, files: ["src/a.ts"] }), status: "done" as const };
     const graph = makeGraph([task]);
     expect(matchTasksByFiles(graph, ["src/a.ts"])).toHaveLength(0);
+  });
+});
+
+// ─── addTasks ─────────────────────────────────────────────────────────────
+
+describe("addTasks", () => {
+  it("appends new tasks to an existing plan", () => {
+    const graph = makeGraph([makeTask("a", 1)]);
+    const newTask = makeTask("b", 2);
+    const updated = addTasks(graph, [newTask]);
+    expect(updated.tasks).toHaveLength(2);
+    expect(updated.tasks[1].id).toBe("b");
+  });
+
+  it("resolves statuses after adding", () => {
+    const graph = makeGraph([makeTask("a", 1)]);
+    const newTask = makeTask("b", 2, ["a"]);
+    const updated = addTasks(graph, [newTask]);
+    const taskB = updated.tasks.find((t) => t.id === "b");
+    expect(taskB?.status).toBe("blocked");
+  });
+
+  it("resolves new task as ready when deps are already done", () => {
+    const taskA = { ...makeTask("a", 1), status: "done" as const };
+    const graph = makeGraph([taskA]);
+    const newTask = makeTask("b", 2, ["a"]);
+    const updated = addTasks(graph, [newTask]);
+    const taskB = updated.tasks.find((t) => t.id === "b");
+    expect(taskB?.status).toBe("ready");
+  });
+
+  it("throws on duplicate task IDs", () => {
+    const graph = makeGraph([makeTask("a", 1)]);
+    const duplicate = makeTask("a", 2);
+    expect(() => addTasks(graph, [duplicate])).toThrow(/Duplicate task IDs/);
+  });
+
+  it("adds multiple tasks at once", () => {
+    const graph = makeGraph([makeTask("a", 1)]);
+    const updated = addTasks(graph, [makeTask("b", 2), makeTask("c", 3)]);
+    expect(updated.tasks).toHaveLength(3);
+  });
+
+  it("new tasks can depend on existing tasks", () => {
+    const graph = makeGraph([makeTask("a", 1)]);
+    const newTask = makeTask("b", 2, ["a"]);
+    const updated = addTasks(graph, [newTask]);
+    expect(updated.tasks.find((t) => t.id === "b")?.dependsOn).toEqual(["a"]);
+  });
+});
+
+// ─── bulkSetTaskStatus ────────────────────────────────────────────────────
+
+describe("bulkSetTaskStatus", () => {
+  it("completes multiple tasks at once", () => {
+    const graph = makeGraph([makeTask("a", 1), makeTask("b", 2), makeTask("c", 3)]);
+    const updated = bulkSetTaskStatus(graph, ["a", "b"], "done");
+    expect(updated.tasks.find((t) => t.id === "a")?.status).toBe("done");
+    expect(updated.tasks.find((t) => t.id === "b")?.status).toBe("done");
+    expect(updated.tasks.find((t) => t.id === "c")?.status).toBe("ready");
+  });
+
+  it("skips multiple tasks at once", () => {
+    const graph = makeGraph([makeTask("a", 1), makeTask("b", 2)]);
+    const updated = bulkSetTaskStatus(graph, ["a", "b"], "skipped");
+    expect(updated.tasks.find((t) => t.id === "a")?.status).toBe("skipped");
+    expect(updated.tasks.find((t) => t.id === "b")?.status).toBe("skipped");
+  });
+
+  it("cascades done to subtasks", () => {
+    const sub = createPlanSubtask({ id: "s1", title: "Sub 1" });
+    const task = { ...makeTask("a", 1), subtasks: [sub] };
+    const graph = makeGraph([task]);
+    const updated = bulkSetTaskStatus(graph, ["a"], "done");
+    expect(updated.tasks[0].subtasks[0].status).toBe("done");
+  });
+
+  it("cascades skip to subtasks", () => {
+    const sub = createPlanSubtask({ id: "s1", title: "Sub 1" });
+    const task = { ...makeTask("a", 1), subtasks: [sub] };
+    const graph = makeGraph([task]);
+    const updated = bulkSetTaskStatus(graph, ["a"], "skipped");
+    expect(updated.tasks[0].subtasks[0].status).toBe("skipped");
+  });
+
+  it("unblocks dependent tasks when all deps completed", () => {
+    const graph = makeGraph([makeTask("a", 1), makeTask("b", 2), makeTask("c", 3, ["a", "b"])]);
+    const updated = bulkSetTaskStatus(graph, ["a", "b"], "done");
+    expect(updated.tasks.find((t) => t.id === "c")?.status).toBe("ready");
+  });
+
+  it("ignores task IDs not in the plan", () => {
+    const graph = makeGraph([makeTask("a", 1)]);
+    const updated = bulkSetTaskStatus(graph, ["a", "nonexistent"], "done");
+    expect(updated.tasks.find((t) => t.id === "a")?.status).toBe("done");
   });
 });

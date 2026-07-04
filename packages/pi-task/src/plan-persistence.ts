@@ -19,7 +19,7 @@
  *   3. Fallback (no git): "global"
  */
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, unlinkSync, statSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, unlinkSync, statSync, rmdirSync } from "node:fs";
 import { dirname, basename, join } from "node:path";
 import { homedir } from "node:os";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -399,6 +399,35 @@ export async function unarchivePlan(pi: ExtensionAPI, planName: string): Promise
 export async function planDirExists(_pi: ExtensionAPI): Promise<boolean> {
 	if (!cachedRepoSlug) return false;
 	return fsDirExists(getPlanDir());
+}
+
+/**
+ * Delete a plan entirely (removes directory and all files).
+ * Clears the active ref if this was the active plan.
+ */
+export async function deletePlan(pi: ExtensionAPI, planName: string): Promise<boolean> {
+	if (!cachedRepoSlug) return false;
+	const slug = slugifyPlanName(planName);
+	const planDir = join(getPlansDir(), slug);
+	if (!fsDirExists(planDir)) return false;
+
+	// Clear active ref if this was the active plan
+	const ref = await loadActiveRef(pi);
+	if (ref?.planName === slug) {
+		await clearActiveRef(pi);
+	}
+
+	// Remove plan directory (plan.json inside it)
+	try {
+		const files = readdirSync(planDir);
+		for (const file of files) {
+			unlinkSync(join(planDir, file));
+		}
+		rmdirSync(planDir);
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────

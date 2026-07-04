@@ -38,6 +38,17 @@ task-c (blocked — depends: task-a)
 task-d (blocked — depends: task-b, task-c)
 ```
 
+**Typical workflow:**
+```
+create  →  plan with initial tasks
+add     →  append more tasks as scope becomes clear
+start   →  mark a task in-progress
+complete/skip  →  finish tasks (bulk-complete for batches)
+add-subtasks   →  break a task into TDD-sized sub-tasks
+annotate       →  leave notes during implementation
+archive        →  archive when done
+```
+
 **Two-level hierarchy:**
 - `PlanTask` — feature-level task with `id`, `title`, `description`, `order`, `dependsOn`, `files`, `tddNotes`, `parallelGroup`
 - `PlanSubtask` — TDD-sized sub-task within a task, with optional `tddBehavior`
@@ -58,12 +69,17 @@ pending → ready (when all deps done) → in-progress → done
 | Action | Required params | Description |
 |--------|----------------|-------------|
 | `create` | `planName`, `tasks[]` | Create a new plan. Tasks are validated for cycles and duplicate IDs. |
+| `add` | `tasks[]` | **Append new tasks to the active plan.** Validates IDs don't conflict with existing tasks. |
 | `status` | — | Return the full graph with computed ready/blocked states |
 | `get` | `taskId` | Get details of one task (deps, files, TDD notes, sub-tasks, annotations) |
+| `start` | `taskId` | **Mark task as in-progress.** Signals work has begun. |
 | `update` | `taskId`, `updates` | Modify task fields: title, description, dependsOn, files, tddNotes, parallelGroup, order |
-| `expand` | `taskId`, `newSubtasks[]` | Add sub-tasks to an existing task |
+| `add-subtasks` | `taskId`, `newSubtasks[]` | Add sub-tasks to an existing task (alias: `expand`) |
+| `expand` | `taskId`, `newSubtasks[]` | _Alias for `add-subtasks`_ |
 | `complete` | `taskId` | Mark task done (cascades to non-terminal sub-tasks). Pass `subtaskId` to complete one sub-task. |
 | `skip` | `taskId` | Mark task skipped. Pass `subtaskId` to skip one sub-task. |
+| `bulk-complete` | `taskIds[]` | **Mark multiple tasks done at once.** Cascades to sub-tasks. |
+| `bulk-skip` | `taskIds[]` | **Mark multiple tasks skipped at once.** |
 | `delete` | `taskId` | Remove task (cleans up dependsOn references). Pass `subtaskId` to delete one sub-task. |
 | `reorder` | `taskId`, `updates.order` | Change task position in the sorted display order |
 | `update-subtask` | `taskId`, `subtaskId`, `updates` | Modify sub-task title or description |
@@ -73,6 +89,7 @@ pending → ready (when all deps done) → in-progress → done
 | `switch-plan` | `planName` | Switch the active plan (auto-unarchives if archived) |
 | `archive` | `planName` | Archive a completed plan |
 | `unarchive` | `planName` | Restore an archived plan |
+| `delete-plan` | `planName` | **Permanently delete a plan** (removes files from disk) |
 
 ## TDD integration
 

@@ -26,6 +26,8 @@ import {
 	setSubtaskStatus,
 	expandTaskSubtasks,
 	updateTask,
+	addTasks,
+	bulkSetTaskStatus,
 	savePreviousRevision,
 	addTaskAnnotation,
 	formatPlanGraphText,
@@ -39,6 +41,7 @@ import {
 	listPlanNames,
 	archivePlan as archivePlanFile,
 	unarchivePlan as unarchivePlanFile,
+	deletePlan as deletePlanFile,
 	saveActiveRef,
 	loadPlanSummaries,
 	initPlanStorage,
@@ -191,21 +194,28 @@ export default function piTask(pi: ExtensionAPI): void {
 			"Create and manage implementation task graphs. Tasks form a DAG with dependencies. " +
 			"Each task has a two-level hierarchy: feature-level tasks with sub-tasks. " +
 			"Use in plan mode to structure work, and in build mode to track progress.",
-		promptSnippet: "Manage task graphs — create, update, expand, and track implementation tasks with dependencies",
+		promptSnippet: "Manage task graphs — create, add, update, expand, and track implementation tasks with dependencies",
 		promptGuidelines: [
-			"Use plan_tasks to create structured task graphs when the user wants to plan implementation.",
+			"Use plan_tasks to create and incrementally build task graphs.",
+			"Lifecycle: create → add (append tasks) → start (mark in-progress) → complete/skip.",
+			"Use 'add' to append new tasks to an existing plan. Use 'create' only for new plans.",
+			"Use 'start' to mark a task as in-progress before working on it.",
+			"Use 'add-subtasks' (or 'expand') to add sub-tasks to a task.",
+			"Use 'bulk-complete' or 'bulk-skip' with taskIds[] to finish multiple tasks at once.",
 			"Each task should have: id, title, description, order, dependsOn, files, tddNotes.",
 			"Sub-tasks should be TDD-sized: one test + one implementation cycle.",
-			"Always include tddNotes with what behaviors to test first.",
 			"Set dependsOn to express execution order constraints.",
 			"When multiple tasks share the same dependencies and have non-overlapping files, assign them the same parallelGroup value so build mode can delegate them to parallel worker subagents.",
 		],
 		parameters: Type.Object({
-			action: StringEnum(["create", "update", "status", "expand", "get", "complete", "skip",
-				"delete", "reorder", "update-subtask", "list-plans", "switch-plan", "archive", "unarchive", "annotate", "diff"] as const),
-			planName: Type.Optional(Type.String({ description: "Plan name (for create/switch-plan/archive/unarchive)" })),
+			action: StringEnum(["create", "add", "update", "status", "expand", "add-subtasks", "get", "start",
+				"complete", "skip", "bulk-complete", "bulk-skip",
+				"delete", "reorder", "update-subtask", "list-plans", "switch-plan",
+				"archive", "unarchive", "delete-plan", "annotate", "diff"] as const),
+			planName: Type.Optional(Type.String({ description: "Plan name (for create/switch-plan/archive/unarchive/delete-plan)" })),
 			sourceCheckpoint: Type.Optional(Type.String({ description: "Brainstorm checkpoint this plan came from" })),
-			taskId: Type.Optional(Type.String({ description: "Task ID (for update/expand/get/complete/skip/delete/reorder/annotate/update-subtask)" })),
+			taskId: Type.Optional(Type.String({ description: "Task ID (for update/expand/add-subtasks/get/start/complete/skip/delete/reorder/annotate/update-subtask)" })),
+			taskIds: Type.Optional(Type.Array(Type.String(), { description: "Task IDs (for bulk-complete/bulk-skip)" })),
 			subtaskId: Type.Optional(Type.String({ description: "Sub-task ID (for complete/skip/delete/update-subtask)" })),
 			text: Type.Optional(Type.String({ description: "Annotation text (for annotate)" })),
 			tasks: Type.Optional(Type.Array(Type.Object({
@@ -223,7 +233,7 @@ export default function piTask(pi: ExtensionAPI): void {
 					description: Type.Optional(Type.String()),
 					tddBehavior: Type.Optional(Type.String()),
 				}))),
-			}), { description: "Tasks array (for create)" })),
+			}), { description: "Tasks array (for create/add)" })),
 			updates: Type.Optional(Type.Object({
 				title: Type.Optional(Type.String()),
 				description: Type.Optional(Type.String()),
@@ -238,7 +248,7 @@ export default function piTask(pi: ExtensionAPI): void {
 				title: Type.String(),
 				description: Type.Optional(Type.String()),
 				tddBehavior: Type.Optional(Type.String()),
-			}), { description: "New sub-tasks to add (for expand)" })),
+			}), { description: "New sub-tasks to add (for expand/add-subtasks)" })),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			switch (params.action) {
@@ -272,6 +282,75 @@ export default function piTask(pi: ExtensionAPI): void {
 					return {
 						content: [{ type: "text", text: `Plan "${graph.name}" created with ${graph.tasks.length} tasks (${counts.ready} ready).\n\n${formatPlanGraphText(graph)}` }],
 						details: { plan: graph },
+					};
+				}
+
+				case "add": {
+					if (!activePlan) throw new Error("No active plan. Use 'create' first.");
+					if (!params.tasks || params.tasks.length === 0) throw new Error("tasks array is required for add");
+
+					const newTasks: PlanTask[] = params.tasks.map((t: any) =>
+						createPlanTask({
+							id: t.id, title: t.title, description: t.description, order: t.order,
+							dependsOn: t.dependsOn, files: t.files, tddNotes: t.tddNotes,
+							parallelGroup: t.parallelGroup,
+							subtasks: (t.subtasks ?? []).map((s: any) =>
+								createPlanSubtask({ id: s.id, title: s.title, description: s.description, tddBehavior: s.tddBehavior }),
+							),
+						}),
+					);
+
+					const prevGraph = savePreviousRevision(activePlan);
+					const updated = addTasks(prevGraph, newTasks);
+
+					const errors = validatePlanGraph(updated);
+					if (errors.length > 0) throw new Error(`Validation failed:\n${errors.map((e) => `- ${e.message}`).join("\n")}`);
+
+					await saveAndRefreshPlan(updated);
+					if (latestCtx) updateFooterStatus(latestCtx);
+
+					const counts = getTaskCounts(updated);
+					return {
+						content: [{ type: "text", text: `Added ${newTasks.length} task(s) to "${updated.name}". Total: ${counts.total} tasks (${counts.ready} ready).` }],
+						details: { plan: updated },
+					};
+				}
+
+				case "start": {
+					if (!activePlan) throw new Error("No active plan");
+					if (!params.taskId) throw new Error("taskId is required for start");
+
+					const updated = setTaskStatus(activePlan, params.taskId, "in-progress");
+					await saveAndRefreshPlan(updated);
+					if (latestCtx) updateFooterStatus(latestCtx);
+					return { content: [{ type: "text", text: `🔧 Task ${params.taskId} is now in-progress.` }] };
+				}
+
+				case "bulk-complete": {
+					if (!activePlan) throw new Error("No active plan");
+					if (!params.taskIds || params.taskIds.length === 0) throw new Error("taskIds array is required for bulk-complete");
+
+					const updated = bulkSetTaskStatus(activePlan, params.taskIds, "done");
+					await saveAndRefreshPlan(updated);
+					if (latestCtx) updateFooterStatus(latestCtx);
+
+					const counts = getTaskCounts(updated);
+					return {
+						content: [{ type: "text", text: `✅ ${params.taskIds.length} task(s) completed: ${params.taskIds.join(", ")}. Progress: ${counts.done}/${counts.total}.` }],
+					};
+				}
+
+				case "bulk-skip": {
+					if (!activePlan) throw new Error("No active plan");
+					if (!params.taskIds || params.taskIds.length === 0) throw new Error("taskIds array is required for bulk-skip");
+
+					const updated = bulkSetTaskStatus(activePlan, params.taskIds, "skipped");
+					await saveAndRefreshPlan(updated);
+					if (latestCtx) updateFooterStatus(latestCtx);
+
+					const counts = getTaskCounts(updated);
+					return {
+						content: [{ type: "text", text: `⏭ ${params.taskIds.length} task(s) skipped: ${params.taskIds.join(", ")}. Progress: ${counts.done}/${counts.total}.` }],
 					};
 				}
 
@@ -324,10 +403,11 @@ export default function piTask(pi: ExtensionAPI): void {
 					return { content: [{ type: "text", text: `Task ${params.taskId} updated.` }], details: { task: updated.tasks.find((t) => t.id === params.taskId) } };
 				}
 
-				case "expand": {
+				case "expand":
+				case "add-subtasks": {
 					if (!activePlan) throw new Error("No active plan");
-					if (!params.taskId) throw new Error("taskId is required for expand");
-					if (!params.newSubtasks || params.newSubtasks.length === 0) throw new Error("newSubtasks array is required for expand");
+					if (!params.taskId) throw new Error("taskId is required for add-subtasks");
+					if (!params.newSubtasks || params.newSubtasks.length === 0) throw new Error("newSubtasks array is required for add-subtasks");
 
 					const subs: PlanSubtask[] = params.newSubtasks.map((s: any) =>
 						createPlanSubtask({ id: s.id, title: s.title, description: s.description, tddBehavior: s.tddBehavior }),
@@ -508,6 +588,17 @@ export default function piTask(pi: ExtensionAPI): void {
 					if (!ok) throw new Error(`Failed to unarchive plan: ${params.planName}`);
 					if (latestCtx) updateFooterStatus(latestCtx);
 					return { content: [{ type: "text", text: `📂 Plan "${params.planName}" unarchived.` }] };
+				}
+
+				case "delete-plan": {
+					if (!params.planName) throw new Error("planName is required for delete-plan");
+					const ok = await deletePlanFile(pi, params.planName);
+					if (!ok) throw new Error(`Failed to delete plan: ${params.planName}`);
+					if (activePlan?.name === params.planName) {
+						activePlan = null;
+					}
+					if (latestCtx) updateFooterStatus(latestCtx);
+					return { content: [{ type: "text", text: `🗑 Plan "${params.planName}" permanently deleted.` }] };
 				}
 
 				case "annotate": {

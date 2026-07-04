@@ -1,6 +1,6 @@
 {
   "name": "@pedro_klein/pi-task",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Task graph manager for Pi — DAG-based plans with sub-tasks and parallel groups",
   "type": "module",
   "main": "./src/index.ts",
@@ -15,6 +15,7 @@
     "src"
   ],
   "scripts": {
+    "dev": "tsup --watch",
     "build": "tsup",
     "test": "vitest run",
     "test:watch": "vitest",
