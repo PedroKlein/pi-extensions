@@ -32,6 +32,8 @@ export interface DreamJournalInput {
     lessonsAdded: Array<{ rule: string; category: string }>;
     lessonsDeleted: Array<{ rule: string; reason: string }>;
   };
+  /** Facts the refiner suggests pinning (user decides). */
+  pinSuggestions?: Array<{ key: string; reason: string }>;
   /** Workflow insights: structured array if parsed, or raw markdown string from shell-out. */
   workflowInsights: string | WorkflowInsight[];
 }
@@ -106,6 +108,16 @@ export function formatDreamJournal(input: DreamJournalInput): string {
     }
   } else {
     sections.push(`### Memory Changes\n\nNo changes — memory is already well-consolidated.\n`);
+  }
+
+  // Pin Suggestions
+  if (input.pinSuggestions && input.pinSuggestions.length > 0) {
+    sections.push(`\n### 📌 Pin Suggestions`);
+    sections.push(`\nThe refiner suggests pinning these facts for always-on context injection:`);
+    for (const suggestion of input.pinSuggestions) {
+      sections.push(`- \`${suggestion.key}\` — ${suggestion.reason}`);
+    }
+    sections.push(`\nTo pin: use \`memory_pin\` tool with action='pin' and the key.`);
   }
 
   // Workflow Insights

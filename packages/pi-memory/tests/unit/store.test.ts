@@ -203,3 +203,40 @@ describe("stats counts deleted lessons correctly", () => {
     expect(store.stats().lessons).toBe(0);
   });
 });
+
+// ─── Pinning ─────────────────────────────────────────────────────────
+
+describe("pinning", () => {
+  it("pin marks a fact as pinned", () => {
+    store.setSemantic("pref.code_style", "simple", 0.9, "user");
+    const pinned = store.pin("pref.code_style");
+    expect(pinned).toBe(true);
+    const list = store.listPinned();
+    expect(list.length).toBe(1);
+    expect(list[0].key).toBe("pref.code_style");
+  });
+
+  it("unpin removes the pin", () => {
+    store.setSemantic("pref.code_style", "simple", 0.9, "user");
+    store.pin("pref.code_style");
+    const unpinned = store.unpin("pref.code_style");
+    expect(unpinned).toBe(true);
+    expect(store.listPinned().length).toBe(0);
+  });
+
+  it("pin returns false for non-existent key", () => {
+    expect(store.pin("does.not.exist")).toBe(false);
+  });
+
+  it("listPinned returns only pinned facts ordered by key", () => {
+    store.setSemantic("pref.b", "beta", 0.9, "user");
+    store.setSemantic("pref.a", "alpha", 0.9, "user");
+    store.setSemantic("pref.c", "gamma", 0.9, "user");
+    store.pin("pref.b");
+    store.pin("pref.a");
+    const pinned = store.listPinned();
+    expect(pinned.length).toBe(2);
+    expect(pinned[0].key).toBe("pref.a");
+    expect(pinned[1].key).toBe("pref.b");
+  });
+});

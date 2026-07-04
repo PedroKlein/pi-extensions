@@ -157,10 +157,24 @@ export default function (pi: ExtensionAPI) {
   // Cached memory block — built once at session_start, injected every turn
   let cachedMemoryBlock: ContextBlock | null = null;
 
-  // ─── Message renderer for memory display ─────────────────────────
+  // ─── Message renderers for memory display ────────────────────────
   pi.registerMessageRenderer("pi-memory", (message, _options, theme) => {
     const content = typeof message.content === "string" ? message.content : "";
     return new Text(theme.fg("muted", content), 0, 0);
+  });
+
+  pi.registerMessageRenderer("pi-memory-snapshot", (message, _options, theme) => {
+    const content = typeof message.content === "string" ? message.content : "";
+    return new Text(theme.fg("muted", content), 0, 0);
+  });
+
+  // Filter memory snapshot out of LLM context (visual-only, not sent to model)
+  pi.on("context", async (event, _ctx) => {
+    const filtered = (event as any).messages.filter((m: any) => {
+      if (m.role === "custom" && m.customType === "pi-memory-snapshot") return false;
+      return true;
+    });
+    return { messages: filtered };
   });
 
   // ─── Lifecycle ───────────────────────────────────────────────────
@@ -209,6 +223,19 @@ export default function (pi: ExtensionAPI) {
         setTimeout(() => { try { ctx.ui.setStatus("pi-memory", ""); } catch { /* ctx may be stale after session replacement */ } }, 5000);
       }
 
+      // Show pinned memory snapshot at session init (visual only, filtered from LLM context)
+      if (ctx.hasUI && cachedMemoryBlock && cachedMemoryBlock.factKeys.length > 0) {
+        const pinnedFacts = store.listPinned();
+        const lines: string[] = [cachedMemoryBlock.displayLine];
+        for (const fact of pinnedFacts) {
+          lines.push(`  📌 ${fact.key}: ${fact.value}`);
+        }
+        pi.sendMessage(
+          { customType: "pi-memory-snapshot", content: lines.join("\n"), display: true },
+          { triggerTurn: false },
+        );
+      }
+
       // Auto-trigger Dream (fire-and-forget)
       try {
         const dreamConfig = readDreamConfig(sessionCwd);
@@ -238,11 +265,6 @@ export default function (pi: ExtensionAPI) {
 
     return {
       systemPrompt: `${event.systemPrompt}\n\n${cachedMemoryBlock.text}`,
-      message: {
-        customType: "pi-memory",
-        content: cachedMemoryBlock.displayLine,
-        display: true,
-      },
     };
   });
 
@@ -351,6 +373,12 @@ export default function (pi: ExtensionAPI) {
     name: "memory_search",
     label: "Memory Search",
     description: "Search persistent memory for facts, preferences, and project patterns the user has established across sessions.",
+    promptSnippet: "Search persistent memory for facts, preferences, and project patterns the user has established across sessions.",
+    promptGuidelines: [
+      "Use memory_search PROACTIVELY at the start of tasks to load relevant project context, user preferences, and known issues.",
+      "Search before making assumptions about user workflow, coding style, or project architecture.",
+      "On errors or unexpected behavior, search memory for the error domain BEFORE retrying.",
+    ],
     parameters: Type.Object({
       query: Type.String({ description: "Search query" }),
       limit: Type.Optional(Type.Number({ description: "Max results (default 10)" })),
@@ -382,6 +410,7 @@ export default function (pi: ExtensionAPI) {
       rule: Type.Optional(Type.String({ description: "Rule text for lessons" })),
       category: Type.Optional(Type.String({ description: "Category for lessons (default: general)" })),
       negative: Type.Optional(Type.Boolean({ description: "True if this is something to AVOID" })),
+      pinned: Type.Optional(Type.Boolean({ description: "Pin this fact so it's always injected into context (use sparingly — only for critical behavioral preferences)" })),
     }) as any,
     async execute(_id, params, _signal, _update, _ctx) {
       if (!store) return ok("Memory store not initialized");
@@ -404,7 +433,11 @@ export default function (pi: ExtensionAPI) {
           return ok("Both key and value required for facts");
         }
         store.setSemantic(params.key, params.value, 0.95, "user");
-        return ok(`Remembered: ${params.key} = ${params.value}`);
+        if (params.pinned) {
+          store.pin(params.key);
+        }
+        const pinnedTag = params.pinned ? " (📌 pinned)" : "";
+        return ok(`Remembered: ${params.key} = ${params.value}${pinnedTag}`);
       }
 
       if (params.type === "lesson") {
@@ -463,6 +496,9 @@ export default function (pi: ExtensionAPI) {
     name: "memory_lessons",
     label: "Memory Lessons",
     description: "List learned corrections and lessons from past sessions.",
+    promptGuidelines: [
+      "Check memory_lessons when entering a domain where past mistakes were made (e.g., Go error handling, CI workflows, PR scope).",
+    ],
     parameters: Type.Object({
       category: Type.Optional(Type.String({ description: "Filter by category" })),
       limit: Type.Optional(Type.Number({ description: "Max results (default 50)" })),
@@ -492,8 +528,49 @@ export default function (pi: ExtensionAPI) {
       if (!store) return ok("Memory store not initialized");
 
       const stats = store.stats();
-      const text = `Memory: ${stats.semantic} semantic facts, ${stats.lessons} active lessons, ${stats.events} events logged\nDB: ${resolvedDbPath}`;
+      const pinned = store.listPinned();
+      const text = `Memory: ${stats.semantic} semantic facts (${pinned.length} pinned), ${stats.lessons} active lessons, ${stats.events} events logged\nDB: ${resolvedDbPath}`;
       return ok(text);
+    },
+  });
+
+  pi.registerTool({
+    name: "memory_pin",
+    label: "Memory Pin",
+    description: "Pin or unpin a fact for always-on context injection. Pinned facts are injected into every turn's system prompt. Use sparingly — only for critical behavioral preferences that prevent repeated mistakes.",
+    promptSnippet: "Pin/unpin facts for always-on context injection",
+    parameters: Type.Object({
+      action: Type.String({ description: "'pin' to pin, 'unpin' to unpin, 'list' to show all pinned" }),
+      key: Type.Optional(Type.String({ description: "Fact key to pin/unpin (required for pin/unpin)" })),
+    }) as any,
+    async execute(_id, params, _signal, _update, _ctx) {
+      if (!store) return ok("Memory store not initialized");
+
+      const action = stripQuotes(params.action);
+      const key = stripQuotes(params.key);
+
+      if (action === "list") {
+        const pinned = store.listPinned();
+        if (pinned.length === 0) return ok("No pinned facts. Use memory_pin with action='pin' to pin important preferences.");
+        const lines = pinned.map(f => `📌 ${f.key}: ${f.value}`);
+        return ok(lines.join("\n"));
+      }
+
+      if (action === "pin") {
+        if (!key) return ok("Key required for pin action");
+        const entry = store.getSemantic(key);
+        if (!entry) return ok(`Fact not found: ${key}. Create it first with memory_remember.`);
+        store.pin(key);
+        return ok(`📌 Pinned: ${key} = ${entry.value}`);
+      }
+
+      if (action === "unpin") {
+        if (!key) return ok("Key required for unpin action");
+        const success = store.unpin(key);
+        return ok(success ? `Unpinned: ${key}` : `Not found or not pinned: ${key}`);
+      }
+
+      return ok("Invalid action. Use 'pin', 'unpin', or 'list'.");
     },
   });
 

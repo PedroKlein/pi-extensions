@@ -72,6 +72,15 @@ You receive:
 2. **Current memory state** — existing semantic facts and lessons
 3. **Relevant skills** — codified knowledge the user has in skill files
 
+## IMPORTANT: Pinned facts
+
+Some facts are marked as "pinned" (📌). These are user-curated critical preferences that are always injected into the agent's context. Rules:
+- NEVER delete a pinned fact — it is protected and intentional
+- You MAY update/sharpen a pinned fact's value (improving clarity is welcome)
+- You CANNOT pin or unpin facts — only the user decides what to pin
+- When merging, if any source key is pinned, the merged result stays pinned
+- If you think a non-pinned fact should be pinned, mention it in a "pin_suggestions" field
+
 ## Your PRIMARY goals (in order):
 
 ### 1. Deduplicate aggressively
@@ -116,6 +125,9 @@ After using tools to verify your decisions, respond with ONLY valid JSON:
     { "type": "delete", "key": "stale.key", "reason": "contradicted by newer session" },
     { "type": "add_lesson", "rule": "...", "category": "...", "negative": true, "reason": "user corrected this 3 times" },
     { "type": "delete_lesson", "rule_substring": "partial match to find it", "reason": "superseded by newer understanding" }
+  ],
+  "pin_suggestions": [
+    { "key": "pref.code.simple", "reason": "Universal preference confirmed across 10+ sessions, prevents over-engineering" }
   ]
 }
 

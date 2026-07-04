@@ -209,7 +209,8 @@ export async function executeDream(
     // Stage 2: Refine memory (with tools for iterative exploration)
     ui.setStatus("pi-memory", `🌙 Dream: refining memory...`);
     dreamLog(`REFINE START model=${config.refinerModel}`);
-    const operations = await runRefinementStage(chainDir, config, exec, config.journalDir);
+    const refinement = await runRefinementStage(chainDir, config, exec, config.journalDir);
+    const operations = refinement.operations;
     dreamLog(`REFINE DONE ${operations.length} operations produced`);
 
     // Stage 3: Workflow insights
@@ -242,6 +243,7 @@ export async function executeDream(
       projectsCovered: meta.projects,
       dateRange: meta.dateRange,
       memoryChanges: buildJournalChanges(operations),
+      pinSuggestions: refinement.pinSuggestions.length > 0 ? refinement.pinSuggestions : undefined,
       workflowInsights,
     };
     const journalPath = writeDreamJournal(config.journalDir, journalInput);
@@ -377,7 +379,7 @@ async function runRefinementStage(
   config: DreamConfig,
   exec: ExecFn,
   journalDir?: string
-): Promise<MemoryOperation[]> {
+): Promise<ParsedRefinement> {
   const extracted = safeReadFile(join(chainDir, "extracted.json"));
   const memory = safeReadFile(join(chainDir, "current-memory.json"));
   const skills = safeReadFile(join(chainDir, "skills.md"));
@@ -405,15 +407,18 @@ async function runRefinementStage(
   const elapsedS = ((Date.now() - startMs) / 1000).toFixed(1);
   if (result.code !== 0 || !result.stdout) {
     dreamLog(`REFINE FAILED (${elapsedS}s, code=${result.code}, stderr=${result.stderr?.slice(0, 300) || "none"})`);
-    return [];
+    return { operations: [], pinSuggestions: [] };
   }
 
   dreamLog(`REFINE response received (${elapsedS}s, ${result.stdout.length} chars)`);
-  const ops = parseOperations(result.stdout);
-  if (ops.length === 0 && result.stdout.length > 50) {
+  const parsed = parseOperations(result.stdout);
+  if (parsed.operations.length === 0 && result.stdout.length > 50) {
     dreamLog(`REFINE WARNING: got ${result.stdout.length} chars but parsed 0 operations. First 200 chars: ${result.stdout.slice(0, 200)}`);
   }
-  return ops;
+  if (parsed.pinSuggestions.length > 0) {
+    dreamLog(`REFINE pin suggestions: ${parsed.pinSuggestions.map(s => s.key).join(", ")}`);
+  }
+  return parsed;
 }
 
 // ─── Stage 3: Workflow Advisor (pi --print) ──────────────────────────
@@ -492,16 +497,30 @@ function applyOperations(store: MemoryStore, operations: MemoryOperation[]): Dre
 
         case "merge":
           if (op.mergeKeys && op.into && op.value) {
+            // Preserve pin if any of the merged keys were pinned
+            const wasPinned = op.mergeKeys.some(k => {
+              const entry = store.getSemantic(k);
+              return entry?.pinned === 1;
+            });
             for (const k of op.mergeKeys) {
               store.deleteSemantic(k);
             }
             store.setSemantic(op.into, op.value, op.confidence ?? 0.9, "consolidation");
+            if (wasPinned) {
+              store.pin(op.into);
+            }
             changes.merged++;
           }
           break;
 
         case "delete":
           if (op.key) {
+            // Never delete pinned facts — they are user-intentional
+            const entry = store.getSemantic(op.key);
+            if (entry?.pinned === 1) {
+              // Skip — pinned facts are protected from Dream deletion
+              break;
+            }
             store.deleteSemantic(op.key);
             changes.deleted++;
           }
@@ -620,21 +639,31 @@ function emptyChanges(): DreamResult["memoryChanges"] {
   return { added: 0, updated: 0, merged: 0, deleted: 0, lessonsAdded: 0, lessonsDeleted: 0 };
 }
 
-function parseOperations(text: string): MemoryOperation[] {
+interface ParsedRefinement {
+  operations: MemoryOperation[];
+  pinSuggestions: Array<{ key: string; reason: string }>;
+}
+
+function parseOperations(text: string): ParsedRefinement {
   // Extract JSON from response (may be in markdown code blocks)
   const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/) || text.match(/(\{[\s\S]*\})/);
-  if (!jsonMatch) return [];
+  if (!jsonMatch) return { operations: [], pinSuggestions: [] };
 
   try {
     const parsed = JSON.parse(jsonMatch[1].trim());
-    if (Array.isArray(parsed.operations)) {
-      return parsed.operations.filter((op: any) =>
-        op && typeof op.type === "string" && typeof op.reason === "string"
-      );
-    }
-    return [];
+    const operations = Array.isArray(parsed.operations)
+      ? parsed.operations.filter((op: any) =>
+          op && typeof op.type === "string" && typeof op.reason === "string"
+        )
+      : [];
+    const pinSuggestions = Array.isArray(parsed.pin_suggestions)
+      ? parsed.pin_suggestions.filter((s: any) =>
+          s && typeof s.key === "string" && typeof s.reason === "string"
+        )
+      : [];
+    return { operations, pinSuggestions };
   } catch {
-    return [];
+    return { operations: [], pinSuggestions: [] };
   }
 }
 

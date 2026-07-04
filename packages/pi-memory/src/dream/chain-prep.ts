@@ -174,6 +174,7 @@ function writeMemorySnapshot(chainDir: string, store: MemoryStore): void {
     value: f.value,
     confidence: f.confidence,
     updated_at: f.updated_at,
+    pinned: f.pinned === 1 ? true : undefined,
   }));
 
   const lessons = store.listLessons(undefined, 200).map(l => ({
@@ -182,7 +183,8 @@ function writeMemorySnapshot(chainDir: string, store: MemoryStore): void {
     negative: l.negative,
   }));
 
-  const snapshot = { facts, lessons, stats: { factCount: facts.length, lessonCount: lessons.length } };
+  const pinnedCount = facts.filter(f => f.pinned).length;
+  const snapshot = { facts, lessons, stats: { factCount: facts.length, lessonCount: lessons.length, pinnedCount } };
   writeFileSync(join(chainDir, "current-memory.json"), JSON.stringify(snapshot, null, 2), "utf-8");
 }
 

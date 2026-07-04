@@ -19,6 +19,7 @@ export interface SemanticEntry {
   created_at: string;
   updated_at: string;
   last_accessed?: string;
+  pinned?: number;
 }
 
 export interface LessonEntry {
@@ -91,6 +92,13 @@ export class MemoryStore {
     // Migration: add last_accessed column if missing
     try {
       this.db.exec(`ALTER TABLE semantic ADD COLUMN last_accessed TEXT`);
+    } catch {
+      // Column already exists — ignore
+    }
+
+    // Migration: add pinned column if missing
+    try {
+      this.db.exec(`ALTER TABLE semantic ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0`);
     } catch {
       // Column already exists — ignore
     }
@@ -200,6 +208,7 @@ export class MemoryStore {
           source = excluded.source,
           updated_at = datetime('now')
       `).run(normalized, value, confidence, source);
+      // Note: pinned column is NOT touched by upsert — it preserves its value
 
       this.logEvent(existing ? "update" : "create", "semantic", normalized);
     });
@@ -330,6 +339,25 @@ export class MemoryStore {
     for (const key of keys) {
       stmt.run(key.toLowerCase());
     }
+  }
+
+  // ── Pinning ────────────────────────────────────────────────────────────
+
+  listPinned(): SemanticEntry[] {
+    return this.db.prepare("SELECT * FROM semantic WHERE pinned = 1 ORDER BY key ASC")
+      .all() as unknown as SemanticEntry[];
+  }
+
+  pin(key: string): boolean {
+    const normalized = key.toLowerCase();
+    const result = this.db.prepare("UPDATE semantic SET pinned = 1 WHERE key = ?").run(normalized);
+    return result.changes > 0;
+  }
+
+  unpin(key: string): boolean {
+    const normalized = key.toLowerCase();
+    const result = this.db.prepare("UPDATE semantic SET pinned = 0 WHERE key = ?").run(normalized);
+    return result.changes > 0;
   }
 
   // ─── Lessons ─────────────────────────────────────────────────────
