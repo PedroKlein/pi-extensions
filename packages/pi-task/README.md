@@ -50,7 +50,7 @@ archive        →  archive when done
 ```
 
 **Two-level hierarchy:**
-- `PlanTask` — feature-level task with `id`, `title`, `description`, `order`, `dependsOn`, `files`, `tddNotes`, `parallelGroup`
+- `PlanTask` — feature-level task with `id`, `title`, `description`, `order`, `dependsOn`, `files`, `tddNotes`, `parallelGroup`, `references`, `acceptanceCriteria`, `nonGoals`, `frozen`
 - `PlanSubtask` — TDD-sized sub-task within a task, with optional `tddBehavior`
 
 **Status lifecycle:**
@@ -83,6 +83,9 @@ pending → ready (when all deps done) → in-progress → done
 | `delete` | `taskId` | Remove task (cleans up dependsOn references). Pass `subtaskId` to delete one sub-task. |
 | `reorder` | `taskId`, `updates.order` | Change task position in the sorted display order |
 | `update-subtask` | `taskId`, `subtaskId`, `updates` | Modify sub-task title or description |
+| `freeze` | `taskId` (optional) | **Lock acceptance criteria immutable.** Prevents modification until unfreeze. Used before implementation to create a verification contract. |
+| `unfreeze` | `taskId` | **Unlock frozen criteria.** Only do this for genuine requirement changes. |
+| `add-criteria` | `taskId`, `criteria[]` | **Add acceptance criteria to a task.** Format: `AC: [observable]. Verify: [how to check].` |
 | `annotate` | `taskId`, `text` | Add a timestamped note to a task |
 | `diff` | — | Show what changed since last plan revision |
 | `list-plans` | — | List all plans with progress and active marker |
@@ -90,6 +93,52 @@ pending → ready (when all deps done) → in-progress → done
 | `archive` | `planName` | Archive a completed plan |
 | `unarchive` | `planName` | Restore an archived plan |
 | `delete-plan` | `planName` | **Permanently delete a plan** (removes files from disk) |
+
+## Acceptance Criteria & Verification
+
+Tasks can carry acceptance criteria and references that integrate with [pi-verify](../pi-verify) for independent verification.
+
+```json
+{
+  "id": "auth-endpoint",
+  "title": "Implement auth endpoint",
+  "acceptanceCriteria": [
+    "AC: POST /auth/login returns JWT on valid credentials. Verify: curl with valid user returns 200 + token.",
+    "AC: Invalid credentials return 401. Verify: curl with bad password returns 401 + error body."
+  ],
+  "references": {
+    "skills": ["go-dev", "go-testing"],
+    "files": ["internal/auth/handler.go", "docs/adr/003-auth.md"],
+    "memory": ["project.auth.design"]
+  },
+  "nonGoals": ["Not implementing refresh tokens yet"],
+  "frozen": true
+}
+```
+
+**Workflow with pi-verify:**
+1. `plan_tasks add-criteria` adds testable criteria per task
+2. `plan_tasks freeze` (or `/freeze`) locks criteria immutable
+3. Build the implementation
+4. `/verify` spawns 4 blind reviewers who check work against the frozen contract
+
+**References** tell the implementing agent what to load before writing code:
+
+| Field | What it points to |
+|-------|-------------------|
+| `skills` | Domain skills (e.g., `["go-dev", "coding-discipline"]`) |
+| `files` | Source files, configs, ADRs to read first |
+| `repos` | External repos with relevant patterns |
+| `docs` | Specs, RFCs, external documentation URLs |
+| `memory` | Memory keys holding project decisions |
+
+**nonGoals** prevent scope creep by making boundaries explicit.
+
+**frozen** marks criteria as locked. Frozen criteria reject updates until `unfreeze` is called.
+
+## Skills
+
+pi-task ships a **planning** skill that teaches agents acceptance criteria format, references structure, planning granularity decisions, and criteria sharpening techniques. Auto-discovered on install.
 
 ## TDD integration
 

@@ -14,6 +14,7 @@ import {
 	type PlanGraph,
 	type PlanTask,
 	type PlanSubtask,
+	type TaskReferences,
 	createPlanGraph,
 	createPlanTask,
 	createPlanSubtask,
@@ -33,6 +34,10 @@ import {
 	formatPlanGraphText,
 	formatPlanAsChecklist,
 	computePlanDiff,
+	freezeTask,
+	freezeAllTasks,
+	unfreezeTask,
+	addAcceptanceCriteria,
 } from "./plan.js";
 import {
 	loadActivePlan,
@@ -171,6 +176,19 @@ export default function piTask(pi: ExtensionAPI): void {
 			}
 			if (next.files?.length) lines.push(`Files: ${next.files.join(", ")}`);
 			if (next.tddNotes) lines.push(`TDD approach: ${next.tddNotes}`);
+			if (next.acceptanceCriteria?.length) {
+				lines.push(`Acceptance Criteria${next.frozen ? " (🧊frozen)" : ""}:`);
+				for (const ac of next.acceptanceCriteria) lines.push(`  • ${ac}`);
+			}
+			if (next.references) {
+				const refs = next.references;
+				if (refs.skills?.length) lines.push(`Load skills: ${refs.skills.join(", ")}`);
+				if (refs.files?.length) lines.push(`Read first: ${refs.files.join(", ")}`);
+				if (refs.docs?.length) lines.push(`Docs: ${refs.docs.join(", ")}`);
+				if (refs.memory?.length) lines.push(`Search memory: ${refs.memory.join(", ")}`);
+			}
+			if (next.constraints?.length) lines.push(`Constraints: ${next.constraints.join("; ")}`);
+			if (next.nonGoals?.length) lines.push(`Non-goals: ${next.nonGoals.join("; ")}`);
 			if (next.subtasks.length > 0) {
 				const pendingSubs = next.subtasks.filter((s) => s.status !== "done" && s.status !== "skipped");
 				if (pendingSubs.length > 0) {
@@ -206,18 +224,23 @@ export default function piTask(pi: ExtensionAPI): void {
 			"Sub-tasks should be TDD-sized: one test + one implementation cycle.",
 			"Set dependsOn to express execution order constraints.",
 			"When multiple tasks share the same dependencies and have non-overlapping files, assign them the same parallelGroup value so build mode can delegate them to parallel worker subagents.",
+			"Use 'add-criteria' to add testable acceptance criteria. Format: 'AC: [observable behavior]. Verify: [how to check].'",
+			"Use 'freeze' to lock acceptance criteria before implementation. Frozen criteria cannot be modified until 'unfreeze'.",
+			"Include references per task: skills to load, files to read, repos/docs/memory for context.",
 		],
 		parameters: Type.Object({
 			action: StringEnum(["create", "add", "update", "status", "expand", "add-subtasks", "get", "start",
 				"complete", "skip", "bulk-complete", "bulk-skip",
 				"delete", "reorder", "update-subtask", "list-plans", "switch-plan",
-				"archive", "unarchive", "delete-plan", "annotate", "diff"] as const),
+				"archive", "unarchive", "delete-plan", "annotate", "diff",
+				"freeze", "unfreeze", "add-criteria"] as const),
 			planName: Type.Optional(Type.String({ description: "Plan name (for create/switch-plan/archive/unarchive/delete-plan)" })),
 			sourceCheckpoint: Type.Optional(Type.String({ description: "Brainstorm checkpoint this plan came from" })),
-			taskId: Type.Optional(Type.String({ description: "Task ID (for update/expand/add-subtasks/get/start/complete/skip/delete/reorder/annotate/update-subtask)" })),
+			taskId: Type.Optional(Type.String({ description: "Task ID (for update/expand/add-subtasks/get/start/complete/skip/delete/reorder/annotate/update-subtask/freeze/unfreeze/add-criteria)" })),
 			taskIds: Type.Optional(Type.Array(Type.String(), { description: "Task IDs (for bulk-complete/bulk-skip)" })),
 			subtaskId: Type.Optional(Type.String({ description: "Sub-task ID (for complete/skip/delete/update-subtask)" })),
 			text: Type.Optional(Type.String({ description: "Annotation text (for annotate)" })),
+			criteria: Type.Optional(Type.Array(Type.String(), { description: "Acceptance criteria to add (for add-criteria)" })),
 			tasks: Type.Optional(Type.Array(Type.Object({
 				id: Type.String(),
 				title: Type.String(),
@@ -227,6 +250,17 @@ export default function piTask(pi: ExtensionAPI): void {
 				files: Type.Optional(Type.Array(Type.String())),
 				tddNotes: Type.Optional(Type.String()),
 				parallelGroup: Type.Optional(Type.String({ description: "Group name for tasks that can execute concurrently via worker subagents" })),
+				references: Type.Optional(Type.Object({
+					skills: Type.Optional(Type.Array(Type.String(), { description: "Skill names/paths to load before starting work" })),
+					files: Type.Optional(Type.Array(Type.String(), { description: "Files to read before starting" })),
+					repos: Type.Optional(Type.Array(Type.String(), { description: "pi-repos references for context" })),
+					docs: Type.Optional(Type.Array(Type.String(), { description: "External documentation URLs" })),
+					memory: Type.Optional(Type.Array(Type.String(), { description: "Memory keys/queries to search" })),
+					related: Type.Optional(Type.Array(Type.String(), { description: "Related task IDs for context" })),
+				})),
+				acceptanceCriteria: Type.Optional(Type.Array(Type.String(), { description: "Testable acceptance criteria. Format: 'AC: [observable behavior]. Verify: [how to check].'" })),
+				nonGoals: Type.Optional(Type.Array(Type.String(), { description: "Explicitly out of scope" })),
+				constraints: Type.Optional(Type.Array(Type.String(), { description: "Known constraints or danger zones" })),
 				subtasks: Type.Optional(Type.Array(Type.Object({
 					id: Type.String(),
 					title: Type.String(),
@@ -242,6 +276,17 @@ export default function piTask(pi: ExtensionAPI): void {
 				tddNotes: Type.Optional(Type.String()),
 				parallelGroup: Type.Optional(Type.String({ description: "Group name for tasks that can execute concurrently via worker subagents" })),
 				order: Type.Optional(Type.Number()),
+				references: Type.Optional(Type.Object({
+					skills: Type.Optional(Type.Array(Type.String())),
+					files: Type.Optional(Type.Array(Type.String())),
+					repos: Type.Optional(Type.Array(Type.String())),
+					docs: Type.Optional(Type.Array(Type.String())),
+					memory: Type.Optional(Type.Array(Type.String())),
+					related: Type.Optional(Type.Array(Type.String())),
+				})),
+				acceptanceCriteria: Type.Optional(Type.Array(Type.String())),
+				nonGoals: Type.Optional(Type.Array(Type.String())),
+				constraints: Type.Optional(Type.Array(Type.String())),
 			})),
 			newSubtasks: Type.Optional(Type.Array(Type.Object({
 				id: Type.String(),
@@ -260,7 +305,9 @@ export default function piTask(pi: ExtensionAPI): void {
 						createPlanTask({
 							id: t.id, title: t.title, description: t.description, order: t.order,
 							dependsOn: t.dependsOn, files: t.files, tddNotes: t.tddNotes,
-							parallelGroup: t.parallelGroup,
+							parallelGroup: t.parallelGroup, references: t.references,
+							acceptanceCriteria: t.acceptanceCriteria, nonGoals: t.nonGoals,
+							constraints: t.constraints,
 							subtasks: (t.subtasks ?? []).map((s: any) =>
 								createPlanSubtask({ id: s.id, title: s.title, description: s.description, tddBehavior: s.tddBehavior }),
 							),
@@ -293,7 +340,9 @@ export default function piTask(pi: ExtensionAPI): void {
 						createPlanTask({
 							id: t.id, title: t.title, description: t.description, order: t.order,
 							dependsOn: t.dependsOn, files: t.files, tddNotes: t.tddNotes,
-							parallelGroup: t.parallelGroup,
+							parallelGroup: t.parallelGroup, references: t.references,
+							acceptanceCriteria: t.acceptanceCriteria, nonGoals: t.nonGoals,
+							constraints: t.constraints,
 							subtasks: (t.subtasks ?? []).map((s: any) =>
 								createPlanSubtask({ id: s.id, title: s.title, description: s.description, tddBehavior: s.tddBehavior }),
 							),
@@ -369,11 +418,26 @@ export default function piTask(pi: ExtensionAPI): void {
 					if (!task) throw new Error(`Task not found: ${params.taskId}`);
 
 					const lines: string[] = [
-						`Task: ${task.id} — ${task.title}`, `Status: ${task.status}`, `Description: ${task.description}`,
+						`Task: ${task.id} — ${task.title}`, `Status: ${task.status}${task.frozen ? " (frozen)" : ""}`, `Description: ${task.description}`,
 					];
 					if (task.dependsOn.length > 0) lines.push(`Depends on: ${task.dependsOn.join(", ")}`);
 					if (task.files?.length) lines.push(`Files: ${task.files.join(", ")}`);
 					if (task.tddNotes) lines.push(`TDD: ${task.tddNotes}`);
+					if (task.acceptanceCriteria?.length) {
+						lines.push(`Acceptance Criteria${task.frozen ? " (frozen)" : ""}:`);
+						for (const ac of task.acceptanceCriteria) lines.push(`  • ${ac}`);
+					}
+					if (task.references) {
+						const refs = task.references;
+						if (refs.skills?.length) lines.push(`Skills: ${refs.skills.join(", ")}`);
+						if (refs.files?.length) lines.push(`Reference files: ${refs.files.join(", ")}`);
+						if (refs.repos?.length) lines.push(`Repos: ${refs.repos.join(", ")}`);
+						if (refs.docs?.length) lines.push(`Docs: ${refs.docs.join(", ")}`);
+						if (refs.memory?.length) lines.push(`Memory: ${refs.memory.join(", ")}`);
+						if (refs.related?.length) lines.push(`Related tasks: ${refs.related.join(", ")}`);
+					}
+					if (task.constraints?.length) lines.push(`Constraints: ${task.constraints.join("; ")}`);
+					if (task.nonGoals?.length) lines.push(`Non-goals: ${task.nonGoals.join("; ")}`);
 					if (task.subtasks.length > 0) {
 						lines.push("Sub-tasks:");
 						for (const sub of task.subtasks) {
@@ -622,6 +686,50 @@ export default function piTask(pi: ExtensionAPI): void {
 						return `${prefix} ${d.taskId} (${d.kind})${changes}`;
 					});
 					return { content: [{ type: "text", text: `Plan diff:\n${lines.join("\n")}` }] };
+				}
+
+				case "freeze": {
+					if (!activePlan) throw new Error("No active plan");
+					let updated: PlanGraph;
+					if (params.taskId) {
+						updated = freezeTask(activePlan, params.taskId);
+						await saveAndRefreshPlan(updated);
+						if (latestCtx) updateFooterStatus(latestCtx);
+						pi.events.emit("pi-task:frozen", { taskId: params.taskId });
+						return { content: [{ type: "text", text: `🧊 Task ${params.taskId} frozen. Acceptance criteria are now immutable.` }] };
+					} else {
+						const result = freezeAllTasks(activePlan);
+						updated = result.graph;
+						await saveAndRefreshPlan(updated);
+						if (latestCtx) updateFooterStatus(latestCtx);
+						const frozenCount = updated.tasks.filter((t) => t.frozen).length;
+						pi.events.emit("pi-task:frozen", { taskId: null, frozenCount });
+						let msg = `🧊 ${frozenCount} task(s) frozen.`;
+						if (result.skipped.length > 0) {
+							msg += ` Skipped (no criteria): ${result.skipped.join(", ")}`;
+						}
+						return { content: [{ type: "text", text: msg }] };
+					}
+				}
+
+				case "unfreeze": {
+					if (!activePlan) throw new Error("No active plan");
+					if (!params.taskId) throw new Error("taskId is required for unfreeze");
+					const updated = unfreezeTask(activePlan, params.taskId);
+					await saveAndRefreshPlan(updated);
+					if (latestCtx) updateFooterStatus(latestCtx);
+					return { content: [{ type: "text", text: `🔓 Task ${params.taskId} unfrozen. Acceptance criteria can be modified.` }] };
+				}
+
+				case "add-criteria": {
+					if (!activePlan) throw new Error("No active plan");
+					if (!params.taskId) throw new Error("taskId is required for add-criteria");
+					if (!params.criteria || params.criteria.length === 0) throw new Error("criteria array is required for add-criteria");
+					const updated = addAcceptanceCriteria(activePlan, params.taskId, params.criteria);
+					await saveAndRefreshPlan(updated);
+					if (latestCtx) updateFooterStatus(latestCtx);
+					const total = updated.tasks.find((t) => t.id === params.taskId)?.acceptanceCriteria?.length ?? 0;
+					return { content: [{ type: "text", text: `✅ Added ${params.criteria.length} criterion/criteria to ${params.taskId}. Total: ${total}.` }] };
 				}
 
 				default:

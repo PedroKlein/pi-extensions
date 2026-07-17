@@ -24,6 +24,21 @@ export interface PlanSubtask {
 	tddBehavior?: string;
 }
 
+export interface TaskReferences {
+	/** Skill names/paths to load before starting work */
+	skills?: string[];
+	/** Files to read before starting (source, configs, docs) */
+	files?: string[];
+	/** pi-repos references for context */
+	repos?: string[];
+	/** External documentation URLs to consult */
+	docs?: string[];
+	/** Memory keys/queries to search */
+	memory?: string[];
+	/** Related task IDs for context */
+	related?: string[];
+}
+
 export interface TaskAnnotation {
 	timestamp: number;
 	text: string;
@@ -39,6 +54,16 @@ export interface PlanTask {
 	files?: string[];
 	tddNotes?: string;
 	parallelGroup?: string;
+	/** Context references: skills, files, repos, docs, memory, related tasks */
+	references?: TaskReferences;
+	/** Testable acceptance criteria defining 'done' for independent verification */
+	acceptanceCriteria?: string[];
+	/** Whether acceptance criteria are frozen (immutable until unfrozen) */
+	frozen?: boolean;
+	/** Non-goals: explicitly out of scope for this task */
+	nonGoals?: string[];
+	/** Known constraints or danger zones */
+	constraints?: string[];
 	annotations: TaskAnnotation[];
 	subtasks: PlanSubtask[];
 }
@@ -105,6 +130,10 @@ export function createPlanTask(params: {
 	files?: string[];
 	tddNotes?: string;
 	parallelGroup?: string;
+	references?: TaskReferences;
+	acceptanceCriteria?: string[];
+	nonGoals?: string[];
+	constraints?: string[];
 	subtasks?: PlanSubtask[];
 }): PlanTask {
 	return {
@@ -117,6 +146,10 @@ export function createPlanTask(params: {
 		files: params.files,
 		tddNotes: params.tddNotes,
 		parallelGroup: params.parallelGroup,
+		references: params.references,
+		acceptanceCriteria: params.acceptanceCriteria,
+		nonGoals: params.nonGoals,
+		constraints: params.constraints,
 		annotations: [],
 		subtasks: params.subtasks ?? [],
 	};
@@ -462,10 +495,17 @@ export function expandTaskSubtasks(
 export function updateTask(
 	graph: PlanGraph,
 	taskId: string,
-	updates: Partial<Pick<PlanTask, "title" | "description" | "dependsOn" | "files" | "tddNotes" | "parallelGroup" | "order">>,
+	updates: Partial<Pick<PlanTask, "title" | "description" | "dependsOn" | "files" | "tddNotes" | "parallelGroup" | "order" | "references" | "acceptanceCriteria" | "nonGoals" | "constraints">>,
 ): PlanGraph {
 	const taskIndex = graph.tasks.findIndex((t) => t.id === taskId);
 	if (taskIndex === -1) return graph;
+
+	const task = graph.tasks[taskIndex];
+
+	// Block updates to acceptanceCriteria when task is frozen
+	if (task.frozen && updates.acceptanceCriteria !== undefined) {
+		throw new Error(`Task ${taskId} is frozen. Unfreeze it before modifying acceptance criteria.`);
+	}
 
 	const updatedTasks = [...graph.tasks];
 	updatedTasks[taskIndex] = { ...updatedTasks[taskIndex], ...updates };
@@ -475,6 +515,85 @@ export function updateTask(
 		tasks: resolveTaskStatuses(updatedTasks),
 		updatedAt: Date.now(),
 	};
+}
+
+// ─── Freeze / Unfreeze ─────────────────────────────────────────────────
+
+/**
+ * Freeze acceptance criteria for a task (or all tasks). Frozen criteria cannot be
+ * modified until unfrozen. Validates that criteria exist before freezing.
+ */
+export function freezeTask(graph: PlanGraph, taskId: string): PlanGraph {
+	const taskIndex = graph.tasks.findIndex((t) => t.id === taskId);
+	if (taskIndex === -1) throw new Error(`Task not found: ${taskId}`);
+
+	const task = graph.tasks[taskIndex];
+	if (!task.acceptanceCriteria || task.acceptanceCriteria.length === 0) {
+		throw new Error(`Cannot freeze task ${taskId}: no acceptance criteria defined. Add criteria first.`);
+	}
+	if (task.frozen) return graph; // Already frozen, no-op
+
+	const updatedTasks = [...graph.tasks];
+	updatedTasks[taskIndex] = { ...task, frozen: true };
+
+	return { ...graph, tasks: updatedTasks, updatedAt: Date.now() };
+}
+
+/**
+ * Freeze all tasks that have acceptance criteria.
+ * Returns the updated graph and a list of tasks that couldn't be frozen (no criteria).
+ */
+export function freezeAllTasks(graph: PlanGraph): { graph: PlanGraph; skipped: string[] } {
+	const skipped: string[] = [];
+	const updatedTasks = graph.tasks.map((task) => {
+		if (!task.acceptanceCriteria || task.acceptanceCriteria.length === 0) {
+			skipped.push(task.id);
+			return task;
+		}
+		if (task.frozen) return task;
+		return { ...task, frozen: true };
+	});
+
+	return {
+		graph: { ...graph, tasks: updatedTasks, updatedAt: Date.now() },
+		skipped,
+	};
+}
+
+/**
+ * Unfreeze a task, allowing criteria modification.
+ */
+export function unfreezeTask(graph: PlanGraph, taskId: string): PlanGraph {
+	const taskIndex = graph.tasks.findIndex((t) => t.id === taskId);
+	if (taskIndex === -1) throw new Error(`Task not found: ${taskId}`);
+
+	const task = graph.tasks[taskIndex];
+	if (!task.frozen) return graph; // Already unfrozen, no-op
+
+	const updatedTasks = [...graph.tasks];
+	updatedTasks[taskIndex] = { ...task, frozen: false };
+
+	return { ...graph, tasks: updatedTasks, updatedAt: Date.now() };
+}
+
+/**
+ * Add acceptance criteria to a task (convenience method).
+ * Appends to existing criteria without replacing them.
+ */
+export function addAcceptanceCriteria(graph: PlanGraph, taskId: string, criteria: string[]): PlanGraph {
+	const taskIndex = graph.tasks.findIndex((t) => t.id === taskId);
+	if (taskIndex === -1) throw new Error(`Task not found: ${taskId}`);
+
+	const task = graph.tasks[taskIndex];
+	if (task.frozen) {
+		throw new Error(`Task ${taskId} is frozen. Unfreeze it before modifying acceptance criteria.`);
+	}
+
+	const existing = task.acceptanceCriteria ?? [];
+	const updatedTasks = [...graph.tasks];
+	updatedTasks[taskIndex] = { ...task, acceptanceCriteria: [...existing, ...criteria] };
+
+	return { ...graph, tasks: updatedTasks, updatedAt: Date.now() };
 }
 
 /**
@@ -657,11 +776,38 @@ export function formatPlanGraphText(graph: PlanGraph): string {
 		const icon = STATUS_ICONS[task.status] ?? "?";
 		const deps = task.dependsOn.length > 0 ? ` [depends: ${task.dependsOn.join(", ")}]` : "";
 		const parallel = task.parallelGroup ? ` [parallel: ${task.parallelGroup}]` : "";
+		const frozen = task.frozen ? " 🧊" : "";
 		const files = task.files?.length ? ` files: ${task.files.join(", ")}` : "";
-		lines.push(`${icon} ${task.id}: ${task.title} (${task.status})${deps}${parallel}`);
+		lines.push(`${icon} ${task.id}: ${task.title} (${task.status})${frozen}${deps}${parallel}`);
 		if (task.description) lines.push(`   ${task.description}`);
 		if (files) lines.push(`  ${files}`);
 		if (task.tddNotes) lines.push(`   TDD: ${task.tddNotes}`);
+
+		if (task.acceptanceCriteria?.length) {
+			lines.push(`   Acceptance Criteria${task.frozen ? " (frozen)" : ""}:`);
+			for (const ac of task.acceptanceCriteria) {
+				lines.push(`     • ${ac}`);
+			}
+		}
+
+		if (task.references) {
+			const refs = task.references;
+			const refParts: string[] = [];
+			if (refs.skills?.length) refParts.push(`skills: ${refs.skills.join(", ")}`);
+			if (refs.files?.length) refParts.push(`files: ${refs.files.join(", ")}`);
+			if (refs.repos?.length) refParts.push(`repos: ${refs.repos.join(", ")}`);
+			if (refs.docs?.length) refParts.push(`docs: ${refs.docs.join(", ")}`);
+			if (refs.memory?.length) refParts.push(`memory: ${refs.memory.join(", ")}`);
+			if (refs.related?.length) refParts.push(`related: ${refs.related.join(", ")}`);
+			if (refParts.length > 0) lines.push(`   References: ${refParts.join(" | ")}`);
+		}
+
+		if (task.constraints?.length) {
+			lines.push(`   Constraints: ${task.constraints.join("; ")}`);
+		}
+		if (task.nonGoals?.length) {
+			lines.push(`   Non-goals: ${task.nonGoals.join("; ")}`);
+		}
 
 		for (const sub of task.subtasks) {
 			const subIcon = STATUS_ICONS[sub.status] ?? "?";
