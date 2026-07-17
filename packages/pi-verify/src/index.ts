@@ -16,6 +16,27 @@ import { randomUUID } from "node:crypto";
 
 // ─── Types ─────────────────────────────────────────────────────────────
 
+// ─── RPC helper for pi-task ────────────────────────────────────────────
+
+function createPiTaskRPC(pi: ExtensionAPI) {
+	return function queryPiTask(method: string, params?: any): Promise<any> {
+		return new Promise((resolve) => {
+			const requestId = randomUUID();
+			const timeout = setTimeout(() => resolve(null), 2000);
+
+			const handler = (reply: any) => {
+				if (reply.requestId !== requestId) return;
+				clearTimeout(timeout);
+				pi.events.off(`pi-task:rpc:reply:${requestId}` as any, handler);
+				resolve(reply.success ? reply.data : null);
+			};
+
+			pi.events.on(`pi-task:rpc:reply:${requestId}` as any, handler);
+			pi.events.emit("pi-task:rpc:request" as any, { requestId, method, params });
+		});
+	};
+}
+
 interface ReviewerVerdict {
 	reviewer: string;
 	overall: "PASS" | "FAIL" | "CAUTION" | "CONCERNS" | "PARTIAL";
@@ -50,21 +71,22 @@ export default function piVerify(pi: ExtensionAPI): void {
 	let reviewerStatuses: ReviewerStatus[] = [];
 	let verificationInProgress = false;
 
+	// ─── Helper: RPC to pi-task ───────────────────────────────────────
+
+	const queryPiTask = createPiTaskRPC(pi);
+
 	// ─── Helper: Get criteria from active plan ────────────────────────
 
 	async function getActivePlanCriteria(): Promise<{ taskId: string; title: string; criteria: string[] }[]> {
 		try {
-			const result = await pi.callTool("plan_tasks", { action: "status" });
-			const plan = (result as any)?.details?.plan;
-			if (!plan?.tasks) return [];
+			const result = await queryPiTask("getCriteria");
+			if (!result?.tasks) return [];
 
-			return plan.tasks
-				.filter((t: any) => t.acceptanceCriteria?.length > 0)
-				.map((t: any) => ({
-					taskId: t.id,
-					title: t.title,
-					criteria: t.acceptanceCriteria,
-				}));
+			return result.tasks.map((t: any) => ({
+				taskId: t.taskId,
+				title: t.title,
+				criteria: t.criteria,
+			}));
 		} catch {
 			return [];
 		}
@@ -150,14 +172,18 @@ export default function piVerify(pi: ExtensionAPI): void {
 
 			ctx.ui.notify(`Freezing criteria for ${tasksWithCriteria.length} task(s)`, "info");
 
-			// Trigger freeze via the plan_tasks tool
+			// Trigger freeze via pi-task RPC
 			try {
-				await pi.callTool("plan_tasks", { action: "freeze" });
-				pi.events.emit("pi-verify:frozen", {
-					tasks: tasksWithCriteria.map((t) => t.taskId),
-					timestamp: Date.now(),
-				});
-				ctx.ui.notify("🧊 Criteria frozen. They cannot be modified until unfrozen.", "info");
+				const result = await queryPiTask("freeze");
+				if (result) {
+					pi.events.emit("pi-verify:frozen", {
+						tasks: tasksWithCriteria.map((t) => t.taskId),
+						timestamp: Date.now(),
+					});
+					ctx.ui.notify("🧊 Criteria frozen. They cannot be modified until unfrozen.", "info");
+				} else {
+					ctx.ui.notify("Freeze failed: pi-task not responding.", "error");
+				}
 			} catch (err: any) {
 				ctx.ui.notify(`Freeze failed: ${err.message}`, "error");
 			}
@@ -174,10 +200,14 @@ export default function piVerify(pi: ExtensionAPI): void {
 			taskId: Type.Optional(Type.String({ description: "Freeze a specific task. Omit to freeze all tasks with criteria." })),
 		}),
 		async execute(_toolCallId, params) {
-			const result = await pi.callTool("plan_tasks", {
-				action: "freeze",
-				...(params.taskId ? { taskId: params.taskId } : {}),
-			});
+			const result = await queryPiTask("freeze", { taskId: params.taskId });
+
+			if (!result) {
+				return {
+					content: [{ type: "text" as const, text: "Freeze failed: pi-task not responding or no plan active." }],
+					details: {},
+				};
+			}
 
 			const tasksWithCriteria = await getActivePlanCriteria();
 			pi.events.emit("pi-verify:frozen", {
@@ -186,7 +216,10 @@ export default function piVerify(pi: ExtensionAPI): void {
 				timestamp: Date.now(),
 			});
 
-			return result as any;
+			return {
+				content: [{ type: "text" as const, text: `Frozen ${result.frozenCount} task(s).` }],
+				details: { frozenCount: result.frozenCount },
+			};
 		},
 	});
 

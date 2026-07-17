@@ -15,8 +15,27 @@ import {
 	buildPickupMessage,
 	getLatestPath,
 } from "./handoff.js";
+import { randomUUID } from "node:crypto";
 
 export default function piHandoff(pi: ExtensionAPI): void {
+	// ─── Helper: RPC call to pi-task (via events) ─────────────────
+
+	function queryPiTask(method: string, params?: any): Promise<any> {
+		return new Promise((resolve) => {
+			const requestId = randomUUID();
+			const timeout = setTimeout(() => resolve(null), 2000);
+
+			const handler = (reply: any) => {
+				if (reply.requestId !== requestId) return;
+				clearTimeout(timeout);
+				pi.events.off(`pi-task:rpc:reply:${requestId}` as any, handler);
+				resolve(reply.success ? reply.data : null);
+			};
+
+			pi.events.on(`pi-task:rpc:reply:${requestId}` as any, handler);
+			pi.events.emit("pi-task:rpc:request" as any, { requestId, method, params });
+		});
+	}
 	// ─── Helper: get repo slug from git ───────────────────────────────
 
 	async function getRepoSlug(): Promise<string> {
@@ -55,14 +74,17 @@ export default function piHandoff(pi: ExtensionAPI): void {
 			}
 		} catch { /* git not available */ }
 
-		// Plan state (try plan_tasks)
+		// Plan state (via pi-task RPC event — graceful if pi-task not loaded)
 		try {
-			const result = await pi.callTool("plan_tasks", { action: "status" });
-			const text = (result as any)?.content?.[0]?.text;
-			if (text && !text.includes("No active plan")) {
-				sections.push(`**Active plan**:\n${text}`);
+			const planData = await queryPiTask("getActivePlan");
+			if (planData?.plan) {
+				const plan = planData.plan;
+				const done = plan.tasks.filter((t: any) => t.status === "done").length;
+				const total = plan.tasks.length;
+				const next = plan.tasks.find((t: any) => t.status === "ready" || t.status === "in-progress");
+				sections.push(`**Active plan**: ${plan.name || "unnamed"} (${done}/${total} done)${next ? `, next: ${next.id}` : ""}`);
 			}
-		} catch { /* plan_tasks not available */ }
+		} catch { /* pi-task not available */ }
 
 		return sections.join("\n\n");
 	}

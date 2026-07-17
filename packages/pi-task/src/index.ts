@@ -954,6 +954,53 @@ export default function piTask(pi: ExtensionAPI): void {
 		}
 	});
 
+	// ─── RPC: expose plan state to other extensions via events ──────────
+
+	pi.events.on("pi-task:rpc:request" as any, (request: any) => {
+		const { requestId, method } = request || {};
+		if (!requestId) return;
+
+		let data: any = null;
+		let success = false;
+
+		try {
+			switch (method) {
+				case "getActivePlan": {
+					if (activePlan) {
+						data = { plan: activePlan };
+						success = true;
+					}
+					break;
+				}
+				case "getCriteria": {
+					if (activePlan) {
+						const tasks = activePlan.tasks
+							.filter((t: any) => t.acceptanceCriteria?.length > 0)
+							.map((t: any) => ({ taskId: t.id, title: t.title, criteria: t.acceptanceCriteria, frozen: t.frozen }));
+						data = { tasks };
+						success = tasks.length > 0;
+					}
+					break;
+				}
+				case "freeze": {
+					const taskId = request.params?.taskId;
+					if (activePlan) {
+						const targets = taskId
+							? activePlan.tasks.filter((t: any) => t.id === taskId)
+							: activePlan.tasks.filter((t: any) => t.acceptanceCriteria?.length > 0);
+						for (const t of targets) (t as any).frozen = true;
+						savePlan(pi, activePlan);
+						data = { frozenCount: targets.length };
+						success = true;
+					}
+					break;
+				}
+			}
+		} catch { /* swallow */ }
+
+		pi.events.emit(`pi-task:rpc:reply:${requestId}` as any, { requestId, success, data });
+	});
+
 	pi.on("session_start", async (_event, ctx) => {
 		latestCtx = ctx;
 		completionNotified = false;
