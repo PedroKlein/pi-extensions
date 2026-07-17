@@ -8,8 +8,23 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
-import { StringEnum } from "@earendil-works/pi-ai";
+import { Type, type TUnsafe } from "@sinclair/typebox";
+
+/**
+ * Creates a string enum schema compatible with Google's API and other providers
+ * that don't support anyOf/const patterns.
+ */
+function StringEnum<T extends readonly string[]>(
+	values: T,
+	options?: { description?: string; default?: T[number] },
+): TUnsafe<T[number]> {
+	return Type.Unsafe<T[number]>({
+		type: "string",
+		enum: values as any,
+		...(options?.description && { description: options.description }),
+		...(options?.default && { default: options.default }),
+	});
+}
 import {
 	type PlanGraph,
 	type PlanTask,
@@ -372,7 +387,7 @@ export default function piTask(pi: ExtensionAPI): void {
 					const updated = setTaskStatus(activePlan, params.taskId, "in-progress");
 					await saveAndRefreshPlan(updated);
 					if (latestCtx) updateFooterStatus(latestCtx);
-					return { content: [{ type: "text", text: `🔧 Task ${params.taskId} is now in-progress.` }] };
+					return { content: [{ type: "text", text: `🔧 Task ${params.taskId} is now in-progress.` }], details: {} };
 				}
 
 				case "bulk-complete": {
@@ -386,6 +401,7 @@ export default function piTask(pi: ExtensionAPI): void {
 					const counts = getTaskCounts(updated);
 					return {
 						content: [{ type: "text", text: `✅ ${params.taskIds.length} task(s) completed: ${params.taskIds.join(", ")}. Progress: ${counts.done}/${counts.total}.` }],
+						details: {},
 					};
 				}
 
@@ -400,12 +416,13 @@ export default function piTask(pi: ExtensionAPI): void {
 					const counts = getTaskCounts(updated);
 					return {
 						content: [{ type: "text", text: `⏭ ${params.taskIds.length} task(s) skipped: ${params.taskIds.join(", ")}. Progress: ${counts.done}/${counts.total}.` }],
+						details: {},
 					};
 				}
 
 				case "status": {
 					if (!activePlan) {
-						return { content: [{ type: "text", text: "No active plan. Use plan_tasks with action 'create' to create one." }] };
+						return { content: [{ type: "text", text: "No active plan. Use plan_tasks with action 'create' to create one." }], details: {} };
 					}
 					const resolved = { ...activePlan, tasks: resolveTaskStatuses(activePlan.tasks) };
 					return { content: [{ type: "text", text: formatPlanGraphText(resolved) }], details: { plan: resolved } };
@@ -480,7 +497,7 @@ export default function piTask(pi: ExtensionAPI): void {
 					const expanded = expandTaskSubtasks(prevGraph, params.taskId, subs);
 					await saveAndRefreshPlan(expanded);
 					if (latestCtx) updateFooterStatus(latestCtx);
-					return { content: [{ type: "text", text: `Task ${params.taskId} expanded with ${subs.length} sub-task(s).` }] };
+					return { content: [{ type: "text", text: `Task ${params.taskId} expanded with ${subs.length} sub-task(s).` }], details: {} };
 				}
 
 				case "complete": {
@@ -504,6 +521,7 @@ export default function piTask(pi: ExtensionAPI): void {
 							type: "text",
 							text: `✅ ${label} completed. Progress: ${counts.done}/${counts.total}.${nextReady.length > 0 ? ` Next ready: ${nextReady.map((t) => t.id).join(", ")}` : " All tasks done!"}`,
 						}],
+						details: {},
 					};
 				}
 
@@ -519,7 +537,7 @@ export default function piTask(pi: ExtensionAPI): void {
 					}
 					await saveAndRefreshPlan(updated);
 					if (latestCtx) updateFooterStatus(latestCtx);
-					return { content: [{ type: "text", text: `⏭ ${params.subtaskId ? `Sub-task ${params.subtaskId}` : `Task ${params.taskId}`} skipped.` }] };
+					return { content: [{ type: "text", text: `⏭ ${params.subtaskId ? `Sub-task ${params.subtaskId}` : `Task ${params.taskId}`} skipped.` }], details: {} };
 				}
 
 				case "delete": {
@@ -557,7 +575,7 @@ export default function piTask(pi: ExtensionAPI): void {
 					await saveAndRefreshPlan(updated);
 					if (latestCtx) updateFooterStatus(latestCtx);
 					const label = params.subtaskId ? `Sub-task ${params.subtaskId}` : `Task ${params.taskId}`;
-					return { content: [{ type: "text", text: `🗑 ${label} deleted.` }] };
+					return { content: [{ type: "text", text: `🗑 ${label} deleted.` }], details: {} };
 				}
 
 				case "reorder": {
@@ -569,7 +587,7 @@ export default function piTask(pi: ExtensionAPI): void {
 					const updated = updateTask(prevGraph, params.taskId, { order: params.updates.order });
 					await saveAndRefreshPlan(updated);
 					if (latestCtx) updateFooterStatus(latestCtx);
-					return { content: [{ type: "text", text: `Task ${params.taskId} reordered to position ${params.updates.order}.` }] };
+					return { content: [{ type: "text", text: `Task ${params.taskId} reordered to position ${params.updates.order}.` }], details: {} };
 				}
 
 				case "update-subtask": {
@@ -603,13 +621,13 @@ export default function piTask(pi: ExtensionAPI): void {
 					};
 
 					await saveAndRefreshPlan(updated);
-					return { content: [{ type: "text", text: `Sub-task ${params.subtaskId} updated.` }] };
+					return { content: [{ type: "text", text: `Sub-task ${params.subtaskId} updated.` }], details: {} };
 				}
 
 				case "list-plans": {
 					const names = await listPlanNames(pi);
 					if (names.length === 0) {
-						return { content: [{ type: "text", text: "No plans found." }] };
+						return { content: [{ type: "text", text: "No plans found." }], details: {} };
 					}
 					const summaries = loadPlanSummaries();
 					const lines = summaries.map((s) => {
@@ -617,7 +635,7 @@ export default function piTask(pi: ExtensionAPI): void {
 						const progress = s.totalTasks > 0 ? ` (${s.doneTasks}/${s.totalTasks} done)` : "";
 						return `- ${s.name}${progress}${active}`;
 					});
-					return { content: [{ type: "text", text: `Plans:\n${lines.join("\n")}` }] };
+					return { content: [{ type: "text", text: `Plans:\n${lines.join("\n")}` }], details: {} };
 				}
 
 				case "switch-plan": {
@@ -632,7 +650,7 @@ export default function piTask(pi: ExtensionAPI): void {
 					await saveActiveRef(pi, { planName: params.planName, updatedAt: Date.now() });
 					activePlan = graph;
 					if (latestCtx) updateFooterStatus(latestCtx);
-					return { content: [{ type: "text", text: `Switched to plan: ${params.planName}` }] };
+					return { content: [{ type: "text", text: `Switched to plan: ${params.planName}` }], details: {} };
 				}
 
 				case "archive": {
@@ -643,7 +661,7 @@ export default function piTask(pi: ExtensionAPI): void {
 						activePlan = null;
 					}
 					if (latestCtx) updateFooterStatus(latestCtx);
-					return { content: [{ type: "text", text: `📦 Plan "${params.planName}" archived.` }] };
+					return { content: [{ type: "text", text: `📦 Plan "${params.planName}" archived.` }], details: {} };
 				}
 
 				case "unarchive": {
@@ -651,7 +669,7 @@ export default function piTask(pi: ExtensionAPI): void {
 					const ok = await unarchivePlanFile(pi, params.planName);
 					if (!ok) throw new Error(`Failed to unarchive plan: ${params.planName}`);
 					if (latestCtx) updateFooterStatus(latestCtx);
-					return { content: [{ type: "text", text: `📂 Plan "${params.planName}" unarchived.` }] };
+					return { content: [{ type: "text", text: `📂 Plan "${params.planName}" unarchived.` }], details: {} };
 				}
 
 				case "delete-plan": {
@@ -662,7 +680,7 @@ export default function piTask(pi: ExtensionAPI): void {
 						activePlan = null;
 					}
 					if (latestCtx) updateFooterStatus(latestCtx);
-					return { content: [{ type: "text", text: `🗑 Plan "${params.planName}" permanently deleted.` }] };
+					return { content: [{ type: "text", text: `🗑 Plan "${params.planName}" permanently deleted.` }], details: {} };
 				}
 
 				case "annotate": {
@@ -671,21 +689,21 @@ export default function piTask(pi: ExtensionAPI): void {
 					if (!params.text) throw new Error("text is required for annotate");
 					const updated = addTaskAnnotation(activePlan, params.taskId, params.text);
 					await saveAndRefreshPlan(updated);
-					return { content: [{ type: "text", text: `📝 Annotation added to ${params.taskId}.` }] };
+					return { content: [{ type: "text", text: `📝 Annotation added to ${params.taskId}.` }], details: {} };
 				}
 
 				case "diff": {
 					if (!activePlan) throw new Error("No active plan");
 					const diff = computePlanDiff(activePlan);
 					if (diff.length === 0) {
-						return { content: [{ type: "text", text: "No changes since last revision." }] };
+						return { content: [{ type: "text", text: "No changes since last revision." }], details: {} };
 					}
 					const lines = diff.map((d) => {
 						const prefix = d.kind === "added" ? "+" : d.kind === "removed" ? "-" : "~";
 						const changes = d.changes ? `\n  ${d.changes.join("\n  ")}` : "";
 						return `${prefix} ${d.taskId} (${d.kind})${changes}`;
 					});
-					return { content: [{ type: "text", text: `Plan diff:\n${lines.join("\n")}` }] };
+					return { content: [{ type: "text", text: `Plan diff:\n${lines.join("\n")}` }], details: {} };
 				}
 
 				case "freeze": {
@@ -696,7 +714,7 @@ export default function piTask(pi: ExtensionAPI): void {
 						await saveAndRefreshPlan(updated);
 						if (latestCtx) updateFooterStatus(latestCtx);
 						pi.events.emit("pi-task:frozen", { taskId: params.taskId });
-						return { content: [{ type: "text", text: `🧊 Task ${params.taskId} frozen. Acceptance criteria are now immutable.` }] };
+						return { content: [{ type: "text", text: `🧊 Task ${params.taskId} frozen. Acceptance criteria are now immutable.` }], details: {} };
 					} else {
 						const result = freezeAllTasks(activePlan);
 						updated = result.graph;
@@ -708,7 +726,7 @@ export default function piTask(pi: ExtensionAPI): void {
 						if (result.skipped.length > 0) {
 							msg += ` Skipped (no criteria): ${result.skipped.join(", ")}`;
 						}
-						return { content: [{ type: "text", text: msg }] };
+						return { content: [{ type: "text", text: msg }], details: {} };
 					}
 				}
 
@@ -718,7 +736,7 @@ export default function piTask(pi: ExtensionAPI): void {
 					const updated = unfreezeTask(activePlan, params.taskId);
 					await saveAndRefreshPlan(updated);
 					if (latestCtx) updateFooterStatus(latestCtx);
-					return { content: [{ type: "text", text: `🔓 Task ${params.taskId} unfrozen. Acceptance criteria can be modified.` }] };
+					return { content: [{ type: "text", text: `🔓 Task ${params.taskId} unfrozen. Acceptance criteria can be modified.` }], details: {} };
 				}
 
 				case "add-criteria": {
@@ -729,7 +747,7 @@ export default function piTask(pi: ExtensionAPI): void {
 					await saveAndRefreshPlan(updated);
 					if (latestCtx) updateFooterStatus(latestCtx);
 					const total = updated.tasks.find((t) => t.id === params.taskId)?.acceptanceCriteria?.length ?? 0;
-					return { content: [{ type: "text", text: `✅ Added ${params.criteria.length} criterion/criteria to ${params.taskId}. Total: ${total}.` }] };
+					return { content: [{ type: "text", text: `✅ Added ${params.criteria.length} criterion/criteria to ${params.taskId}. Total: ${total}.` }], details: {} };
 				}
 
 				default:
@@ -769,7 +787,7 @@ export default function piTask(pi: ExtensionAPI): void {
 						await saveActiveRef(pi, { planName: result.planName, updatedAt: Date.now() });
 						activePlan = graph;
 						updateFooterStatus(ctx);
-						ctx.ui.notify(`Switched to plan: ${result.planName}`, "success");
+						ctx.ui.notify(`Switched to plan: ${result.planName}`, "info");
 						initialView = "tasks";
 					} else {
 						ctx.ui.notify(`Failed to load plan: ${result.planName}`, "error");
@@ -785,7 +803,7 @@ export default function piTask(pi: ExtensionAPI): void {
 							activePlan = null;
 						}
 						updateFooterStatus(ctx);
-						ctx.ui.notify(`Archived: ${result.planName}`, "success");
+						ctx.ui.notify(`Archived: ${result.planName}`, "info");
 					} else {
 						ctx.ui.notify(`Failed to archive: ${result.planName}`, "error");
 					}
@@ -797,7 +815,7 @@ export default function piTask(pi: ExtensionAPI): void {
 					const ok = await unarchivePlanFile(pi, result.planName);
 					if (ok) {
 						updateFooterStatus(ctx);
-						ctx.ui.notify(`Unarchived: ${result.planName}`, "success");
+						ctx.ui.notify(`Unarchived: ${result.planName}`, "info");
 					} else {
 						ctx.ui.notify(`Failed to unarchive: ${result.planName}`, "error");
 					}
@@ -808,7 +826,7 @@ export default function piTask(pi: ExtensionAPI): void {
 				if (result.action === "annotate" && result.taskId && result.annotation && activePlan) {
 					const updated = addTaskAnnotation(activePlan, result.taskId, result.annotation);
 					await saveAndRefreshPlan(updated);
-					ctx.ui.notify(`Annotation added to ${result.taskId}`, "success");
+					ctx.ui.notify(`Annotation added to ${result.taskId}`, "info");
 					initialView = "tasks";
 					continue;
 				}
@@ -845,7 +863,7 @@ export default function piTask(pi: ExtensionAPI): void {
 				`Imported OpenSpec tasks from ${tasksPath}. Create a plan_tasks graph from these:\n\n${taskList}`,
 				{ deliverAs: "followUp" as any },
 			);
-			ctx.ui.notify(`Imported ${tasks.length} task groups from ${tasksPath}`, "success");
+			ctx.ui.notify(`Imported ${tasks.length} task groups from ${tasksPath}`, "info");
 		},
 	});
 
@@ -860,9 +878,11 @@ export default function piTask(pi: ExtensionAPI): void {
 			const tasksPath = `openspec/changes/${changeName}/tasks.md`;
 			const dirResult = await pi.exec("mkdir", ["-p", `openspec/changes/${changeName}`], { timeout: 3000 });
 			if (dirResult.code !== 0) { ctx.ui.notify("Failed to create OpenSpec change directory", "error"); return; }
-			const writeResult = await pi.exec("tee", [tasksPath], { timeout: 5000, stdin: checklist });
+			const writeResult = await pi.exec("sh", ["-c", `cat > ${tasksPath} << 'PI_TASK_EOF'
+${checklist}
+PI_TASK_EOF`], { timeout: 5000 });
 			if (writeResult.code !== 0) { ctx.ui.notify(`Failed to write ${tasksPath}`, "error"); return; }
-			ctx.ui.notify(`Exported plan to ${tasksPath}`, "success");
+			ctx.ui.notify(`Exported plan to ${tasksPath}`, "info");
 		},
 	});
 
@@ -930,7 +950,7 @@ export default function piTask(pi: ExtensionAPI): void {
 							if (ok) {
 								activePlan = null;
 								updateFooterStatus(ctx);
-								ctx.ui.notify(`📦 Plan "${planName}" archived.`, "success");
+								ctx.ui.notify(`📦 Plan "${planName}" archived.`, "info");
 							}
 						}
 					} else {
@@ -943,7 +963,7 @@ export default function piTask(pi: ExtensionAPI): void {
 							if (ok) {
 								activePlan = null;
 								updateFooterStatus(ctx);
-								ctx.ui.notify(`📦 Plan "${planName}" archived.`, "success");
+								ctx.ui.notify(`📦 Plan "${planName}" archived.`, "info");
 							}
 						}
 					}

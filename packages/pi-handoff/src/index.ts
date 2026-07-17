@@ -23,16 +23,16 @@ export default function piHandoff(pi: ExtensionAPI): void {
 	function queryPiTask(method: string, params?: any): Promise<any> {
 		return new Promise((resolve) => {
 			const requestId = randomUUID();
-			const timeout = setTimeout(() => resolve(null), 2000);
+			let unsub: (() => void) | undefined;
+			const timeout = setTimeout(() => { unsub?.(); resolve(null); }, 2000);
 
-			const handler = (reply: any) => {
+			unsub = pi.events.on(`pi-task:rpc:reply:${requestId}` as any, (reply: any) => {
 				if (reply.requestId !== requestId) return;
 				clearTimeout(timeout);
-				pi.events.off(`pi-task:rpc:reply:${requestId}` as any, handler);
+				unsub?.();
 				resolve(reply.success ? reply.data : null);
-			};
+			});
 
-			pi.events.on(`pi-task:rpc:reply:${requestId}` as any, handler);
 			pi.events.emit("pi-task:rpc:request" as any, { requestId, method, params });
 		});
 	}
@@ -128,15 +128,6 @@ export default function piHandoff(pi: ExtensionAPI): void {
 			// Inject the instruction as a follow-up message
 			pi.sendUserMessage(instruction, { deliverAs: "followUp" as any });
 
-			// Listen for the agent's response containing the handoff content
-			// The agent will produce content; we need to capture it
-			// For now, register a one-time handler on agent_end
-			const handler = async () => {
-				// After agent responds, check if there's handoff content in the conversation
-				// This is a simplified approach - the agent should call a helper or we parse
-				pi.events.off("agent_end", handler);
-			};
-
 			// Set up a message renderer to capture ```handoff blocks
 			// Actually, simpler: let the agent use write tool to write the file directly
 			// and we just handle the clipboard part
@@ -149,22 +140,16 @@ export default function piHandoff(pi: ExtensionAPI): void {
 
 	// Listen for writes to the handoff path
 	pi.on("tool_result", async (event: any) => {
-		if (event.toolName === "write" || event.toolName === "bash") {
-			const repoSlug = await getRepoSlug();
-			const expectedPath = getLatestPath(repoSlug);
-
-			// Check if the agent just wrote to our handoff path
-			if (event.toolName === "write") {
-				const path = event.params?.path || "";
-				if (path.includes(".pi/handoffs/") && path.endsWith("latest.md")) {
-					// Copy pickup message to clipboard
-					const pickupMsg = buildPickupMessage(repoSlug);
-					try {
-						const platform = process.platform;
-						const clipCmd = platform === "darwin" ? "pbcopy" : "xclip -selection clipboard";
-						await pi.exec("sh", ["-c", `printf '%s' '${pickupMsg}' | ${clipCmd}`], { timeout: 5000 });
-					} catch { /* clipboard not available */ }
-				}
+		if (event.toolName === "write") {
+			const path = event.params?.path || "";
+			if (path.includes(".pi/handoffs/") && path.endsWith("latest.md")) {
+				// Copy pickup message to clipboard
+				const repoSlug = await getRepoSlug();
+				const pickupMsg = buildPickupMessage(repoSlug);
+				try {
+					const clipCmd = process.platform === "darwin" ? "pbcopy" : "xclip -selection clipboard";
+					await pi.exec("sh", ["-c", `printf '%s' ${JSON.stringify(pickupMsg)} | ${clipCmd}`], { timeout: 5000 });
+				} catch { /* clipboard not available */ }
 			}
 		}
 	});
