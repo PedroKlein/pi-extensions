@@ -53,7 +53,26 @@ import {
 	freezeAllTasks,
 	unfreezeTask,
 	addAcceptanceCriteria,
+	resolveTaskExecutor,
+	resolveTaskDefaults,
+	addPhase,
+	updatePhase,
+	deletePhase,
+	getPhaseStatus,
+	addPhaseAcceptanceCriteria,
+	freezePhase,
+	unfreezePhase,
+	addPhaseAnnotation,
+	freezePlan,
+	tasksRequiringDivergence,
+	defaultScratchDir,
+	expandScratchDirInResolved,
+	ANNOTATION_CATEGORIES,
+	type AnnotationCategory,
+	type TaskExecutor,
+	type PhaseDefaults,
 } from "./plan.js";
+import { withKeyedMutex } from "./plan-mutex.js";
 import {
 	loadActivePlan,
 	savePlan,
@@ -65,7 +84,11 @@ import {
 	saveActiveRef,
 	loadPlanSummaries,
 	initPlanStorage,
+	getPlansRootForRepo,
+	ensureScratchDir,
 } from "./plan-persistence.js";
+import { getSpawnBudget, formatBudgetLine, scanTaggedArtifacts } from "./pi-subagents-bridge.js";
+import { runVerify, type VerifyRole, VERIFY_ROLES } from "./verify.js";
 import { showPlanWidget, type PlanWidgetInput } from "./plan-widget.js";
 
 // ─── OpenSpec Parser ───────────────────────────────────────────────────────
@@ -100,6 +123,33 @@ function parseOpenSpecTasks(markdown: string): OpenSpecTaskGroup[] {
 	return groups;
 }
 
+// ─── Deprecation notices ────────────────────────────────────────────
+
+const warnedDeprecations = new Set<string>();
+
+/**
+ * Emit a one-time deprecation warning to stderr. Subsequent calls for the
+ * same key are silent. Used for `expand` → `add-subtasks` migration.
+ */
+function warnDeprecated(key: string, message: string): void {
+	if (warnedDeprecations.has(key)) return;
+	warnedDeprecations.add(key);
+	// stderr is intentional — users see it in --verbose logs; agent output is unaffected.
+	process.stderr.write(`[pi-task] deprecated: ${message}\n`);
+}
+
+function warnDeprecatedExpand(): void {
+	warnDeprecated(
+		"action:expand",
+		"the `expand` action is deprecated; use `add-subtasks` instead. Behaviour is unchanged.",
+	);
+}
+
+/** Test-only: reset the deprecation-warning tracker between test cases. */
+export function _resetDeprecationWarningsForTests(): void {
+	warnedDeprecations.clear();
+}
+
 // ─── Extension ─────────────────────────────────────────────────────────────
 
 export default function piTask(pi: ExtensionAPI): void {
@@ -119,6 +169,33 @@ export default function piTask(pi: ExtensionAPI): void {
 			completionNotified = false; // Reset: plan state changed, re-check completion
 		}
 		return ok;
+	}
+
+	/**
+	 * Serialize a read-modify-write mutation against the active plan.
+	 *
+	 * Every mutating action MUST route through this helper. Prevents the
+	 * load-mutate-save race documented in `docs/design/concurrency.md`.
+	 *
+	 * `compute` receives the current `activePlan` inside the critical section
+	 * and returns the new graph. Validation runs before persistence — a throwing
+	 * validation aborts the write and releases the lock.
+	 */
+	async function mutateActivePlan(
+		compute: (graph: PlanGraph) => PlanGraph,
+	): Promise<PlanGraph> {
+		if (!activePlan) throw new Error("No active plan");
+		const key = activePlan.name;
+		return withKeyedMutex(key, async () => {
+			if (!activePlan) throw new Error("No active plan");
+			const mutated = compute(activePlan);
+			const errors = validatePlanGraph(mutated);
+			if (errors.length > 0) {
+				throw new Error(`Validation failed:\n${errors.map((e) => `- ${e.message}`).join("\n")}`);
+			}
+			await saveAndRefreshPlan(mutated);
+			return mutated;
+		});
 	}
 
 	function updateFooterStatus(ctx: ExtensionContext): void {
@@ -172,7 +249,7 @@ export default function piTask(pi: ExtensionAPI): void {
 		for (const [groupName, tasks] of parallelGroups) {
 			if (tasks.length >= 2) {
 				lines.push(`\n[PARALLEL GROUP: ${groupName}]`);
-				lines.push(`${tasks.length} tasks ready for parallel execution via worker subagents:`);
+				lines.push(`${tasks.length} tasks ready for concurrent execution:`);
 				for (const task of tasks) {
 					const files = task.files?.length ? ` (files: ${task.files.join(", ")})` : "";
 					lines.push(`  - ${task.id}: ${task.title}${files}`);
@@ -233,14 +310,17 @@ export default function piTask(pi: ExtensionAPI): void {
 			"Lifecycle: create → add (append tasks) → start (mark in-progress) → complete/skip.",
 			"Use 'add' to append new tasks to an existing plan. Use 'create' only for new plans.",
 			"Use 'start' to mark a task as in-progress before working on it.",
-			"Use 'add-subtasks' (or 'expand') to add sub-tasks to a task.",
+			"Use 'add-subtasks' to add sub-tasks to a task.",
 			"Use 'bulk-complete' or 'bulk-skip' with taskIds[] to finish multiple tasks at once.",
 			"Each task should have: id, title, description, order, dependsOn, files, tddNotes.",
 			"Sub-tasks should be TDD-sized: one test + one implementation cycle.",
 			"Set dependsOn to express execution order constraints.",
-			"When multiple tasks share the same dependencies and have non-overlapping files, assign them the same parallelGroup value so build mode can delegate them to parallel worker subagents.",
-			"Use 'add-criteria' to add testable acceptance criteria. Format: 'AC: [observable behavior]. Verify: [how to check].'",
-			"Use 'freeze' to lock acceptance criteria before implementation. Frozen criteria cannot be modified until 'unfreeze'.",
+			"When multiple tasks share the same dependencies and have non-overlapping files, assign them the same parallelGroup value so the runtime can safely execute them concurrently. parallelGroup is a concurrency tag; see `executor` for how to spawn.",
+			"executor: five-valued cascade (task > phase > plan). any=no preference; inline=run in current agent; subagent-fresh=fresh-context subagent; subagent-fork=forked-context subagent; user=human executes.",
+			"Phases: use phase-create/phase-update/phase-delete for CRUD, phase-status for progress, phase-ac to append phase-level acceptance criteria, phase-freeze/phase-unfreeze to lock, phase-annotate for scoped notes. Tasks reference a phase via `phaseId`. Absence means the implicit `_root` phase.",
+			"scratchDir: every plan owns a scratch directory. Reference in task fields via `{scratchDir}` and it expands to an absolute path. Set via create.scratchDir or auto-defaulted.",
+			"Use 'add-criteria' to add testable acceptance criteria. Format: 'AC: [observable behavior]. Verify: [how to check].' (Deprecated alias for `update`; kept for one release.)",
+			"Use 'freeze' to lock acceptance criteria before implementation. Frozen criteria cannot be modified until 'unfreeze'. First `start` also freezes the plan implicitly.",
 			"Include references per task: skills to load, files to read, repos/docs/memory for context.",
 		],
 		parameters: Type.Object({
@@ -248,14 +328,44 @@ export default function piTask(pi: ExtensionAPI): void {
 				"complete", "skip", "bulk-complete", "bulk-skip",
 				"delete", "reorder", "update-subtask", "list-plans", "switch-plan",
 				"archive", "unarchive", "delete-plan", "annotate", "diff",
-				"freeze", "unfreeze", "add-criteria"] as const),
+				"freeze", "unfreeze", "add-criteria",
+				"phase-create", "phase-update", "phase-delete", "phase-status",
+				"phase-ac", "phase-freeze", "phase-unfreeze", "phase-annotate",
+				"reconcile", "verify", "phase-verify"] as const),
 			planName: Type.Optional(Type.String({ description: "Plan name (for create/switch-plan/archive/unarchive/delete-plan)" })),
 			sourceCheckpoint: Type.Optional(Type.String({ description: "Brainstorm checkpoint this plan came from" })),
 			taskId: Type.Optional(Type.String({ description: "Task ID (for update/expand/add-subtasks/get/start/complete/skip/delete/reorder/annotate/update-subtask/freeze/unfreeze/add-criteria)" })),
 			taskIds: Type.Optional(Type.Array(Type.String(), { description: "Task IDs (for bulk-complete/bulk-skip)" })),
 			subtaskId: Type.Optional(Type.String({ description: "Sub-task ID (for complete/skip/delete/update-subtask)" })),
 			text: Type.Optional(Type.String({ description: "Annotation text (for annotate)" })),
-			criteria: Type.Optional(Type.Array(Type.String(), { description: "Acceptance criteria to add (for add-criteria)" })),
+			criteria: Type.Optional(Type.Array(Type.String(), { description: "Acceptance criteria to add (for add-criteria, phase-ac)" })),
+			verbose: Type.Optional(Type.Boolean({ description: "For `get`: also return the resolved task fields (defaults cascade applied). Response `details` gains a `resolved` snapshot alongside `task`." })),
+			phaseId: Type.Optional(Type.String({ description: "Phase ID (for phase-update/delete/status/ac/freeze/unfreeze/annotate)." })),
+			phase: Type.Optional(Type.Object({
+				id: Type.String(),
+				title: Type.String(),
+				description: Type.Optional(Type.String()),
+				order: Type.Optional(Type.Number()),
+				dependsOn: Type.Optional(Type.Array(Type.String())),
+				acceptanceCriteria: Type.Optional(Type.Array(Type.String())),
+				executor: Type.Optional(StringEnum(["any", "inline", "subagent-fresh", "subagent-fork", "user"] as const)),
+				defaults: Type.Optional(Type.Object({
+					executor: Type.Optional(StringEnum(["any", "inline", "subagent-fresh", "subagent-fork", "user"] as const)),
+					parallelGroup: Type.Optional(Type.String()),
+					referenceSkills: Type.Optional(Type.Array(Type.String())),
+					referenceFiles: Type.Optional(Type.Array(Type.String())),
+					constraints: Type.Optional(Type.Array(Type.String())),
+					nonGoals: Type.Optional(Type.Array(Type.String())),
+					acceptanceCriteria: Type.Optional(Type.Array(Type.String())),
+				})),
+			}, { description: "Phase payload (for phase-create/phase-update). For phase-update, only supplied fields are updated." })),
+			category: Type.Optional(StringEnum(["note", "divergence", "blocker", "decision"] as const, { description: "Annotation category (for annotate, phase-annotate). Defaults to `note`. Runtime-emitted annotations use `divergence`." })),
+			divergence: Type.Optional(Type.String({ description: "Divergence note (for complete/bulk-complete on never-started tasks). Required when the target task's status is not `in-progress`. Whitespace-only strings are rejected." })),
+			scratchDir: Type.Optional(Type.String({ description: "Absolute path for the plan's scratch directory (for create). If omitted, a default under the plans root is used. Reference via `{scratchDir}` in task references and constraints." })),
+			reviewers: Type.Optional(Type.Number({ description: "Reviewer count for verify/phase-verify. Integer 1–10, default 4." })),
+			reviewerRoles: Type.Optional(Type.Array(Type.String(), { description: "Reviewer role subset for verify/phase-verify. Any of: completeness, correctness, safety, quality. Defaults to all four." })),
+			override: Type.Optional(Type.Boolean({ description: "For verify/phase-verify: opt out of block-on-FAIL. Requires a non-empty `reason`." })),
+			reason: Type.Optional(Type.String({ description: "For verify/phase-verify --override: non-empty explanation for the override. Persisted into the report." })),
 			tasks: Type.Optional(Type.Array(Type.Object({
 				id: Type.String(),
 				title: Type.String(),
@@ -264,18 +374,19 @@ export default function piTask(pi: ExtensionAPI): void {
 				dependsOn: Type.Optional(Type.Array(Type.String())),
 				files: Type.Optional(Type.Array(Type.String())),
 				tddNotes: Type.Optional(Type.String()),
-				parallelGroup: Type.Optional(Type.String({ description: "Group name for tasks that can execute concurrently via worker subagents" })),
+				parallelGroup: Type.Optional(Type.String({ description: "Concurrency-only tag: tasks sharing a group are safe to run in parallel by the runtime. No implication about execution mode or subagent count. See `executor` for spawn hints." })),
 				references: Type.Optional(Type.Object({
 					skills: Type.Optional(Type.Array(Type.String(), { description: "Skill names/paths to load before starting work" })),
 					files: Type.Optional(Type.Array(Type.String(), { description: "Files to read before starting" })),
 					repos: Type.Optional(Type.Array(Type.String(), { description: "pi-repos references for context" })),
 					docs: Type.Optional(Type.Array(Type.String(), { description: "External documentation URLs" })),
 					memory: Type.Optional(Type.Array(Type.String(), { description: "Memory keys/queries to search" })),
-					related: Type.Optional(Type.Array(Type.String(), { description: "Related task IDs for context" })),
 				})),
 				acceptanceCriteria: Type.Optional(Type.Array(Type.String(), { description: "Testable acceptance criteria. Format: 'AC: [observable behavior]. Verify: [how to check].'" })),
 				nonGoals: Type.Optional(Type.Array(Type.String(), { description: "Explicitly out of scope" })),
 				constraints: Type.Optional(Type.Array(Type.String(), { description: "Known constraints or danger zones" })),
+				phaseId: Type.Optional(Type.String({ description: "Phase this task belongs to. Absence means the implicit `_root` phase." })),
+				executor: Type.Optional(StringEnum(["any", "inline", "subagent-fresh", "subagent-fork", "user"] as const, { description: "Executor hint. Five values, in cascade order (task > phase > plan): `any` = no preference (default); `inline` = current agent handles it (no spawn); `subagent-fresh` = spawn a fresh-context subagent (no parent history); `subagent-fork` = spawn a forked-context subagent (shares parent context); `user` = human executes, agent hands off." })),
 				subtasks: Type.Optional(Type.Array(Type.Object({
 					id: Type.String(),
 					title: Type.String(),
@@ -289,7 +400,7 @@ export default function piTask(pi: ExtensionAPI): void {
 				dependsOn: Type.Optional(Type.Array(Type.String())),
 				files: Type.Optional(Type.Array(Type.String())),
 				tddNotes: Type.Optional(Type.String()),
-				parallelGroup: Type.Optional(Type.String({ description: "Group name for tasks that can execute concurrently via worker subagents" })),
+				parallelGroup: Type.Optional(Type.String({ description: "Concurrency-only tag: tasks sharing a group are safe to run in parallel by the runtime. No implication about execution mode or subagent count. See `executor` for spawn hints." })),
 				order: Type.Optional(Type.Number()),
 				references: Type.Optional(Type.Object({
 					skills: Type.Optional(Type.Array(Type.String())),
@@ -297,11 +408,12 @@ export default function piTask(pi: ExtensionAPI): void {
 					repos: Type.Optional(Type.Array(Type.String())),
 					docs: Type.Optional(Type.Array(Type.String())),
 					memory: Type.Optional(Type.Array(Type.String())),
-					related: Type.Optional(Type.Array(Type.String())),
 				})),
 				acceptanceCriteria: Type.Optional(Type.Array(Type.String())),
 				nonGoals: Type.Optional(Type.Array(Type.String())),
 				constraints: Type.Optional(Type.Array(Type.String())),
+				phaseId: Type.Optional(Type.String()),
+				executor: Type.Optional(StringEnum(["any", "inline", "subagent-fresh", "subagent-fork", "user"] as const)),
 			})),
 			newSubtasks: Type.Optional(Type.Array(Type.Object({
 				id: Type.String(),
@@ -323,15 +435,24 @@ export default function piTask(pi: ExtensionAPI): void {
 							parallelGroup: t.parallelGroup, references: t.references,
 							acceptanceCriteria: t.acceptanceCriteria, nonGoals: t.nonGoals,
 							constraints: t.constraints,
+							phaseId: t.phaseId,
+							executor: t.executor,
 							subtasks: (t.subtasks ?? []).map((s: any) =>
 								createPlanSubtask({ id: s.id, title: s.title, description: s.description, tddBehavior: s.tddBehavior }),
 							),
 						}),
 					);
 
-					const graph = createPlanGraph({
-						name: params.planName, tasks: resolveTaskStatuses(tasks), sourceCheckpoint: params.sourceCheckpoint,
-					});
+					const planName = params.planName;
+					const resolvedScratchDir = params.scratchDir ?? `${getPlansRootForRepo()}/${planName}/scratch`;
+					ensureScratchDir(resolvedScratchDir);
+
+					const graph: PlanGraph = {
+						...createPlanGraph({
+							name: planName, tasks: resolveTaskStatuses(tasks), sourceCheckpoint: params.sourceCheckpoint,
+						}),
+						scratchDir: resolvedScratchDir,
+					};
 
 					const errors = validatePlanGraph(graph);
 					if (errors.length > 0) throw new Error(`Plan validation failed:\n${errors.map((e) => `- ${e.message}`).join("\n")}`);
@@ -342,8 +463,8 @@ export default function piTask(pi: ExtensionAPI): void {
 
 					const counts = getTaskCounts(graph);
 					return {
-						content: [{ type: "text", text: `Plan "${graph.name}" created with ${graph.tasks.length} tasks (${counts.ready} ready).\n\n${formatPlanGraphText(graph)}` }],
-						details: { plan: graph },
+						content: [{ type: "text", text: `Plan "${graph.name}" created with ${graph.tasks.length} tasks (${counts.ready} ready).\nscratchDir: ${resolvedScratchDir}\n\n${formatPlanGraphText(graph)}` }],
+						details: { plan: graph, scratchDir: resolvedScratchDir },
 					};
 				}
 
@@ -358,19 +479,16 @@ export default function piTask(pi: ExtensionAPI): void {
 							parallelGroup: t.parallelGroup, references: t.references,
 							acceptanceCriteria: t.acceptanceCriteria, nonGoals: t.nonGoals,
 							constraints: t.constraints,
+							phaseId: t.phaseId,
+							executor: t.executor,
 							subtasks: (t.subtasks ?? []).map((s: any) =>
 								createPlanSubtask({ id: s.id, title: s.title, description: s.description, tddBehavior: s.tddBehavior }),
 							),
 						}),
 					);
 
-					const prevGraph = savePreviousRevision(activePlan);
-					const updated = addTasks(prevGraph, newTasks);
+					const updated = await mutateActivePlan((g) => addTasks(savePreviousRevision(g), newTasks));
 
-					const errors = validatePlanGraph(updated);
-					if (errors.length > 0) throw new Error(`Validation failed:\n${errors.map((e) => `- ${e.message}`).join("\n")}`);
-
-					await saveAndRefreshPlan(updated);
 					if (latestCtx) updateFooterStatus(latestCtx);
 
 					const counts = getTaskCounts(updated);
@@ -383,39 +501,123 @@ export default function piTask(pi: ExtensionAPI): void {
 				case "start": {
 					if (!activePlan) throw new Error("No active plan");
 					if (!params.taskId) throw new Error("taskId is required for start");
+					const taskId = params.taskId;
 
-					const updated = setTaskStatus(activePlan, params.taskId, "in-progress");
-					await saveAndRefreshPlan(updated);
+					// P3.3: executor-aware start gate.
+					const task = activePlan.tasks.find((t) => t.id === taskId);
+					if (!task) throw new Error(`Task not found: ${taskId}`);
+					const resolvedExecutor = resolveTaskExecutor(activePlan, task);
+
+					if (resolvedExecutor === "user") {
+						return {
+							content: [{
+								type: "text",
+								text: `⏸ Task ${taskId} awaits user execution (executor: user). Complete manually then call \`complete\` with a divergence note.`,
+							}],
+							details: {
+								blocked: true,
+								reason: "awaiting-user",
+								taskId,
+								executor: resolvedExecutor,
+							},
+						};
+					}
+
+					let warnBudgetProbeUnavailable = false;
+					if (resolvedExecutor === "subagent-fresh" || resolvedExecutor === "subagent-fork") {
+						const budget = await getSpawnBudget();
+						if (typeof budget.remaining === "number" && budget.remaining <= 0) {
+							return {
+								content: [{
+									type: "text",
+									text: `🛑 Task ${taskId} blocked: subagent budget exhausted (${budget.spawned}/${budget.cap}). Options: annotate-and-downgrade-inline, escalate-to-user.`,
+								}],
+								details: {
+									blocked: true,
+									reason: "subagent-budget-exhausted",
+									taskId,
+									executor: resolvedExecutor,
+									budget,
+									escalation: { options: ["annotate-and-downgrade-inline", "escalate-to-user"] },
+								},
+							};
+						}
+						if (budget.remaining === "unknown") {
+							warnBudgetProbeUnavailable = true;
+						}
+					}
+
+					let implicitlyFroze = false;
+					await mutateActivePlan((g) => {
+						let next = g;
+						if (!g.frozen) {
+							next = freezePlan(next);
+							implicitlyFroze = true;
+						}
+						next = setTaskStatus(next, taskId, "in-progress");
+						if (warnBudgetProbeUnavailable) {
+							next = addTaskAnnotation(next, taskId,
+								`Subagent budget probe unavailable; task started under executor '${resolvedExecutor}' without capacity guarantee.`,
+								"note",
+							);
+						}
+						return next;
+					});
 					if (latestCtx) updateFooterStatus(latestCtx);
-					return { content: [{ type: "text", text: `🔧 Task ${params.taskId} is now in-progress.` }], details: {} };
+					if (implicitlyFroze) {
+						console.warn(`[pi-task] First start: plan '${activePlan.name}' implicitly frozen. Acceptance criteria and structure are now locked. Use plan_tasks unfreeze to modify.`);
+					}
+					const startMsg = implicitlyFroze
+						? `🔧 Task ${taskId} is now in-progress. 🧊 Plan implicitly frozen on first start.`
+						: `🔧 Task ${taskId} is now in-progress.`;
+					return { content: [{ type: "text", text: startMsg }], details: { implicitlyFroze, executor: resolvedExecutor, budgetProbeUnavailable: warnBudgetProbeUnavailable } };
 				}
 
 				case "bulk-complete": {
 					if (!activePlan) throw new Error("No active plan");
 					if (!params.taskIds || params.taskIds.length === 0) throw new Error("taskIds array is required for bulk-complete");
+					const taskIds = params.taskIds;
+					const divergence = params.divergence?.trim();
 
-					const updated = bulkSetTaskStatus(activePlan, params.taskIds, "done");
-					await saveAndRefreshPlan(updated);
+					// Enforce divergence for any un-started target.
+					const needsDivergence = tasksRequiringDivergence(activePlan, taskIds);
+					if (needsDivergence.length > 0 && !divergence) {
+						throw new Error(
+							`Divergence required: task(s) [${needsDivergence.join(", ")}] are not in-progress. ` +
+								`Pass \`divergence: "<explanation>"\` to bulk-complete on un-started tasks.`,
+						);
+					}
+
+					const updated = await mutateActivePlan((g) => {
+						let next = bulkSetTaskStatus(g, taskIds, "done");
+						// Auto-annotate every un-started target with the divergence reason.
+						if (divergence) {
+							for (const id of needsDivergence) {
+								next = addTaskAnnotation(next, id, divergence, "divergence");
+							}
+						}
+						return next;
+					});
 					if (latestCtx) updateFooterStatus(latestCtx);
 
 					const counts = getTaskCounts(updated);
 					return {
-						content: [{ type: "text", text: `✅ ${params.taskIds.length} task(s) completed: ${params.taskIds.join(", ")}. Progress: ${counts.done}/${counts.total}.` }],
-						details: {},
+						content: [{ type: "text", text: `✅ ${taskIds.length} task(s) completed: ${taskIds.join(", ")}. Progress: ${counts.done}/${counts.total}.${needsDivergence.length > 0 ? ` Divergence recorded on ${needsDivergence.length} un-started task(s).` : ""}` }],
+						details: { divergenceRecorded: needsDivergence },
 					};
 				}
 
 				case "bulk-skip": {
 					if (!activePlan) throw new Error("No active plan");
 					if (!params.taskIds || params.taskIds.length === 0) throw new Error("taskIds array is required for bulk-skip");
+					const taskIds = params.taskIds;
 
-					const updated = bulkSetTaskStatus(activePlan, params.taskIds, "skipped");
-					await saveAndRefreshPlan(updated);
+					const updated = await mutateActivePlan((g) => bulkSetTaskStatus(g, taskIds, "skipped"));
 					if (latestCtx) updateFooterStatus(latestCtx);
 
 					const counts = getTaskCounts(updated);
 					return {
-						content: [{ type: "text", text: `⏭ ${params.taskIds.length} task(s) skipped: ${params.taskIds.join(", ")}. Progress: ${counts.done}/${counts.total}.` }],
+						content: [{ type: "text", text: `⏭ ${taskIds.length} task(s) skipped: ${taskIds.join(", ")}. Progress: ${counts.done}/${counts.total}.` }],
 						details: {},
 					};
 				}
@@ -425,7 +627,20 @@ export default function piTask(pi: ExtensionAPI): void {
 						return { content: [{ type: "text", text: "No active plan. Use plan_tasks with action 'create' to create one." }], details: {} };
 					}
 					const resolved = { ...activePlan, tasks: resolveTaskStatuses(activePlan.tasks) };
-					return { content: [{ type: "text", text: formatPlanGraphText(resolved) }], details: { plan: resolved } };
+					const budget = await getSpawnBudget();
+					const budgetLine = formatBudgetLine(budget);
+					const tagged = await scanTaggedArtifacts();
+					const openIds = new Set(resolved.tasks.filter((t) => t.status !== "done" && t.status !== "skipped").map((t) => t.id));
+					const matches = tagged.filter((a) => openIds.has(a.taskId));
+					const parts: string[] = [formatPlanGraphText(resolved), "", budgetLine];
+					if (matches.length > 0) {
+						parts.push("", "Pending completions from subagent artifacts:");
+						for (const m of matches) parts.push(`  • ${m.taskId} → ${m.artifactPath}${m.subagentRunId ? ` (run ${m.subagentRunId})` : ""}`);
+					}
+					return {
+						content: [{ type: "text", text: parts.join("\n") }],
+						details: { plan: resolved, budget, pendingCompletions: matches },
+					};
 				}
 
 				case "get": {
@@ -439,6 +654,12 @@ export default function piTask(pi: ExtensionAPI): void {
 					];
 					if (task.dependsOn.length > 0) lines.push(`Depends on: ${task.dependsOn.join(", ")}`);
 					if (task.files?.length) lines.push(`Files: ${task.files.join(", ")}`);
+					if (task.phaseId) lines.push(`Phase: ${task.phaseId}`);
+					const effectiveExecutor = resolveTaskExecutor(activePlan, task);
+					if (task.executor || effectiveExecutor !== "any") {
+						const raw = task.executor ?? "—";
+						lines.push(`Executor: ${raw} (resolved: ${effectiveExecutor})`);
+					}
 					if (task.tddNotes) lines.push(`TDD: ${task.tddNotes}`);
 					if (task.acceptanceCriteria?.length) {
 						lines.push(`Acceptance Criteria${task.frozen ? " (frozen)" : ""}:`);
@@ -466,26 +687,40 @@ export default function piTask(pi: ExtensionAPI): void {
 						lines.push("Annotations:");
 						for (const ann of task.annotations) lines.push(`  📝 ${ann.text}`);
 					}
-					return { content: [{ type: "text", text: lines.join("\n") }], details: { task } };
+					const details: Record<string, unknown> = { task };
+					if (params.verbose) {
+						const resolved = resolveTaskDefaults(activePlan, task);
+						details.resolved = resolved;
+						lines.push("", "Resolved (cascade applied):");
+						lines.push(`  executor: ${resolved.executor}`);
+						if (resolved.parallelGroup) lines.push(`  parallelGroup: ${resolved.parallelGroup}`);
+						if (resolved.referenceSkills.length) lines.push(`  referenceSkills: ${resolved.referenceSkills.join(", ")}`);
+						if (resolved.referenceFiles.length) lines.push(`  referenceFiles: ${resolved.referenceFiles.join(", ")}`);
+						if (resolved.constraints.length) lines.push(`  constraints: ${resolved.constraints.join("; ")}`);
+						if (resolved.nonGoals.length) lines.push(`  nonGoals: ${resolved.nonGoals.join("; ")}`);
+						if (resolved.acceptanceCriteria.length) {
+							lines.push("  acceptanceCriteria:");
+							for (const ac of resolved.acceptanceCriteria) lines.push(`    • ${ac}`);
+						}
+					}
+					return { content: [{ type: "text", text: lines.join("\n") }], details };
 				}
 
 				case "update": {
 					if (!activePlan) throw new Error("No active plan");
 					if (!params.taskId) throw new Error("taskId is required for update");
 					if (!params.updates) throw new Error("updates object is required for update");
+					const taskId = params.taskId;
+					const updates = params.updates as Parameters<typeof updateTask>[2];
 
-					const prevGraph = savePreviousRevision(activePlan);
-					const updated = updateTask(prevGraph, params.taskId, params.updates);
-					const errors = validatePlanGraph(updated);
-					if (errors.length > 0) throw new Error(`Update validation failed:\n${errors.map((e) => `- ${e.message}`).join("\n")}`);
-
-					await saveAndRefreshPlan(updated);
+					const updated = await mutateActivePlan((g) => updateTask(savePreviousRevision(g), taskId, updates));
 					if (latestCtx) updateFooterStatus(latestCtx);
-					return { content: [{ type: "text", text: `Task ${params.taskId} updated.` }], details: { task: updated.tasks.find((t) => t.id === params.taskId) } };
+					return { content: [{ type: "text", text: `Task ${taskId} updated.` }], details: { task: updated.tasks.find((t) => t.id === taskId) } };
 				}
 
 				case "expand":
 				case "add-subtasks": {
+					if (params.action === "expand") warnDeprecatedExpand();
 					if (!activePlan) throw new Error("No active plan");
 					if (!params.taskId) throw new Error("taskId is required for add-subtasks");
 					if (!params.newSubtasks || params.newSubtasks.length === 0) throw new Error("newSubtasks array is required for add-subtasks");
@@ -493,27 +728,43 @@ export default function piTask(pi: ExtensionAPI): void {
 					const subs: PlanSubtask[] = params.newSubtasks.map((s: any) =>
 						createPlanSubtask({ id: s.id, title: s.title, description: s.description, tddBehavior: s.tddBehavior }),
 					);
-					const prevGraph = savePreviousRevision(activePlan);
-					const expanded = expandTaskSubtasks(prevGraph, params.taskId, subs);
-					await saveAndRefreshPlan(expanded);
+					const taskId = params.taskId;
+					await mutateActivePlan((g) => expandTaskSubtasks(savePreviousRevision(g), taskId, subs));
 					if (latestCtx) updateFooterStatus(latestCtx);
-					return { content: [{ type: "text", text: `Task ${params.taskId} expanded with ${subs.length} sub-task(s).` }], details: {} };
+					return { content: [{ type: "text", text: `Task ${taskId} expanded with ${subs.length} sub-task(s).` }], details: {} };
 				}
 
 				case "complete": {
 					if (!activePlan) throw new Error("No active plan");
 					if (!params.taskId) throw new Error("taskId is required for complete");
+					const taskId = params.taskId;
+					const subtaskId = params.subtaskId;
+					const divergence = params.divergence?.trim();
 
-					let updated: PlanGraph;
-					if (params.subtaskId) {
-						updated = setSubtaskStatus(activePlan, params.taskId, params.subtaskId, "done");
-					} else {
-						updated = setTaskStatus(activePlan, params.taskId, "done");
+					// Divergence enforcement applies to task-level complete only (not sub-tasks).
+					if (!subtaskId) {
+						const needsDivergence = tasksRequiringDivergence(activePlan, [taskId]);
+						if (needsDivergence.length > 0 && !divergence) {
+							const task = activePlan.tasks.find((t) => t.id === taskId);
+							const curStatus = task?.status ?? "unknown";
+							throw new Error(
+								`Divergence required: task ${taskId} is '${curStatus}', not 'in-progress'. ` +
+									`Pass \`divergence: "<explanation>"\` to complete without going through start.`,
+							);
+						}
 					}
-					await saveAndRefreshPlan(updated);
+
+					const updated = await mutateActivePlan((g) => {
+						if (subtaskId) return setSubtaskStatus(g, taskId, subtaskId, "done");
+						let next = setTaskStatus(g, taskId, "done");
+						if (divergence) {
+							next = addTaskAnnotation(next, taskId, divergence, "divergence");
+						}
+						return next;
+					});
 					if (latestCtx) updateFooterStatus(latestCtx);
 
-					const label = params.subtaskId ? `Sub-task ${params.subtaskId}` : `Task ${params.taskId}`;
+					const label = subtaskId ? `Sub-task ${subtaskId}` : `Task ${taskId}`;
 					const counts = getTaskCounts(updated);
 					const nextReady = getReadyTasks(updated);
 					return {
@@ -521,60 +772,56 @@ export default function piTask(pi: ExtensionAPI): void {
 							type: "text",
 							text: `✅ ${label} completed. Progress: ${counts.done}/${counts.total}.${nextReady.length > 0 ? ` Next ready: ${nextReady.map((t) => t.id).join(", ")}` : " All tasks done!"}`,
 						}],
-						details: {},
+						details: { divergenceRecorded: divergence ? [taskId] : [] },
 					};
 				}
 
 				case "skip": {
 					if (!activePlan) throw new Error("No active plan");
 					if (!params.taskId) throw new Error("taskId is required for skip");
+					const taskId = params.taskId;
+					const subtaskId = params.subtaskId;
 
-					let updated: PlanGraph;
-					if (params.subtaskId) {
-						updated = setSubtaskStatus(activePlan, params.taskId, params.subtaskId, "skipped");
-					} else {
-						updated = setTaskStatus(activePlan, params.taskId, "skipped");
-					}
-					await saveAndRefreshPlan(updated);
+					await mutateActivePlan((g) => {
+						if (subtaskId) return setSubtaskStatus(g, taskId, subtaskId, "skipped");
+						return setTaskStatus(g, taskId, "skipped");
+					});
 					if (latestCtx) updateFooterStatus(latestCtx);
-					return { content: [{ type: "text", text: `⏭ ${params.subtaskId ? `Sub-task ${params.subtaskId}` : `Task ${params.taskId}`} skipped.` }], details: {} };
+					return { content: [{ type: "text", text: `⏭ ${subtaskId ? `Sub-task ${subtaskId}` : `Task ${taskId}`} skipped.` }], details: {} };
 				}
 
 				case "delete": {
 					if (!activePlan) throw new Error("No active plan");
 					if (!params.taskId) throw new Error("taskId is required for delete");
+					const taskId = params.taskId;
+					const subtaskId = params.subtaskId;
 
-					const prevGraph = savePreviousRevision(activePlan);
-					let updated: PlanGraph;
-
-					if (params.subtaskId) {
-						// Delete subtask
-						const task = prevGraph.tasks.find((t) => t.id === params.taskId);
-						if (!task) throw new Error(`Task not found: ${params.taskId}`);
-						updated = {
-							...prevGraph,
-							tasks: prevGraph.tasks.map((t) =>
-								t.id === params.taskId
-									? { ...t, subtasks: t.subtasks.filter((s) => s.id !== params.subtaskId) }
-									: t,
-							),
-						};
-					} else {
-						// Delete task + clean up dependsOn references
-						updated = {
+					await mutateActivePlan((g) => {
+						const prevGraph = savePreviousRevision(g);
+						if (subtaskId) {
+							const task = prevGraph.tasks.find((t) => t.id === taskId);
+							if (!task) throw new Error(`Task not found: ${taskId}`);
+							return {
+								...prevGraph,
+								tasks: prevGraph.tasks.map((t) =>
+									t.id === taskId
+										? { ...t, subtasks: t.subtasks.filter((s) => s.id !== subtaskId) }
+										: t,
+								),
+							};
+						}
+						return {
 							...prevGraph,
 							tasks: prevGraph.tasks
-								.filter((t) => t.id !== params.taskId)
+								.filter((t) => t.id !== taskId)
 								.map((t) => ({
 									...t,
-									dependsOn: t.dependsOn.filter((d) => d !== params.taskId),
+									dependsOn: t.dependsOn.filter((d) => d !== taskId),
 								})),
 						};
-					}
-
-					await saveAndRefreshPlan(updated);
+					});
 					if (latestCtx) updateFooterStatus(latestCtx);
-					const label = params.subtaskId ? `Sub-task ${params.subtaskId}` : `Task ${params.taskId}`;
+					const label = subtaskId ? `Sub-task ${subtaskId}` : `Task ${taskId}`;
 					return { content: [{ type: "text", text: `🗑 ${label} deleted.` }], details: {} };
 				}
 
@@ -582,12 +829,12 @@ export default function piTask(pi: ExtensionAPI): void {
 					if (!activePlan) throw new Error("No active plan");
 					if (!params.taskId) throw new Error("taskId is required for reorder");
 					if (!params.updates?.order && params.updates?.order !== 0) throw new Error("updates.order is required for reorder");
+					const taskId = params.taskId;
+					const order = params.updates.order;
 
-					const prevGraph = savePreviousRevision(activePlan);
-					const updated = updateTask(prevGraph, params.taskId, { order: params.updates.order });
-					await saveAndRefreshPlan(updated);
+					await mutateActivePlan((g) => updateTask(savePreviousRevision(g), taskId, { order }));
 					if (latestCtx) updateFooterStatus(latestCtx);
-					return { content: [{ type: "text", text: `Task ${params.taskId} reordered to position ${params.updates.order}.` }], details: {} };
+					return { content: [{ type: "text", text: `Task ${taskId} reordered to position ${order}.` }], details: {} };
 				}
 
 				case "update-subtask": {
@@ -595,33 +842,35 @@ export default function piTask(pi: ExtensionAPI): void {
 					if (!params.taskId) throw new Error("taskId is required for update-subtask");
 					if (!params.subtaskId) throw new Error("subtaskId is required for update-subtask");
 					if (!params.updates) throw new Error("updates is required for update-subtask");
+					const taskId = params.taskId;
+					const subtaskId = params.subtaskId;
+					const updates = params.updates;
 
-					const task = activePlan.tasks.find((t) => t.id === params.taskId);
-					if (!task) throw new Error(`Task not found: ${params.taskId}`);
-					const subIdx = task.subtasks.findIndex((s) => s.id === params.subtaskId);
-					if (subIdx === -1) throw new Error(`Sub-task not found: ${params.subtaskId}`);
-
-					const prevGraph = savePreviousRevision(activePlan);
-					const updated: PlanGraph = {
-						...prevGraph,
-						tasks: prevGraph.tasks.map((t) => {
-							if (t.id !== params.taskId) return t;
-							return {
-								...t,
-								subtasks: t.subtasks.map((s) => {
-									if (s.id !== params.subtaskId) return s;
-									return {
-										...s,
-										...(params.updates?.title !== undefined && { title: params.updates.title }),
-										...(params.updates?.description !== undefined && { description: params.updates.description }),
-									};
-								}),
-							};
-						}),
-					};
-
-					await saveAndRefreshPlan(updated);
-					return { content: [{ type: "text", text: `Sub-task ${params.subtaskId} updated.` }], details: {} };
+					await mutateActivePlan((g) => {
+						const task = g.tasks.find((t) => t.id === taskId);
+						if (!task) throw new Error(`Task not found: ${taskId}`);
+						const subIdx = task.subtasks.findIndex((s) => s.id === subtaskId);
+						if (subIdx === -1) throw new Error(`Sub-task not found: ${subtaskId}`);
+						const prevGraph = savePreviousRevision(g);
+						return {
+							...prevGraph,
+							tasks: prevGraph.tasks.map((t) => {
+								if (t.id !== taskId) return t;
+								return {
+									...t,
+									subtasks: t.subtasks.map((s) => {
+										if (s.id !== subtaskId) return s;
+										return {
+											...s,
+											...(updates.title !== undefined && { title: updates.title }),
+											...(updates.description !== undefined && { description: updates.description }),
+										};
+									}),
+								};
+							}),
+						};
+					});
+					return { content: [{ type: "text", text: `Sub-task ${subtaskId} updated.` }], details: {} };
 				}
 
 				case "list-plans": {
@@ -687,9 +936,14 @@ export default function piTask(pi: ExtensionAPI): void {
 					if (!activePlan) throw new Error("No active plan");
 					if (!params.taskId) throw new Error("taskId is required for annotate");
 					if (!params.text) throw new Error("text is required for annotate");
-					const updated = addTaskAnnotation(activePlan, params.taskId, params.text);
-					await saveAndRefreshPlan(updated);
-					return { content: [{ type: "text", text: `📝 Annotation added to ${params.taskId}.` }], details: {} };
+					if (params.category && !ANNOTATION_CATEGORIES.includes(params.category as AnnotationCategory)) {
+						throw new Error(`Unknown annotation category: ${params.category}. Valid: ${ANNOTATION_CATEGORIES.join(", ")}.`);
+					}
+					const taskId = params.taskId;
+					const text = params.text;
+					const category = params.category as AnnotationCategory | undefined;
+					await mutateActivePlan((g) => addTaskAnnotation(g, taskId, text, category));
+					return { content: [{ type: "text", text: `📝 Annotation${category ? ` [${category}]` : ""} added to ${taskId}.` }], details: {} };
 				}
 
 				case "diff": {
@@ -708,46 +962,224 @@ export default function piTask(pi: ExtensionAPI): void {
 
 				case "freeze": {
 					if (!activePlan) throw new Error("No active plan");
-					let updated: PlanGraph;
 					if (params.taskId) {
-						updated = freezeTask(activePlan, params.taskId);
-						await saveAndRefreshPlan(updated);
+						const taskId = params.taskId;
+						await mutateActivePlan((g) => freezeTask(g, taskId));
 						if (latestCtx) updateFooterStatus(latestCtx);
-						pi.events.emit("pi-task:frozen", { taskId: params.taskId });
-						return { content: [{ type: "text", text: `🧊 Task ${params.taskId} frozen. Acceptance criteria are now immutable.` }], details: {} };
-					} else {
-						const result = freezeAllTasks(activePlan);
-						updated = result.graph;
-						await saveAndRefreshPlan(updated);
-						if (latestCtx) updateFooterStatus(latestCtx);
-						const frozenCount = updated.tasks.filter((t) => t.frozen).length;
-						pi.events.emit("pi-task:frozen", { taskId: null, frozenCount });
-						let msg = `🧊 ${frozenCount} task(s) frozen.`;
-						if (result.skipped.length > 0) {
-							msg += ` Skipped (no criteria): ${result.skipped.join(", ")}`;
-						}
-						return { content: [{ type: "text", text: msg }], details: {} };
+						pi.events.emit("pi-task:frozen", { taskId });
+						return { content: [{ type: "text", text: `🧊 Task ${taskId} frozen. Acceptance criteria are now immutable.` }], details: {} };
 					}
+					let skipped: string[] = [];
+					const updated = await mutateActivePlan((g) => {
+						const result = freezeAllTasks(g);
+						skipped = result.skipped;
+						return result.graph;
+					});
+					if (latestCtx) updateFooterStatus(latestCtx);
+					const frozenCount = updated.tasks.filter((t) => t.frozen).length;
+					pi.events.emit("pi-task:frozen", { taskId: null, frozenCount });
+					let msg = `🧊 ${frozenCount} task(s) frozen.`;
+					if (skipped.length > 0) {
+						msg += ` Skipped (no criteria): ${skipped.join(", ")}`;
+					}
+					return { content: [{ type: "text", text: msg }], details: {} };
 				}
 
 				case "unfreeze": {
 					if (!activePlan) throw new Error("No active plan");
 					if (!params.taskId) throw new Error("taskId is required for unfreeze");
-					const updated = unfreezeTask(activePlan, params.taskId);
-					await saveAndRefreshPlan(updated);
+					const taskId = params.taskId;
+					await mutateActivePlan((g) => unfreezeTask(g, taskId));
 					if (latestCtx) updateFooterStatus(latestCtx);
-					return { content: [{ type: "text", text: `🔓 Task ${params.taskId} unfrozen. Acceptance criteria can be modified.` }], details: {} };
+					return { content: [{ type: "text", text: `🔓 Task ${taskId} unfrozen. Acceptance criteria can be modified.` }], details: {} };
 				}
 
 				case "add-criteria": {
 					if (!activePlan) throw new Error("No active plan");
 					if (!params.taskId) throw new Error("taskId is required for add-criteria");
 					if (!params.criteria || params.criteria.length === 0) throw new Error("criteria array is required for add-criteria");
-					const updated = addAcceptanceCriteria(activePlan, params.taskId, params.criteria);
-					await saveAndRefreshPlan(updated);
+					if (activePlan.frozen) {
+						throw new Error(`Plan '${activePlan.name}' is frozen; unfreeze the target task first or use \`update\` with a divergence annotation.`);
+					}
+					warnDeprecated(
+						"add-criteria",
+						"plan_tasks add-criteria is deprecated; call \`update\` with \`updates.acceptanceCriteria\` instead. Will be removed in a future release.",
+					);
+					const taskId = params.taskId;
+					const criteria = params.criteria;
+					const updated = await mutateActivePlan((g) => addAcceptanceCriteria(g, taskId, criteria));
 					if (latestCtx) updateFooterStatus(latestCtx);
-					const total = updated.tasks.find((t) => t.id === params.taskId)?.acceptanceCriteria?.length ?? 0;
-					return { content: [{ type: "text", text: `✅ Added ${params.criteria.length} criterion/criteria to ${params.taskId}. Total: ${total}.` }], details: {} };
+					const total = updated.tasks.find((t) => t.id === taskId)?.acceptanceCriteria?.length ?? 0;
+					return { content: [{ type: "text", text: `✅ Added ${criteria.length} criterion/criteria to ${taskId}. Total: ${total}.` }], details: {} };
+				}
+
+				// ─── Phase CRUD & gates (P2.1–P2.2) ──────────────────────────────
+
+				case "phase-create": {
+					if (!activePlan) throw new Error("No active plan");
+					if (!params.phase) throw new Error("phase payload is required for phase-create");
+					const payload = params.phase;
+					await mutateActivePlan((g) => addPhase(g, {
+						id: payload.id,
+						title: payload.title,
+						description: payload.description,
+						order: payload.order,
+						dependsOn: payload.dependsOn,
+						acceptanceCriteria: payload.acceptanceCriteria,
+						executor: payload.executor as TaskExecutor | undefined,
+						defaults: payload.defaults as PhaseDefaults | undefined,
+					}));
+					return { content: [{ type: "text", text: `📚 Phase ${payload.id} created.` }], details: {} };
+				}
+
+				case "phase-update": {
+					if (!activePlan) throw new Error("No active plan");
+					if (!params.phaseId) throw new Error("phaseId is required for phase-update");
+					if (!params.phase) throw new Error("phase payload is required for phase-update");
+					const phaseId = params.phaseId;
+					const payload = params.phase;
+					await mutateActivePlan((g) => updatePhase(g, phaseId, {
+						title: payload.title,
+						description: payload.description,
+						order: payload.order,
+						dependsOn: payload.dependsOn,
+						acceptanceCriteria: payload.acceptanceCriteria,
+						executor: payload.executor as TaskExecutor | undefined,
+						defaults: payload.defaults as PhaseDefaults | undefined,
+					}));
+					return { content: [{ type: "text", text: `📚 Phase ${phaseId} updated.` }], details: {} };
+				}
+
+				case "phase-delete": {
+					if (!activePlan) throw new Error("No active plan");
+					if (!params.phaseId) throw new Error("phaseId is required for phase-delete");
+					const phaseId = params.phaseId;
+					await mutateActivePlan((g) => deletePhase(g, phaseId));
+					return { content: [{ type: "text", text: `🗑 Phase ${phaseId} deleted.` }], details: {} };
+				}
+
+				case "phase-status": {
+					if (!activePlan) throw new Error("No active plan");
+					if (!params.phaseId) throw new Error("phaseId is required for phase-status");
+					const report = getPhaseStatus(activePlan, params.phaseId);
+					const lines: string[] = [];
+					lines.push(`Phase ${report.id} — ${report.title}`);
+					if (report.description) lines.push(report.description);
+					lines.push(`Order: ${report.order}${report.dependsOn.length ? ` · Depends on: ${report.dependsOn.join(", ")}` : ""}`);
+					lines.push(`Executor: ${report.executor}${report.executor !== report.resolvedExecutor ? ` (resolved: ${report.resolvedExecutor})` : ""}`);
+					lines.push(`Frozen: ${report.frozen ? "yes" : "no"}`);
+					lines.push(`Tasks (${report.totalTasks}): pending=${report.taskCounts.pending} ready=${report.taskCounts.ready} in-progress=${report.taskCounts["in-progress"]} done=${report.taskCounts.done} skipped=${report.taskCounts.skipped} blocked=${report.taskCounts.blocked}`);
+					if (report.acceptanceCriteria.length) {
+						lines.push("Acceptance criteria:");
+						for (const ac of report.acceptanceCriteria) lines.push(`  • ${ac}`);
+					}
+					if (report.annotations.length) {
+						lines.push("Annotations:");
+						for (const a of report.annotations) {
+							const tag = a.category ? `[${a.category}] ` : "";
+							lines.push(`  📝 ${tag}${a.text}`);
+						}
+					}
+					return { content: [{ type: "text", text: lines.join("\n") }], details: { phase: report } };
+				}
+
+				case "phase-ac": {
+					if (!activePlan) throw new Error("No active plan");
+					if (!params.phaseId) throw new Error("phaseId is required for phase-ac");
+					if (!params.criteria || params.criteria.length === 0) throw new Error("criteria array is required for phase-ac");
+					const phaseId = params.phaseId;
+					const criteria = params.criteria;
+					await mutateActivePlan((g) => addPhaseAcceptanceCriteria(g, phaseId, criteria));
+					return { content: [{ type: "text", text: `✅ Added ${criteria.length} criterion/criteria to phase ${phaseId}.` }], details: {} };
+				}
+
+				case "phase-freeze": {
+					if (!activePlan) throw new Error("No active plan");
+					if (!params.phaseId) throw new Error("phaseId is required for phase-freeze");
+					const phaseId = params.phaseId;
+					await mutateActivePlan((g) => freezePhase(g, phaseId));
+					return { content: [{ type: "text", text: `🧊 Phase ${phaseId} frozen.` }], details: {} };
+				}
+
+				case "phase-unfreeze": {
+					if (!activePlan) throw new Error("No active plan");
+					if (!params.phaseId) throw new Error("phaseId is required for phase-unfreeze");
+					const phaseId = params.phaseId;
+					await mutateActivePlan((g) => unfreezePhase(g, phaseId));
+					return { content: [{ type: "text", text: `🔓 Phase ${phaseId} unfrozen.` }], details: {} };
+				}
+
+				case "phase-annotate": {
+					if (!activePlan) throw new Error("No active plan");
+					if (!params.phaseId) throw new Error("phaseId is required for phase-annotate");
+					if (!params.text) throw new Error("text is required for phase-annotate");
+					if (params.category && !ANNOTATION_CATEGORIES.includes(params.category as AnnotationCategory)) {
+						throw new Error(`Unknown annotation category: ${params.category}. Valid: ${ANNOTATION_CATEGORIES.join(", ")}.`);
+					}
+					const phaseId = params.phaseId;
+					const text = params.text;
+					const category = params.category as AnnotationCategory | undefined;
+					await mutateActivePlan((g) => addPhaseAnnotation(g, phaseId, text, category));
+					return { content: [{ type: "text", text: `📝 Annotation added to phase ${phaseId}.` }], details: {} };
+				}
+
+				// ─── P3.5: reconcile artifacts → open-task offers ──────────────────────
+
+				case "reconcile": {
+					if (!activePlan) throw new Error("No active plan");
+					const tagged = await scanTaggedArtifacts();
+					const openIds = new Set(activePlan.tasks.filter((t) => t.status !== "done" && t.status !== "skipped").map((t) => t.id));
+					const offers = tagged.filter((a) => openIds.has(a.taskId));
+					if (offers.length === 0) {
+						return {
+							content: [{ type: "text", text: "No pending completions from subagent artifacts." }],
+							details: { offers: [] },
+						};
+					}
+					const lines: string[] = [`Pending completions from subagent artifacts (${offers.length}):`];
+					for (const o of offers) {
+						lines.push(`  • ${o.taskId} → ${o.artifactPath}${o.subagentRunId ? ` (run ${o.subagentRunId})` : ""}`);
+					}
+					lines.push("", "Advisory only. Use `complete` with a divergence to accept.");
+					return {
+						content: [{ type: "text", text: lines.join("\n") }],
+						details: { offers },
+					};
+				}
+
+				// ─── P3.6b: verify / phase-verify ──────────────────────────────────
+
+				case "verify":
+				case "phase-verify": {
+					if (!activePlan) throw new Error("No active plan");
+					const isPhase = params.action === "phase-verify";
+					if (isPhase && !params.phaseId) throw new Error("phaseId is required for phase-verify");
+
+					const outcome = await runVerify(activePlan, {
+						reviewers: params.reviewers,
+						reviewerRoles: (params.reviewerRoles as VerifyRole[] | undefined),
+						override: params.override,
+						reason: params.reason,
+						phaseId: isPhase ? params.phaseId : undefined,
+					});
+
+					if ("unavailable" in outcome) {
+						return {
+							content: [{ type: "text", text: `⚠️ verify unavailable: ${outcome.reason}` }],
+							details: outcome,
+						};
+					}
+
+					const lines = [
+						`Verify (${outcome.scope}) — verdict: **${outcome.verdict}**`,
+						outcome.synthesis,
+						`Report: ${outcome.artifactPath}`,
+					];
+					if (outcome.overrideApplied) lines.push(`Override: ${outcome.overrideApplied.reason}`);
+					return {
+						content: [{ type: "text", text: lines.join("\n\n") }],
+						details: outcome,
+					};
 				}
 
 				default:
@@ -824,8 +1256,9 @@ export default function piTask(pi: ExtensionAPI): void {
 				}
 
 				if (result.action === "annotate" && result.taskId && result.annotation && activePlan) {
-					const updated = addTaskAnnotation(activePlan, result.taskId, result.annotation);
-					await saveAndRefreshPlan(updated);
+					const taskId = result.taskId;
+					const text = result.annotation;
+					await mutateActivePlan((g) => addTaskAnnotation(g, taskId, text));
 					ctx.ui.notify(`Annotation added to ${result.taskId}`, "info");
 					initialView = "tasks";
 					continue;

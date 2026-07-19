@@ -1,0 +1,1586 @@
+{
+  "id": "doc-refactor::1784394432921",
+  "name": "doc-refactor",
+  "createdAt": 1784394432921,
+  "updatedAt": 1784409257777,
+  "status": "active",
+  "tasks": [
+    {
+      "id": "0.1",
+      "title": "Init scratch dir + queue files",
+      "description": "Create .pi-subagents/doc-refactor/ with empty escalation-queue.md and reconciliation-queue.md.",
+      "status": "done",
+      "order": 1,
+      "dependsOn": [],
+      "acceptanceCriteria": [
+        "AC: Both queue files exist and are empty. Verify: ls + wc -l == 0."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "0.2",
+      "title": "Rewrite wafer-project skill",
+      "description": "Fix Invariants #3, #5, #6, #8 in .agents/skills/wafer-project/SKILL.md. Update Conventions (WIT packages, node categories, plugin field). Fix Reference Documents to forward-reference docs/architecture/, docs/rfcs/, docs/adr/. Add migration-in-progress banner.",
+      "status": "done",
+      "order": 2,
+      "dependsOn": [
+        "0.1"
+      ],
+      "files": [
+        ".agents/skills/wafer-project/SKILL.md"
+      ],
+      "acceptanceCriteria": [
+        "AC: No 'joiner' as current-tense in invariants. Verify: grep confirms.",
+        "AC: All 4 WIT packages listed. Verify: grep 'pipeline:types', 'pipeline:node', 'pipeline:routing', 'pipeline:host'.",
+        "AC: Node categories = Source/Sink/Transform/Filter/Router. Verify: grep 'Filter' present, 'Joiner' absent from current-tense.",
+        "AC: Reference Documents point to docs/architecture/ (not SPEC.md). Verify: grep negative for SPEC.md."
+      ],
+      "constraints": [
+        "No code changes. No other skill files."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "0.3",
+      "title": "Update AGENTS.md",
+      "description": "Fix joiner references in .agents/AGENTS.md; note N->1 fan-in is implicit host topology.",
+      "status": "done",
+      "order": 3,
+      "dependsOn": [
+        "0.1"
+      ],
+      "files": [
+        ".agents/AGENTS.md"
+      ],
+      "acceptanceCriteria": [
+        "AC: No current-tense joiner references. Verify: grep -i joiner returns zero current-tense.",
+        "AC: 'multi-producer mpsc' or equivalent present. Verify: grep."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "0.4",
+      "title": "Triage 10 domain skills",
+      "description": "Grep each domain skill for stale terms (joiner, pipeline:transform@0.1.0, plugin_path, plugin_ref, WasmJoiner, merge-joiner, envelope.payload, process-result). Fix trivial mentions inline. Log non-trivial to .pi-subagents/doc-refactor/skill-audit-triage.md for Phase 5.",
+      "status": "done",
+      "order": 4,
+      "dependsOn": [
+        "0.1"
+      ],
+      "files": [
+        ".agents/skills/async-tokio/SKILL.md",
+        ".agents/skills/cargo-expert/SKILL.md",
+        ".agents/skills/cli-design/SKILL.md",
+        ".agents/skills/dag-orchestration/SKILL.md",
+        ".agents/skills/mqtt-iot/SKILL.md",
+        ".agents/skills/observability/SKILL.md",
+        ".agents/skills/oci-distribution/SKILL.md",
+        ".agents/skills/rust-best-practices/SKILL.md",
+        ".agents/skills/rust-testing/SKILL.md",
+        ".agents/skills/wasm-specialist/SKILL.md",
+        ".pi-subagents/doc-refactor/skill-audit-triage.md"
+      ],
+      "acceptanceCriteria": [
+        "AC: skill-audit-triage.md exists. Verify: ls.",
+        "AC: No skill contains 'joiner' as current-tense. Verify: grep -l."
+      ],
+      "constraints": [
+        "No deep rewrites; only trivial fixes. Deep audit is Phase 5."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "0.5",
+      "title": "Check tcc-doc/.agents/ staleness",
+      "description": "Read tcc-doc/main/.agents/AGENTS.md if present. Log findings to .pi-subagents/doc-refactor/tcc-doc-agents-audit.md. Apply only trivial fixes.",
+      "status": "done",
+      "order": 5,
+      "dependsOn": [
+        "0.1"
+      ],
+      "acceptanceCriteria": [
+        "AC: Audit file exists. Verify: ls .pi-subagents/doc-refactor/tcc-doc-agents-audit.md."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "0.6",
+      "title": "SOURCES-OF-TRUTH migration placeholder",
+      "description": "Add migration-in-progress warning to tcc-doc/main/SOURCES-OF-TRUTH.md pointing to docs/rfcs/ as source of truth until migration completes.",
+      "status": "done",
+      "order": 6,
+      "dependsOn": [
+        "0.1"
+      ],
+      "acceptanceCriteria": [
+        "AC: Migration warning present. Verify: grep 'migration' in file.",
+        "AC: SPEC.md row updated. Verify: grep 'being replaced'."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "1.1",
+      "title": "Create doc directory scaffolding",
+      "description": "Create docs/{architecture,requirements,interfaces,rfcs,operations,status,benchmarks}/ each with placeholder README.md describing directory intent (2-3 sentences).",
+      "status": "done",
+      "order": 10,
+      "dependsOn": [
+        "0.2",
+        "0.3"
+      ],
+      "acceptanceCriteria": [
+        "AC: All 7 directories exist with README.md. Verify: ls docs/{architecture,requirements,interfaces,rfcs,operations,status,benchmarks}/README.md."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "2.1",
+      "title": "Harmonize RFC-001 wit-contracts",
+      "description": "Harmonize the WIT contracts decision doc into RFC format. Add status, amendment banner (RFC-003 amends this), abstract, explicit Alternatives, Related RFCs, Implementation Notes.",
+      "status": "done",
+      "order": 20,
+      "dependsOn": [
+        "1.1"
+      ],
+      "files": [
+        "docs/rfcs/RFC-001-wit-contracts.md"
+      ],
+      "parallelGroup": "rfc-polish",
+      "acceptanceCriteria": [
+        "AC: docs/rfcs/RFC-001-wit-contracts.md exists.",
+        "AC: Status header + Amendment banner (Session 3 amended A1/A2) + ## Abstract (\u2264200w) + ## Alternatives Considered + ## Related RFCs + ## Implementation Notes.",
+        "AC: docs/decisions/2025-07-05-wit-contracts-envelope-design.md removed."
+      ],
+      "constraints": [
+        "No invented content. Divergences \u2192 reconciliation-queue.md."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "2.2",
+      "title": "Harmonize RFC-002 host-runtime",
+      "description": "Harmonize host-runtime decision doc into RFC-002 with full editorial pass.",
+      "status": "done",
+      "order": 21,
+      "dependsOn": [
+        "1.1"
+      ],
+      "files": [
+        "docs/rfcs/RFC-002-host-runtime.md"
+      ],
+      "parallelGroup": "rfc-polish",
+      "acceptanceCriteria": [
+        "AC: RFC-002 exists with all required sections.",
+        "AC: Amendment banner references Session 3 A3 (envelope) and Session 7 amendments."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "2.3",
+      "title": "Harmonize RFC-003 node-types",
+      "description": "Harmonize node-type-architecture decision into RFC-003. This RFC amends RFC-001 (A1 joiner removed, A2 Transform 1:1) and RFC-002 (A3 Arc envelope).",
+      "status": "done",
+      "order": 22,
+      "dependsOn": [
+        "1.1"
+      ],
+      "files": [
+        "docs/rfcs/RFC-003-node-types.md"
+      ],
+      "parallelGroup": "rfc-polish",
+      "acceptanceCriteria": [
+        "AC: RFC-003 exists.",
+        "AC: 'Amends' section lists RFC-001 (A1, A2) and RFC-002 (A3). Verify: grep."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "2.4",
+      "title": "Harmonize RFC-004 config-schema",
+      "description": "Harmonize config-schema decision into RFC-004.",
+      "status": "done",
+      "order": 23,
+      "dependsOn": [
+        "1.1"
+      ],
+      "files": [
+        "docs/rfcs/RFC-004-config-schema.md"
+      ],
+      "parallelGroup": "rfc-polish",
+      "acceptanceCriteria": [
+        "AC: RFC-004 exists with full editorial sections."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "2.5",
+      "title": "Harmonize RFC-005 orchestrator",
+      "description": "Harmonize orchestrator decision into RFC-005. Amends ADR-0003 (drain phase simplified to watch-channel). Confirm implementation matches by reading hotswap.rs.",
+      "status": "done",
+      "order": 24,
+      "dependsOn": [
+        "1.1"
+      ],
+      "files": [
+        "docs/rfcs/RFC-005-orchestrator.md"
+      ],
+      "parallelGroup": "rfc-polish",
+      "references": {
+        "files": [
+          "crates/wafer-core/src/orchestrator/hotswap.rs"
+        ]
+      },
+      "acceptanceCriteria": [
+        "AC: RFC-005 exists.",
+        "AC: Implementation Notes cites hotswap.rs and confirms watch-channel model. Verify: grep 'watch' in Implementation Notes.",
+        "AC: Amends ADR-0003 note present. Verify: grep 'ADR-0003'."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "2.6",
+      "title": "Harmonize RFC-006 plugin-sdk",
+      "description": "Harmonize plugin-rewrite decision into RFC-006.",
+      "status": "done",
+      "order": 25,
+      "dependsOn": [
+        "1.1"
+      ],
+      "files": [
+        "docs/rfcs/RFC-006-plugin-sdk.md"
+      ],
+      "parallelGroup": "rfc-polish",
+      "acceptanceCriteria": [
+        "AC: RFC-006 exists."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "2.7",
+      "title": "Harmonize RFC-007 performance",
+      "description": "Harmonize performance-optimizations decision into RFC-007.",
+      "status": "done",
+      "order": 26,
+      "dependsOn": [
+        "1.1"
+      ],
+      "files": [
+        "docs/rfcs/RFC-007-performance-optimizations.md"
+      ],
+      "parallelGroup": "rfc-polish",
+      "acceptanceCriteria": [
+        "AC: RFC-007 exists."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "2.8",
+      "title": "Harmonize RFC-008 evaluation-harness",
+      "description": "Harmonize evaluation-harness decision into RFC-008.",
+      "status": "done",
+      "order": 27,
+      "dependsOn": [
+        "1.1"
+      ],
+      "files": [
+        "docs/rfcs/RFC-008-evaluation-harness.md"
+      ],
+      "parallelGroup": "rfc-polish",
+      "acceptanceCriteria": [
+        "AC: RFC-008 exists."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "2.9",
+      "title": "Harmonize RFC-009 implementation-architecture",
+      "description": "Harmonize implementation-architecture decision into RFC-009.",
+      "status": "done",
+      "order": 28,
+      "dependsOn": [
+        "1.1"
+      ],
+      "files": [
+        "docs/rfcs/RFC-009-implementation-architecture.md"
+      ],
+      "parallelGroup": "rfc-polish",
+      "acceptanceCriteria": [
+        "AC: RFC-009 exists."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "2.10",
+      "title": "Harmonize RFC-010 io-integration",
+      "description": "Harmonize phase4-io-integration decision into RFC-010.",
+      "status": "done",
+      "order": 29,
+      "dependsOn": [
+        "1.1"
+      ],
+      "files": [
+        "docs/rfcs/RFC-010-io-integration.md"
+      ],
+      "parallelGroup": "rfc-polish",
+      "acceptanceCriteria": [
+        "AC: RFC-010 exists."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "2.11",
+      "title": "Create docs/rfcs/README.md from PHASE-0-PLAN",
+      "description": "Convert PHASE-0-PLAN.md into docs/rfcs/README.md as RFC index with amendments summary. Delete original.",
+      "status": "done",
+      "order": 30,
+      "dependsOn": [
+        "2.1",
+        "2.2",
+        "2.3",
+        "2.4",
+        "2.5",
+        "2.6",
+        "2.7",
+        "2.8",
+        "2.9",
+        "2.10"
+      ],
+      "files": [
+        "docs/rfcs/README.md"
+      ],
+      "acceptanceCriteria": [
+        "AC: docs/rfcs/README.md exists with 10 RFCs listed. Verify: grep 'RFC-001' through 'RFC-010'.",
+        "AC: Amendments summary section present. Verify: grep 'Amendments'.",
+        "AC: docs/decisions/PHASE-0-PLAN.md removed. Verify: ! ls."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "2.12",
+      "title": "Dedup discussion-session-workflow",
+      "description": "Compare docs/decisions/discussion-session-workflow.md vs docs/workflows/discussion-session.md. Merge or dedup. Delete decisions/ directory when empty.",
+      "status": "done",
+      "order": 31,
+      "dependsOn": [
+        "2.11"
+      ],
+      "acceptanceCriteria": [
+        "AC: docs/decisions/ directory no longer exists. Verify: ! ls docs/decisions/."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "2.13",
+      "title": "Phase 2 escalation gate",
+      "description": "Read .pi-subagents/doc-refactor/escalation-queue.md. If non-empty, STOP execution and surface to user. If empty, proceed.",
+      "status": "done",
+      "order": 32,
+      "dependsOn": [
+        "2.12"
+      ],
+      "acceptanceCriteria": [
+        "AC: Escalation queue empty OR user notified via ask_user."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "3.1",
+      "title": "Amend ADR-0002 with Session 5 note",
+      "description": "Append amendment note to docs/adr/0002-spsc-bounded-queues.md confirming Session 5 kept mpsc semantics but removed the BoundedQueue wrapper.",
+      "status": "done",
+      "order": 40,
+      "dependsOn": [
+        "2.13"
+      ],
+      "files": [
+        "docs/adr/0002-spsc-bounded-queues.md"
+      ],
+      "parallelGroup": "adr-wave-a",
+      "acceptanceCriteria": [
+        "AC: Amendment section appended. Verify: grep '## Amendment' + 'RFC-005'."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "3.2",
+      "title": "Create ADR-0007 buffer resource",
+      "description": "Nygard ADR for borrow<buffer> zero-copy input pattern. Reads RFC-001 + wit/pipeline-types.wit.",
+      "status": "done",
+      "order": 41,
+      "dependsOn": [
+        "2.13"
+      ],
+      "files": [
+        "docs/adr/0007-buffer-resource-zero-copy.md"
+      ],
+      "parallelGroup": "adr-wave-a",
+      "acceptanceCriteria": [
+        "AC: File exists.",
+        "AC: Nygard sections present (## Context, ## Decision, ## Consequences, ## See Also). Verify: 4 headings.",
+        "AC: See Also links RFC-001.",
+        "AC: Length 400-1500 words."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "3.3",
+      "title": "Create ADR-0008 error policy engine",
+      "description": "Nygard ADR for 5-category error policy dispatch (retry/DLQ/skip/teardown) from RFC-002 D4.",
+      "status": "done",
+      "order": 42,
+      "dependsOn": [
+        "2.13"
+      ],
+      "files": [
+        "docs/adr/0008-error-policy-engine.md"
+      ],
+      "parallelGroup": "adr-wave-a",
+      "acceptanceCriteria": [
+        "AC: File exists with Nygard structure; links RFC-002; length 400-1500 words."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "3.4",
+      "title": "Create ADR-0009 filter as first-class node",
+      "description": "Nygard ADR for why Filter is a distinct node type (RFC-003 A2 + D1).",
+      "status": "done",
+      "order": 43,
+      "dependsOn": [
+        "2.13"
+      ],
+      "files": [
+        "docs/adr/0009-filter-as-first-class-node.md"
+      ],
+      "parallelGroup": "adr-wave-a",
+      "acceptanceCriteria": [
+        "AC: File exists with Nygard structure; links RFC-003."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "3.5",
+      "title": "Create ADR-0010 merge as host topology",
+      "description": "Nygard ADR for removal of Joiner WIT world; merge is implicit multi-producer mpsc (RFC-003 A1 + D9).",
+      "status": "done",
+      "order": 44,
+      "dependsOn": [
+        "2.13"
+      ],
+      "files": [
+        "docs/adr/0010-merge-as-host-topology.md"
+      ],
+      "parallelGroup": "adr-wave-a",
+      "acceptanceCriteria": [
+        "AC: File exists.",
+        "AC: Consequences enumerate what's foreclosed (joins, windowed aggregation \u2192 out of scope)."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "3.6",
+      "title": "Create ADR-0011 Arc header envelope",
+      "description": "Nygard ADR for Arc<EnvelopeHeader> + Bytes payload + Lineage envelope design (RFC-003 A3).",
+      "status": "done",
+      "order": 45,
+      "dependsOn": [
+        "2.13"
+      ],
+      "files": [
+        "docs/adr/0011-arc-header-envelope.md"
+      ],
+      "parallelGroup": "adr-wave-a",
+      "acceptanceCriteria": [
+        "AC: File exists; Consequences mention RQ1 performance relevance."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "3.7",
+      "title": "Create ADR-0012 watch-channel OR fold into 0003",
+      "description": "Decide: standalone ADR-0012 for watch-channel hot-swap OR fold into ADR-0003 rewrite. Worker chooses based on RFC-005 clarity.",
+      "status": "done",
+      "order": 46,
+      "dependsOn": [
+        "2.13"
+      ],
+      "files": [
+        "docs/adr/0012-watch-channel-hot-swap.md"
+      ],
+      "parallelGroup": "adr-wave-a",
+      "acceptanceCriteria": [
+        "AC: Either ADR-0012 exists standalone OR content folded into ADR-0003 and choice logged to reconciliation-queue.md."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "3.8",
+      "title": "Create ADR-0013 AOT cache and metering",
+      "description": "Nygard ADR for AOT cache (blake3-keyed), fuel+epoch config, StoreLimits per-node, OS-thread epoch ticker (RFC-007 D1 + D8 + amendments).",
+      "status": "done",
+      "order": 47,
+      "dependsOn": [
+        "2.13"
+      ],
+      "files": [
+        "docs/adr/0013-aot-cache-and-metering.md"
+      ],
+      "parallelGroup": "adr-wave-a",
+      "acceptanceCriteria": [
+        "AC: File exists; links RFC-007; covers AOT cache, StoreLimits, epoch OS-thread."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "3.9",
+      "title": "Create ADR-0014 guest SDK design",
+      "description": "Nygard ADR for thread_local + RefCell + macros SDK pattern (RFC-006 D2 + D3).",
+      "status": "done",
+      "order": 48,
+      "dependsOn": [
+        "2.13"
+      ],
+      "files": [
+        "docs/adr/0014-guest-sdk-design.md"
+      ],
+      "parallelGroup": "adr-wave-a",
+      "acceptanceCriteria": [
+        "AC: File exists; links RFC-006."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "3.10",
+      "title": "Rewrite ADR-0003 hot-swap mechanism",
+      "description": "Rewrite docs/adr/0003-drain-and-flip-hotswap.md as 0003-hot-swap-mechanism.md (rename). Watch-channel between-messages model supersedes 4-phase drain. Cite RFC-005 D6.",
+      "status": "done",
+      "order": 49,
+      "dependsOn": [
+        "2.5"
+      ],
+      "files": [
+        "docs/adr/0003-hot-swap-mechanism.md"
+      ],
+      "references": {
+        "files": [
+          "crates/wafer-core/src/orchestrator/hotswap.rs"
+        ]
+      },
+      "acceptanceCriteria": [
+        "AC: docs/adr/0003-hot-swap-mechanism.md exists.",
+        "AC: Old docs/adr/0003-drain-and-flip-hotswap.md removed. Verify: ! ls.",
+        "AC: Content describes watch-channel model. Verify: grep 'watch'.",
+        "AC: Does NOT describe 4-phase drain as current mechanism. Verify: grep '4-phase' returns 0 in current-tense.",
+        "AC: Consequences mention 'supersedes drain-and-flip'."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "3.11",
+      "title": "Update docs/adr/README.md",
+      "description": "Add rows for ADR-0007..0014 to the ADR index README. Note ADR-0003 rewrite and ADR-0002 amendment. If ADR-0012 was folded into 0003, note that too.",
+      "status": "done",
+      "order": 50,
+      "dependsOn": [
+        "3.1",
+        "3.2",
+        "3.3",
+        "3.4",
+        "3.5",
+        "3.6",
+        "3.7",
+        "3.8",
+        "3.9",
+        "3.10"
+      ],
+      "files": [
+        "docs/adr/README.md"
+      ],
+      "acceptanceCriteria": [
+        "AC: All 14 ADRs (or 13 if 0012 folded) listed in table. Verify: grep '0001' through '0014' (or 0013).",
+        "AC: ADR-0003 rename noted. Verify: grep 'hot-swap-mechanism'."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "4.0",
+      "title": "Scout preflight \u2014 6 context packs",
+      "description": "Dispatch scout subagent (fresh context) to produce 6 compressed context packs in .pi-subagents/doc-refactor/phase4-context/: wit-summary.md, config-summary.md, module-map.md, plugin-catalog.md, http-api-truth.md, error-policy-summary.md.",
+      "status": "done",
+      "order": 60,
+      "dependsOn": [
+        "3.11"
+      ],
+      "files": [
+        ".pi-subagents/doc-refactor/phase4-context/wit-summary.md",
+        ".pi-subagents/doc-refactor/phase4-context/config-summary.md",
+        ".pi-subagents/doc-refactor/phase4-context/module-map.md",
+        ".pi-subagents/doc-refactor/phase4-context/plugin-catalog.md",
+        ".pi-subagents/doc-refactor/phase4-context/http-api-truth.md",
+        ".pi-subagents/doc-refactor/phase4-context/error-policy-summary.md"
+      ],
+      "acceptanceCriteria": [
+        "AC: All 6 pack files exist. Verify: ls.",
+        "AC: Each pack \u2264 its word budget (wit-summary\u2264500, config-summary\u2264800, module-map\u2264800, plugin-catalog\u2264500, http-api-truth\u2264400, error-policy-summary\u2264600). Verify: wc -w.",
+        "AC: Each pack cites 'Source:' paths. Verify: grep 'Source:'."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "4.1",
+      "title": "Write architecture/00-vision.md",
+      "description": "1-page executive vision. Reads wit-summary + module-map + ADR-0001, 0006.",
+      "status": "done",
+      "order": 70,
+      "dependsOn": [
+        "4.0"
+      ],
+      "files": [
+        "docs/architecture/00-vision.md"
+      ],
+      "parallelGroup": "arch-write",
+      "acceptanceCriteria": [
+        "AC: File exists; \u2264500 words.",
+        "AC: No mention of joiner, pipeline:transform@0.1.0, plugin_path/plugin_ref. Verify: grep negative.",
+        "AC: Cites Filter as node type. Verify: grep 'Filter'."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "4.2",
+      "title": "Write architecture/01-goals-and-constraints.md",
+      "description": "arc42 sections 1-3: goals, stakeholders, constraints. Reads tcc-doc thesis-statement-v3 + use-cases.md.",
+      "status": "done",
+      "order": 71,
+      "dependsOn": [
+        "4.0"
+      ],
+      "files": [
+        "docs/architecture/01-goals-and-constraints.md"
+      ],
+      "parallelGroup": "arch-write",
+      "acceptanceCriteria": [
+        "AC: File exists; \u22641500 words.",
+        "AC: Cites v3 RQ framing. Verify: grep 'RQ1', 'RQ2', 'RQ3' + 'runtime IS the contribution'."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "4.3",
+      "title": "Write architecture/02-solution-strategy.md",
+      "description": "arc42 section 4: big architectural decisions overview. Reads context packs.",
+      "status": "done",
+      "order": 72,
+      "dependsOn": [
+        "4.0"
+      ],
+      "files": [
+        "docs/architecture/02-solution-strategy.md"
+      ],
+      "parallelGroup": "arch-write",
+      "acceptanceCriteria": [
+        "AC: File exists; \u22642000 words; cites ADRs 0001, 0004, 0009, 0010."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "4.4",
+      "title": "Write architecture/03-building-blocks.md with C4 mermaid",
+      "description": "arc42 section 5: module/crate layout with C4-style mermaid diagrams. Reads module-map + plugin-catalog.",
+      "status": "done",
+      "order": 73,
+      "dependsOn": [
+        "4.0"
+      ],
+      "files": [
+        "docs/architecture/03-building-blocks.md"
+      ],
+      "parallelGroup": "arch-write",
+      "acceptanceCriteria": [
+        "AC: File exists.",
+        "AC: \u22651 mermaid diagram. Verify: grep '```mermaid'.",
+        "AC: Lists all crates. Verify: grep 'wafer-core', 'wafer-types', 'wafer-runtime', 'waferctl'.",
+        "AC: \u22642000 words."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "4.5",
+      "title": "Write architecture/04-runtime-view.md with sequence mermaid",
+      "description": "arc42 section 6: runtime behavior with sequence diagrams for message flow, hot-swap (watch-channel), error dispatch. Reads error-policy-summary + http-api-truth.",
+      "status": "done",
+      "order": 74,
+      "dependsOn": [
+        "4.0"
+      ],
+      "files": [
+        "docs/architecture/04-runtime-view.md"
+      ],
+      "parallelGroup": "arch-write",
+      "acceptanceCriteria": [
+        "AC: File exists.",
+        "AC: \u22652 mermaid sequence diagrams. Verify: grep '```mermaid' count \u2265 2.",
+        "AC: Hot-swap uses watch-channel model. Verify: grep 'watch' present; grep '4-phase' absent in current-tense.",
+        "AC: 5-category error policy referenced. Verify: grep 3+ of {bad-input,dependency-failed,processing-failed,timed-out,unrecoverable}."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "4.6",
+      "title": "Write architecture/05-deployment.md",
+      "description": "arc42 section 7: RPi 4, Jetson Orin, x86 deployment targets. Reads tcc-doc evaluation-plan Hardware section.",
+      "status": "done",
+      "order": 75,
+      "dependsOn": [
+        "4.0"
+      ],
+      "files": [
+        "docs/architecture/05-deployment.md"
+      ],
+      "parallelGroup": "arch-write",
+      "acceptanceCriteria": [
+        "AC: File exists; \u22641200 words; lists RPi 4, Jetson Orin, x86 with specs."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "4.7",
+      "title": "Write architecture/06-crosscutting-concepts.md",
+      "description": "arc42 section 8: envelope, capabilities, buffer resource, fuel/epoch, error policy. Links ADRs 0007, 0008, 0011, 0013.",
+      "status": "done",
+      "order": 76,
+      "dependsOn": [
+        "4.0"
+      ],
+      "files": [
+        "docs/architecture/06-crosscutting-concepts.md"
+      ],
+      "parallelGroup": "arch-write",
+      "acceptanceCriteria": [
+        "AC: File exists; \u22642500 words.",
+        "AC: Envelope subsection describes Arc<EnvelopeHeader> + Bytes + Lineage. Verify: grep 'Arc'.",
+        "AC: Buffer resource subsection describes borrow<buffer>. Verify: grep 'borrow<buffer>'."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "4.8",
+      "title": "Write architecture/07-quality-requirements.md",
+      "description": "arc42 section 10: quality requirements as NFRs mapped 1:1 to tcc-doc RQs.",
+      "status": "done",
+      "order": 77,
+      "dependsOn": [
+        "4.0"
+      ],
+      "files": [
+        "docs/architecture/07-quality-requirements.md"
+      ],
+      "parallelGroup": "arch-write",
+      "acceptanceCriteria": [
+        "AC: File exists; \u22641500 words.",
+        "AC: Lists RQ1, RQ2, RQ3 with quantitative pass criteria.",
+        "AC: Maps to NFRs. Verify: grep 'NFR'."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "4.9",
+      "title": "Write architecture/08-risks.md",
+      "description": "arc42 section 11: risks + technical debt. Reads tcc-doc counter-args-triage.",
+      "status": "done",
+      "order": 78,
+      "dependsOn": [
+        "4.0"
+      ],
+      "files": [
+        "docs/architecture/08-risks.md"
+      ],
+      "parallelGroup": "arch-write",
+      "acceptanceCriteria": [
+        "AC: File exists; \u22641500 words; identifies \u22655 risks with mitigations."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "4.10",
+      "title": "Write architecture/09-comparators.md",
+      "description": "Comparison vs eKuiper, AIO, Torvyn, Tremor, Wick, etc. Reads tcc-doc positioning-matrix + findings/source-code-comparators.",
+      "status": "done",
+      "order": 79,
+      "dependsOn": [
+        "4.0"
+      ],
+      "files": [
+        "docs/architecture/09-comparators.md"
+      ],
+      "parallelGroup": "arch-write",
+      "acceptanceCriteria": [
+        "AC: File exists; comparison table \u2265 6 systems."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "4.11",
+      "title": "Write requirements/functional.md",
+      "description": "FR-1..N derived from wit-summary + http-api-truth + plugin-catalog. Each FR: ID, statement, rationale, verification.",
+      "status": "done",
+      "order": 80,
+      "dependsOn": [
+        "4.0"
+      ],
+      "files": [
+        "docs/requirements/functional.md"
+      ],
+      "parallelGroup": "req-int-write",
+      "acceptanceCriteria": [
+        "AC: File exists.",
+        "AC: \u226510 FRs listed. Verify: grep '^FR-' count \u2265 10.",
+        "AC: Each FR has ID, statement, verification method."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "4.12",
+      "title": "Write requirements/non-functional.md",
+      "description": "NFR-1..N mapped 1:1 to tcc-doc RQ pass criteria. Reads thesis-statement-v3 + arch/07-quality-requirements.",
+      "status": "done",
+      "order": 81,
+      "dependsOn": [
+        "4.0",
+        "4.8"
+      ],
+      "files": [
+        "docs/requirements/non-functional.md"
+      ],
+      "parallelGroup": "req-int-write",
+      "acceptanceCriteria": [
+        "AC: File exists.",
+        "AC: Each NFR maps to a specific RQ. Verify: grep 'RQ1', 'RQ2', 'RQ3'.",
+        "AC: Pass criteria quantitative. Verify: grep 'ms|us|%|MB'."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "4.13",
+      "title": "Write interfaces/wit-contracts.md",
+      "description": "Reference documentation for wit/*.wit. Every interface, world, type documented.",
+      "status": "done",
+      "order": 82,
+      "dependsOn": [
+        "4.0"
+      ],
+      "files": [
+        "docs/interfaces/wit-contracts.md"
+      ],
+      "parallelGroup": "req-int-write",
+      "acceptanceCriteria": [
+        "AC: File exists.",
+        "AC: All 4 packages documented (pipeline:types, pipeline:node, pipeline:routing, pipeline:host). Verify: grep all four.",
+        "AC: 3 worlds + inference-node variant documented."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "4.14",
+      "title": "Write interfaces/http-api.md",
+      "description": "Reference documentation for HTTP endpoints. Only current endpoints (from http-api-truth pack).",
+      "status": "done",
+      "order": 83,
+      "dependsOn": [
+        "4.0"
+      ],
+      "files": [
+        "docs/interfaces/http-api.md"
+      ],
+      "parallelGroup": "req-int-write",
+      "acceptanceCriteria": [
+        "AC: File exists.",
+        "AC: Lists actual endpoints from server.rs: /health, /ready, /metrics, /api/v1/nodes, /api/v1/nodes/{id}, /api/v1/nodes/{id}/hot-swap, /api/v1/pipeline/shutdown.",
+        "AC: Does NOT list /api/v1/pipeline (status), /reload, /drain. Verify: grep negative."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "4.15",
+      "title": "Write interfaces/config-schema.md",
+      "description": "Reference documentation for TOML config schema. Reads config-summary pack.",
+      "status": "done",
+      "order": 84,
+      "dependsOn": [
+        "4.0"
+      ],
+      "files": [
+        "docs/interfaces/config-schema.md"
+      ],
+      "parallelGroup": "req-int-write",
+      "acceptanceCriteria": [
+        "AC: File exists.",
+        "AC: Uses [nodes.NAME] map syntax. Verify: grep '\\[nodes\\.'.",
+        "AC: Single 'plugin' field (not plugin_path OR plugin_ref). Verify: grep 'plugin_path' absent.",
+        "AC: 'port' edge field. Verify: grep 'from_port' absent."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "4.16",
+      "title": "Write interfaces/plugin-sdk.md",
+      "description": "Reference documentation for wafer-plugin SDK (macros, state pattern, error helpers).",
+      "status": "done",
+      "order": 85,
+      "dependsOn": [
+        "4.0"
+      ],
+      "files": [
+        "docs/interfaces/plugin-sdk.md"
+      ],
+      "parallelGroup": "req-int-write",
+      "acceptanceCriteria": [
+        "AC: File exists.",
+        "AC: Documents output_from!/output_with_type! macros. Verify: grep.",
+        "AC: Documents thread_local + RefCell state pattern. Verify: grep."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "4.17",
+      "title": "Write operations/getting-started.md",
+      "description": "Tutorial for first-time users: install, build, run first pipeline. Reads README + justfile + examples/.",
+      "status": "done",
+      "order": 90,
+      "dependsOn": [
+        "4.0"
+      ],
+      "files": [
+        "docs/operations/getting-started.md"
+      ],
+      "parallelGroup": "ops-status-write",
+      "acceptanceCriteria": [
+        "AC: File exists; provides working first-pipeline example."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "4.18",
+      "title": "Write operations/configuration.md",
+      "description": "How-to configure pipelines. Reads config-summary + examples/*.toml.",
+      "status": "done",
+      "order": 91,
+      "dependsOn": [
+        "4.0"
+      ],
+      "files": [
+        "docs/operations/configuration.md"
+      ],
+      "parallelGroup": "ops-status-write",
+      "acceptanceCriteria": [
+        "AC: File exists; covers all config sections (engine, error_policy, nodes, edges, api, metrics, registry)."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "4.19",
+      "title": "Move mqtt-setup.md into operations/",
+      "description": "Move docs/mqtt-setup.md to docs/operations/mqtt-setup.md. Update any config examples to use current schema.",
+      "status": "done",
+      "order": 92,
+      "dependsOn": [
+        "4.0"
+      ],
+      "files": [
+        "docs/operations/mqtt-setup.md"
+      ],
+      "parallelGroup": "ops-status-write",
+      "acceptanceCriteria": [
+        "AC: File exists at new location. Original docs/mqtt-setup.md moved or deleted."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "4.20",
+      "title": "Move REGISTRY.md into operations/registry.md",
+      "description": "Move docs/REGISTRY.md to docs/operations/registry.md. Update to reflect current schema.",
+      "status": "done",
+      "order": 93,
+      "dependsOn": [
+        "4.0"
+      ],
+      "files": [
+        "docs/operations/registry.md"
+      ],
+      "parallelGroup": "ops-status-write",
+      "acceptanceCriteria": [
+        "AC: File exists at new location; original REGISTRY.md removed.",
+        "AC: Config examples use current schema (single 'plugin' field)."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "4.21",
+      "title": "Write operations/observability.md",
+      "description": "How-to configure metrics + logging. Reads metrics module + tracing setup.",
+      "status": "done",
+      "order": 94,
+      "dependsOn": [
+        "4.0"
+      ],
+      "files": [
+        "docs/operations/observability.md"
+      ],
+      "parallelGroup": "ops-status-write",
+      "acceptanceCriteria": [
+        "AC: File exists.",
+        "AC: Documents /metrics endpoint + Prometheus registry + log formats."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "4.22",
+      "title": "Write operations/dependencies.md",
+      "description": "Dependency reference. Reads Cargo.toml + rust-toolchain.toml.",
+      "status": "done",
+      "order": 95,
+      "dependsOn": [
+        "4.0"
+      ],
+      "files": [
+        "docs/operations/dependencies.md"
+      ],
+      "parallelGroup": "ops-status-write",
+      "acceptanceCriteria": [
+        "AC: File exists; lists Rust version, wasmtime, wit-bindgen, tokio, axum, prometheus-client, petgraph with versions."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "4.23",
+      "title": "Write status/implementation-status.md",
+      "description": "Current implementation status (replaces MVP.md). Factual: what's built, what's tested. Reads plugin-catalog + module-map + RFC-009.",
+      "status": "done",
+      "order": 96,
+      "dependsOn": [
+        "4.0"
+      ],
+      "files": [
+        "docs/status/implementation-status.md"
+      ],
+      "parallelGroup": "ops-status-write",
+      "acceptanceCriteria": [
+        "AC: File exists.",
+        "AC: Lists 20 plugins with world implemented. Verify: plugin count.",
+        "AC: Lists 4 crates with purpose.",
+        "AC: Does NOT include aspirational content (that lives in ROADMAP.md)."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "4.24",
+      "title": "Write status/evaluation-progress.md",
+      "description": "Current evaluation progress. Reads tcc-doc evaluation-plan + wafer-poc TODO.md.",
+      "status": "done",
+      "order": 97,
+      "dependsOn": [
+        "4.0"
+      ],
+      "files": [
+        "docs/status/evaluation-progress.md"
+      ],
+      "parallelGroup": "ops-status-write",
+      "acceptanceCriteria": [
+        "AC: File exists; lists experiments from tcc-doc evaluation-plan; per-experiment status."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "4.25",
+      "title": "Write benchmarks/hot-swap.md",
+      "description": "Hot-swap benchmark reference. Content pulled from git history + existing benchmarks/, if any. Uses current phase decomposition.",
+      "status": "done",
+      "order": 98,
+      "dependsOn": [
+        "4.0"
+      ],
+      "files": [
+        "docs/benchmarks/hot-swap.md"
+      ],
+      "parallelGroup": "ops-status-write",
+      "acceptanceCriteria": [
+        "AC: File exists at docs/benchmarks/hot-swap.md.",
+        "AC: Documents watch-channel phase decomposition timing (compile, instantiate, signal, ack, convergence)."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "4.26",
+      "title": "Rewrite README.md at repo root",
+      "description": "Rewrite README.md at repo root as a 1-page quickstart pointing to docs/.",
+      "status": "done",
+      "order": 100,
+      "dependsOn": [
+        "4.1",
+        "4.17"
+      ],
+      "files": [
+        "README.md"
+      ],
+      "acceptanceCriteria": [
+        "AC: README.md rewritten; \u2264 200 lines.",
+        "AC: Points to docs/architecture/00-vision.md and docs/operations/getting-started.md.",
+        "AC: No mention of SPEC.md, MVP.md, joiner."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "4.27",
+      "title": "Create ROADMAP.md at repo root",
+      "description": "Create ROADMAP.md at repo root from TODO.md Phase 1-3 content + future items flagged in RFCs.",
+      "status": "done",
+      "order": 101,
+      "dependsOn": [
+        "4.1"
+      ],
+      "files": [
+        "ROADMAP.md"
+      ],
+      "acceptanceCriteria": [
+        "AC: ROADMAP.md exists at repo root.",
+        "AC: Contains Phase 1/2/3 evaluation infrastructure tasks (from TODO.md).",
+        "AC: Contains 'Future work' items flagged in RFCs (host state store, dynamic topology, etc.)."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "4.28",
+      "title": "Rewrite docs/README.md navigator",
+      "description": "Rewrite docs/README.md as the documentation navigator with the new tree.",
+      "status": "done",
+      "order": 102,
+      "dependsOn": [
+        "4.1",
+        "4.11",
+        "4.13",
+        "4.17",
+        "4.23"
+      ],
+      "files": [
+        "docs/README.md"
+      ],
+      "acceptanceCriteria": [
+        "AC: docs/README.md rewritten with new directory tree.",
+        "AC: Lists architecture/, requirements/, interfaces/, adr/, rfcs/, operations/, status/, workflows/, benchmarks/.",
+        "AC: No links to SPEC.md, MVP.md, api.md, REGISTRY.md, decisions/."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "4.29",
+      "title": "Oracle checkpoint after Phase 4",
+      "description": "Dispatch oracle subagent (fork context). Read PLAN.md + all Phase 4 outputs + locked design decisions. Verdict on 5 checks: no sibling duplication; no ADR/RFC contradictions; every FR/NFR backed; no aspirational content in architecture/; no pre-refactor terminology as current-tense.",
+      "status": "done",
+      "order": 103,
+      "dependsOn": [
+        "4.1",
+        "4.2",
+        "4.3",
+        "4.4",
+        "4.5",
+        "4.6",
+        "4.7",
+        "4.8",
+        "4.9",
+        "4.10",
+        "4.11",
+        "4.12",
+        "4.13",
+        "4.14",
+        "4.15",
+        "4.16",
+        "4.17",
+        "4.18",
+        "4.19",
+        "4.20",
+        "4.21",
+        "4.22",
+        "4.23",
+        "4.24",
+        "4.25",
+        "4.26",
+        "4.27",
+        "4.28"
+      ],
+      "acceptanceCriteria": [
+        "AC: Oracle output file exists at .pi-subagents/doc-refactor/oracle-checkpoint.md.",
+        "AC: Verdict = PASS OR main agent addressed all flagged issues.",
+        "AC: 5 checks passed: no sibling duplication, no ADR/RFC contradiction, all FR/NFR backed, no aspirational content in architecture/, no pre-refactor terminology as current-tense."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "5.1",
+      "title": "Delete old wafer-poc docs",
+      "description": "Delete docs/SPEC.md, docs/MVP.md, docs/api.md, docs/REGISTRY.md. Content already redistributed in Phase 4.",
+      "status": "done",
+      "order": 110,
+      "dependsOn": [
+        "4.29"
+      ],
+      "acceptanceCriteria": [
+        "AC: None of docs/{SPEC,MVP,api,REGISTRY}.md exist. Verify: ! ls each."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "5.2",
+      "title": "Update tcc-doc/SOURCES-OF-TRUTH.md",
+      "description": "Update tcc-doc/main/SOURCES-OF-TRUTH.md: point rows to new locations; add rows for RFC and ADR archives.",
+      "status": "done",
+      "order": 111,
+      "dependsOn": [
+        "4.29"
+      ],
+      "acceptanceCriteria": [
+        "AC: 'Implementation Spec' row points to docs/architecture/. Verify: grep.",
+        "AC: 'Implementation Status' row points to docs/status/implementation-status.md. Verify: grep.",
+        "AC: New rows for docs/rfcs/ and docs/adr/ added. Verify: grep.",
+        "AC: No mention of SPEC.md or MVP.md."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "5.3",
+      "title": "Rewrite pi-repos architecture.md as pointer",
+      "description": "Rewrite pi-repos/groups/tcc/docs/architecture.md as a thin pointer + cross-repo relationship narrative only.",
+      "status": "done",
+      "order": 112,
+      "dependsOn": [
+        "4.29"
+      ],
+      "acceptanceCriteria": [
+        "AC: File body \u2264 100 lines.",
+        "AC: Contains pointer to wafer-poc/docs/architecture/.",
+        "AC: No 'joiner' or current-tense pre-refactor terminology. Verify: grep negative.",
+        "AC: Cross-repo relationships table retained."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "5.4",
+      "title": "Rewrite pi-repos glossary.md and roles.md",
+      "description": "Rewrite pi-repos/groups/tcc/docs/glossary.md and roles.md as thin pointers.",
+      "status": "done",
+      "order": 113,
+      "dependsOn": [
+        "4.29"
+      ],
+      "acceptanceCriteria": [
+        "AC: Both files rewritten.",
+        "AC: No current-tense pre-refactor terminology. Verify: grep -i joiner returns 0."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "5.5",
+      "title": "Rewrite Obsidian WAFER System.md",
+      "description": "Rewrite obsidian-personal/master/TCC/WAFER System.md as a thin pointer with preserved 'What WAFER Does NOT Do' list for literature reading.",
+      "status": "done",
+      "order": 114,
+      "dependsOn": [
+        "4.29"
+      ],
+      "acceptanceCriteria": [
+        "AC: File body updated.",
+        "AC: Points to wafer-poc/docs/architecture/.",
+        "AC: 'What WAFER Does NOT Do' section preserved.",
+        "AC: No 'joiner' or 'merge-joiner' as current-tense."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "5.6",
+      "title": "Update wafer-poc TODO.md",
+      "description": "Update wafer-poc/TODO.md: fix 'Done' plugin list; migrate Phase 1-3 items to ROADMAP.md; keep TODO for tactical current work.",
+      "status": "done",
+      "order": 115,
+      "dependsOn": [
+        "4.29"
+      ],
+      "files": [
+        "TODO.md"
+      ],
+      "acceptanceCriteria": [
+        "AC: TODO.md 'Done' section removes stale plugin names (filter, merge-joiner) and adds current plugins.",
+        "AC: Phase 1/2/3 evaluation tasks migrated to ROADMAP.md (or noted as duplicated intentionally)."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "5.7",
+      "title": "Deep audit 12 skill files with skill-judge",
+      "description": "Deep skill audit using skill-judge skill. Parallel workers, one per skill file. Score each skill against official spec; apply high-priority fixes.",
+      "status": "done",
+      "order": 116,
+      "dependsOn": [
+        "4.29"
+      ],
+      "parallelGroup": "skill-deep-audit",
+      "acceptanceCriteria": [
+        "AC: All 12 skill audit reports exist in .pi-subagents/doc-refactor/skill-audits/. Verify: ls count \u2265 12.",
+        "AC: Each report scores against skill spec (description accuracy, knowledge density, disclosure).",
+        "AC: High-priority fixes applied inline."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "6.1",
+      "title": "Verify \u2014 completeness-reviewer",
+      "description": "Dispatch completeness-reviewer (fresh context). Read PLAN.md + walk docs/. Verdict: all planned tasks produced expected files.",
+      "status": "done",
+      "order": 120,
+      "dependsOn": [
+        "5.1",
+        "5.2",
+        "5.3",
+        "5.4",
+        "5.5",
+        "5.6",
+        "5.7"
+      ],
+      "parallelGroup": "verify-gate",
+      "acceptanceCriteria": [
+        "AC: Reviewer output file exists at .pi-subagents/doc-refactor/completeness-review.md.",
+        "AC: Verdict field = PASS or FAIL with itemized findings."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "6.2",
+      "title": "Verify \u2014 correctness-reviewer",
+      "description": "Dispatch correctness-reviewer (fresh context). Read new docs + sample current code + WIT files. Verdict: docs accurately describe implementation.",
+      "status": "done",
+      "order": 121,
+      "dependsOn": [
+        "5.1",
+        "5.2",
+        "5.3",
+        "5.4",
+        "5.5",
+        "5.6",
+        "5.7"
+      ],
+      "parallelGroup": "verify-gate",
+      "acceptanceCriteria": [
+        "AC: Reviewer output file exists at .pi-subagents/doc-refactor/correctness-review.md.",
+        "AC: Verdict field = PASS or FAIL with itemized findings."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "6.3",
+      "title": "Verify \u2014 safety-reviewer (grep + link check)",
+      "description": "Dispatch safety-reviewer (fresh context). Run greps and link check: no references to SPEC.md/MVP.md; no 'joiner'/'Joiner'/'merge-joiner' as current-tense in wafer-poc/docs/; no 'pipeline:transform@0.1.0'; no 'plugin_path'/'plugin_ref' as separate fields; no 'from_port'/'to_port'; no deleted endpoints as implemented; broken-link check.",
+      "status": "done",
+      "order": 122,
+      "dependsOn": [
+        "5.1",
+        "5.2",
+        "5.3",
+        "5.4",
+        "5.5",
+        "5.6",
+        "5.7"
+      ],
+      "parallelGroup": "verify-gate",
+      "acceptanceCriteria": [
+        "AC: Reviewer output file exists at .pi-subagents/doc-refactor/safety-review.md.",
+        "AC: All automated greps return expected counts (see task description).",
+        "AC: Verdict field = PASS or FAIL."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "6.4",
+      "title": "Verify \u2014 quality-reviewer",
+      "description": "Dispatch quality-reviewer (fresh context). Sample arch/ADR/RFC files. Verdict: arc42 compliance, Nygard ADR format, RFC harmonization applied uniformly, prose quality.",
+      "status": "done",
+      "order": 123,
+      "dependsOn": [
+        "5.1",
+        "5.2",
+        "5.3",
+        "5.4",
+        "5.5",
+        "5.6",
+        "5.7"
+      ],
+      "parallelGroup": "verify-gate",
+      "acceptanceCriteria": [
+        "AC: Reviewer output file exists at .pi-subagents/doc-refactor/quality-review.md.",
+        "AC: Verdict field = PASS or FAIL."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    },
+    {
+      "id": "6.5",
+      "title": "Synthesize reviewer verdicts + hotfix if needed",
+      "description": "Main agent synthesizes 4 reviewer outputs. If any FAIL, apply hotfix and re-run failing reviewer. Write final report.",
+      "status": "done",
+      "order": 124,
+      "dependsOn": [
+        "6.1",
+        "6.2",
+        "6.3",
+        "6.4"
+      ],
+      "acceptanceCriteria": [
+        "AC: All 4 reviewer verdicts = PASS OR hotfix mini-phase resolved all FAIL findings.",
+        "AC: Refactor declared done in .pi-subagents/doc-refactor/final-report.md."
+      ],
+      "annotations": [],
+      "subtasks": [],
+      "frozen": true
+    }
+  ]
+}

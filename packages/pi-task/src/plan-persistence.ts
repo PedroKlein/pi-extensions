@@ -59,6 +59,23 @@ function planFilePath(planName: string): string {
 }
 
 /**
+ * Public: root directory holding all this-repo plan storage. Used by the pi-task
+ * tool to derive the default scratchDir path for a plan. See P2.6.
+ */
+export function getPlansRootForRepo(): string {
+	return getPlansDir();
+}
+
+/**
+ * Public: ensure the scratch directory for a plan exists. Idempotent.
+ * Returns the absolute path. Used by `plan_tasks create` on plan bootstrap.
+ */
+export function ensureScratchDir(scratchDirPath: string): string {
+	mkdirSync(scratchDirPath, { recursive: true });
+	return scratchDirPath;
+}
+
+/**
  * Extract org/repo slug from a git remote URL.
  * Handles SSH (git@github.com:org/repo.git) and HTTPS (https://github.com/org/repo.git).
  * Returns "org-repo" or null if parsing fails.
