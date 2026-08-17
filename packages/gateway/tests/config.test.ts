@@ -1,7 +1,7 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -12,12 +12,15 @@ import {
 	parseAliasesConfig,
 } from "../src/config.js";
 
-const SCRATCH_FIXTURE =
-	"/Users/i572543/.pi/plans/pedroklein-pi-extensions/plans/pi-gateway/scratch/sample-configs/full.json";
+const FIXTURE = join(
+	dirname(fileURLToPath(import.meta.url)),
+	"fixtures",
+	"aliases-full.json",
+);
 
 describe("aliases.json loader — valid inputs", () => {
-	it("parses the full sample fixture from scratchDir", () => {
-		const cfg = parseAliasesConfig(readFileSync(SCRATCH_FIXTURE, "utf8"), SCRATCH_FIXTURE);
+	it("parses the full sample fixture from tests/fixtures", () => {
+		const cfg = parseAliasesConfig(readFileSync(FIXTURE, "utf8"), FIXTURE);
 		expect(cfg.fallbackChain).toEqual(["hai-proxy", "github-copilot"]);
 		expect(cfg.backends["hai-proxy"].tiers.heavy).toBe("anthropic--claude-sonnet-4-5");
 		expect(cfg.backends["hai-proxy"].capStatusCodes).toEqual([402, 429]);

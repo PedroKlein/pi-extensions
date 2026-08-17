@@ -1,0 +1,25 @@
+{
+	"fallbackChain": ["hai-proxy", "github-copilot"],
+	"backends": {
+		"hai-proxy": {
+			"resetSchedule": "utc-midnight",
+			"tiers": {
+				"heavy": "anthropic--claude-sonnet-4-5",
+				"medium": "anthropic--claude-haiku-4-5",
+				"light": "openai--gpt-5-mini",
+				"xlight": "openai--gpt-5-nano",
+				"minimal": "openai--gpt-5-nano"
+			},
+			"quotaHint": "hai-daily-eur",
+			"capStatusCodes": [402, 429]
+		},
+		"github-copilot": {
+			"resetSchedule": "utc-monthly-1st",
+			"tiers": {
+				"heavy": "claude-sonnet-4-5",
+				"medium": "claude-haiku-4-5",
+				"light": "gpt-4o-mini"
+			}
+		}
+	}
+}
