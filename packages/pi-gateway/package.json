@@ -39,9 +39,9 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/PedroKlein/pi-extensions",
-    "directory": "packages/gateway"
+    "directory": "packages/pi-gateway"
   },
-  "homepage": "https://github.com/PedroKlein/pi-extensions/tree/main/packages/gateway",
+  "homepage": "https://github.com/PedroKlein/pi-extensions/tree/main/packages/pi-gateway",
   "engines": {
     "node": ">=20.0.0"
   },
