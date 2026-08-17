@@ -14,6 +14,7 @@ or steal ideas.
 | [`@pedro_klein/pi-ask`](packages/pi-ask) | Interactive TUI questionnaire tool |
 | [`@pedro_klein/pi-baml`](packages/pi-baml) | BAML integration for typed structured LLM output |
 | [`@pedro_klein/pi-games`](packages/pi-games) | Snake & Flappy Bird while the agent works |
+| [`@pedro_klein/pi-gateway`](packages/pi-gateway) | Tier alias provider (`heavy-1`, `medium-1`, ...) with 402/429 failover |
 | [`@pedro_klein/pi-memory`](packages/pi-memory) | Persistent memory with Dream async session mining |
 | [`@pedro_klein/pi-modes`](packages/pi-modes) | 5-mode system (Ask/Brainstorm/Plan/Build/None) with tool gating |
 | [`@pedro_klein/pi-readonly-bash`](packages/pi-readonly-bash) | Bash policy enforcement — read-only shell for safe modes |
