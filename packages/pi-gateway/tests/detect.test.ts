@@ -6,12 +6,12 @@ import { nextResetInstant } from "../src/reset-schedule.js";
 import { emptyState, type GatewayState } from "../src/state.js";
 
 const CFG: AliasesConfig = {
-	fallbackChain: ["hai-proxy", "github-copilot"],
+	fallbackChain: ["openrouter", "github-copilot"],
 	backends: {
-		"hai-proxy": {
+		"openrouter": {
 			resetSchedule: "utc-midnight",
-			tiers: { heavy: ["hai-heavy"], light: ["hai-light"] },
-			quotaHint: "hai-daily-eur",
+			tiers: { heavy: ["or-heavy"], light: ["or-light"] },
+			quotaHint: "daily-eur-cap",
 			capStatusCodes: [402, 429],
 		},
 		"github-copilot": {
@@ -83,14 +83,14 @@ describe("parseStatusPrefix", () => {
 // -- classifyCapEvent ------------------------------------------------------
 
 describe("classifyCapEvent", () => {
-	const HAI_402 = '402: {"error":{"cap_eur":"50.00","code":"DAILY_CAP_EXCEEDED","message":"Daily spending limit reached (€50.27 of €50.00)","spent_eur":"50.27","type":"billing_error"}}';
+	const CAP_402 = '402: {"error":{"cap_eur":"50.00","code":"DAILY_CAP_EXCEEDED","message":"Daily spending limit reached (€50.27 of €50.00)","spent_eur":"50.27","type":"billing_error"}}';
 	const NOW = new Date("2025-01-15T12:30:00.000Z");
 
 	it("attributes a cap hit via the compose-time routing map (indexed alias)", () => {
-		const routing = { "heavy-1": "hai-proxy", "heavy-2": "hai-proxy" };
+		const routing = { "heavy-1": "openrouter", "heavy-2": "openrouter" };
 		const r = classifyCapEvent(
 			{
-				errorMessage: HAI_402,
+				errorMessage: CAP_402,
 				stopReason: "error",
 				provider: "gateway",
 				modelId: "heavy-2",
@@ -100,14 +100,14 @@ describe("classifyCapEvent", () => {
 			routing,
 		);
 		expect(r.capHit).toBe(true);
-		expect(r.backendName).toBe("hai-proxy");
+		expect(r.backendName).toBe("openrouter");
 		expect(r.status).toBe(402);
 		expect(r.entry?.until).toBe("2025-01-16T00:00:00.000Z");
 		expect(r.body).toContain("DAILY_CAP_EXCEEDED");
 	});
 
 	it("routing map wins over the tier-slot fallback (heavy-1 routed to secondary under failover)", () => {
-		// heavy-1 is normally hai-proxy, but under failover it routed to copilot.
+		// heavy-1 is normally openrouter, but under failover it routed to copilot.
 		// The routing map is authoritative, so the cap is attributed to copilot.
 		const routing = { "heavy-1": "github-copilot" };
 		const r = classifyCapEvent(
@@ -129,7 +129,7 @@ describe("classifyCapEvent", () => {
 	it("falls back to the first chain backend for the tier when no routing map is given", () => {
 		const r = classifyCapEvent(
 			{
-				errorMessage: HAI_402,
+				errorMessage: CAP_402,
 				stopReason: "error",
 				provider: "gateway",
 				modelId: "heavy-1",
@@ -138,8 +138,8 @@ describe("classifyCapEvent", () => {
 			NOW,
 		);
 		expect(r.capHit).toBe(true);
-		// hai-proxy is first in the chain and declares heavy → attribution lands there.
-		expect(r.backendName).toBe("hai-proxy");
+		// openrouter is first in the chain and declares heavy → attribution lands there.
+		expect(r.backendName).toBe("openrouter");
 	});
 
 	it("unknown alias with no routing entry → capHit false (never mis-attributes)", () => {
@@ -169,7 +169,7 @@ describe("classifyCapEvent", () => {
 	it("ignores 402 on a non-gateway provider (user selected direct anthropic)", () => {
 		const r = classifyCapEvent(
 			{
-				errorMessage: HAI_402,
+				errorMessage: CAP_402,
 				stopReason: "error",
 				provider: "anthropic",
 				modelId: "claude-sonnet-4-5",
@@ -195,36 +195,36 @@ describe("classifyCapEvent", () => {
 describe("applyCapOutcome", () => {
 	it("adds a new entry when none exists", () => {
 		const state = emptyState();
-		const next = applyCapOutcome(state, "hai-proxy", {
+		const next = applyCapOutcome(state, "openrouter", {
 			until: "2025-01-16T00:00:00.000Z",
 			reason: "402",
 		});
-		expect(next.unhealthyUntil["hai-proxy"].until).toBe("2025-01-16T00:00:00.000Z");
+		expect(next.unhealthyUntil["openrouter"].until).toBe("2025-01-16T00:00:00.000Z");
 	});
 
 	it("extends an existing entry when new until is later", () => {
 		const state: GatewayState = {
 			...emptyState(),
 			unhealthyUntil: {
-				"hai-proxy": { until: "2025-01-16T00:00:00.000Z", reason: "first" },
+				"openrouter": { until: "2025-01-16T00:00:00.000Z", reason: "first" },
 			},
 		};
-		const next = applyCapOutcome(state, "hai-proxy", {
+		const next = applyCapOutcome(state, "openrouter", {
 			until: "2025-01-17T00:00:00.000Z",
 			reason: "second",
 		});
-		expect(next.unhealthyUntil["hai-proxy"].until).toBe("2025-01-17T00:00:00.000Z");
-		expect(next.unhealthyUntil["hai-proxy"].reason).toBe("second");
+		expect(next.unhealthyUntil["openrouter"].until).toBe("2025-01-17T00:00:00.000Z");
+		expect(next.unhealthyUntil["openrouter"].reason).toBe("second");
 	});
 
 	it("does NOT shorten an existing entry when new until is earlier", () => {
 		const state: GatewayState = {
 			...emptyState(),
 			unhealthyUntil: {
-				"hai-proxy": { until: "2025-01-17T00:00:00.000Z", reason: "first" },
+				"openrouter": { until: "2025-01-17T00:00:00.000Z", reason: "first" },
 			},
 		};
-		const next = applyCapOutcome(state, "hai-proxy", {
+		const next = applyCapOutcome(state, "openrouter", {
 			until: "2025-01-16T00:00:00.000Z",
 			reason: "second",
 		});

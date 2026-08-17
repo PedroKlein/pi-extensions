@@ -40,14 +40,14 @@ describe("state read/write — happy paths", () => {
 		const original: GatewayState = {
 			version: STATE_FILE_VERSION,
 			unhealthyUntil: {
-				"hai-proxy": {
+				"openrouter": {
 					until: "2025-01-15T00:00:00.000Z",
 					reason: "402 cap hit",
 					quota: { spent: 50.27, cap: 50.0, currency: "EUR" },
 				},
 			},
 			activeBackendOverride: "github-copilot",
-			fallbackChainOverride: ["github-copilot", "hai-proxy"],
+			fallbackChainOverride: ["github-copilot", "openrouter"],
 		};
 		writeState(path, original);
 		const roundTripped = readState(path);
@@ -144,15 +144,15 @@ describe("state — updateState mutator", () => {
 		writeState(path, {
 			...emptyState(),
 			unhealthyUntil: {
-				"hai-proxy": { until: "2025-01-01T00:00:00.000Z", reason: "seed" },
+				"openrouter": { until: "2025-01-01T00:00:00.000Z", reason: "seed" },
 			},
 		});
 		const next = updateState(path, (cur) => ({
 			...cur,
-			activeBackendOverride: "hai-proxy",
+			activeBackendOverride: "openrouter",
 		}));
-		expect(next.activeBackendOverride).toBe("hai-proxy");
-		expect(next.unhealthyUntil["hai-proxy"].reason).toBe("seed");
+		expect(next.activeBackendOverride).toBe("openrouter");
+		expect(next.unhealthyUntil["openrouter"].reason).toBe("seed");
 		expect(readState(path)).toEqual(next);
 	});
 });

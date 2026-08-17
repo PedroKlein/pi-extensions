@@ -82,34 +82,35 @@ IDs. A list declares indexed diversity: index 1 → `<tier>-1`, index 2 →
 
 ```json
 {
-  "fallbackChain": ["hai-proxy", "sap-ai-core"],
+  "fallbackChain": ["openrouter", "groq"],
   "backends": {
-    "hai-proxy": {
+    "openrouter": {
       "resetSchedule": "utc-midnight",
       "tiers": {
-        "heavy":   ["anthropic--claude-4.8-opus", "gpt-5.5"],
-        "medium":  "anthropic--claude-4.6-sonnet",
-        "light":   ["anthropic--claude-4.5-haiku", "gpt-5-mini"],
-        "xlight":  "gemini-2.5-flash-lite",
-        "minimal": "gemini-2.5-flash-lite"
+        "heavy":   ["anthropic/claude-opus-4", "openai/gpt-5"],
+        "medium":  "anthropic/claude-sonnet-4",
+        "light":   ["anthropic/claude-3.5-haiku", "openai/gpt-5-mini"],
+        "xlight":  "google/gemini-2.0-flash-lite",
+        "minimal": "google/gemini-2.0-flash-lite"
       },
-      "quotaHint": "hai-daily-eur",
+      "quotaHint": "daily-eur-cap",
       "capStatusCodes": [402, 429]
     },
-    "sap-ai-core": {
+    "groq": {
       "tiers": {
-        "heavy":  ["claude-4.8-opus", "gpt-5.5"],
-        "medium": "claude-4.6-sonnet",
-        "light":  ["claude-4.5-haiku", "gpt-5-mini"]
+        "heavy":  ["llama-3.3-70b", "openai/gpt-oss-120b"],
+        "medium": "llama-3.3-70b",
+        "light":  "llama-3.1-8b"
       }
     }
   }
 }
 ```
 
-With the config above, `hai-proxy` alone yields `gateway/heavy-1`
-(Claude 4.8 Opus) and `gateway/heavy-2` (GPT-5.5) — two distinct models on one
-backend, named agnostically.
+With the config above, `openrouter` alone yields `gateway/heavy-1`
+(Claude Opus 4) and `gateway/heavy-2` (GPT-5) — two distinct models on one
+backend, named agnostically. When `openrouter` hits its cap, both fail over to
+`groq`.
 
 **Field reference:**
 
@@ -120,7 +121,7 @@ backend, named agnostically.
   - `utc-monthly-1st` — monthly reset at 00:00 UTC on the 1st
   - `utc-hourly` — hourly reset at :00
   - Absent → default `now + 1h`
-- `backends[name].quotaHint` (optional) — named parser for extracting `{ spent, cap, currency }` from the backend's cap-error body, purely for the `/gateway` status view. v1 ships `hai-daily-eur`.
+- `backends[name].quotaHint` (optional) — named parser for extracting `{ spent, cap, currency }` from the backend's cap-error body, purely for the `/gateway` status view. v1 ships `daily-eur-cap` (matches a `DAILY_CAP_EXCEEDED` body with `cap_eur`/`spent_eur` fields).
 - `backends[name].capStatusCodes` (optional) — HTTP status codes treated as cap hits. Default `[402, 429]`.
 
 ## gateway-state.json format
@@ -133,7 +134,7 @@ too.
 {
   "version": 1,
   "unhealthyUntil": {
-    "hai-proxy": {
+    "openrouter": {
       "until": "2025-01-16T00:00:00.000Z",
       "reason": "HTTP 402 on heavy-1 — cap hit",
       "quota": { "spent": 50.27, "cap": 50.00, "currency": "EUR" }
@@ -212,7 +213,7 @@ pnpm typecheck      # type-check without emitting
 
 - `/gateway` is subcommand-driven text UI. A full interactive Component
   keybinding board is planned as a follow-up.
-- One `quotaHint` enricher shipped (`hai-daily-eur`). Add more entries to
+- One `quotaHint` enricher shipped (`daily-eur-cap`). Add more entries to
   `src/enrichers.ts` as backend error formats are verified.
 - Fallback chain ordering is static per config; no learned/adaptive ordering.
 

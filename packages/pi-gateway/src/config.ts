@@ -11,16 +11,16 @@
  *
  * Shape (see AliasesConfig for full types):
  *   {
- *     "fallbackChain": ["hai-proxy", "github-copilot"],
+ *     "fallbackChain": ["openrouter", "groq"],
  *     "backends": {
- *       "hai-proxy": {
+ *       "openrouter": {
  *         "resetSchedule": "utc-midnight",
  *         "tiers": {
- *           "heavy":  "anthropic--claude-sonnet-4-5",
- *           "medium": "anthropic--claude-haiku-4-5",
- *           "light":  "openai--gpt-5-mini"
+ *           "heavy":  ["anthropic/claude-opus-4", "openai/gpt-5"],
+ *           "medium": "anthropic/claude-sonnet-4",
+ *           "light":  "openai/gpt-5-mini"
  *         },
- *         "quotaHint": "hai-daily-eur",
+ *         "quotaHint": "daily-eur-cap",
  *         "capStatusCodes": [402, 429]
  *       }
  *     }
@@ -37,7 +37,7 @@ export const RESET_SCHEDULES = ["utc-midnight", "utc-monthly-1st", "utc-hourly"]
 export type ResetSchedule = (typeof RESET_SCHEDULES)[number];
 
 /** Named quotaHint enrichers shipped in v1. Extendable in future. */
-export const QUOTA_HINTS = ["hai-daily-eur"] as const;
+export const QUOTA_HINTS = ["daily-eur-cap"] as const;
 export type QuotaHint = (typeof QUOTA_HINTS)[number];
 
 /** Neutral tier slots. Family-pinned aliases are auto-derived per backend. */

@@ -16,12 +16,12 @@ async function drainMicrotasks(): Promise<void> {
 }
 
 const CFG: AliasesConfig = {
-	fallbackChain: ["hai-proxy", "github-copilot"],
+	fallbackChain: ["openrouter", "github-copilot"],
 	backends: {
-		"hai-proxy": {
+		"openrouter": {
 			resetSchedule: "utc-midnight",
-			tiers: { heavy: ["hai-heavy"], light: ["hai-light"] },
-			quotaHint: "hai-daily-eur",
+			tiers: { heavy: ["or-heavy"], light: ["or-light"] },
+			quotaHint: "daily-eur-cap",
 			capStatusCodes: [402, 429],
 		},
 		"github-copilot": {
@@ -35,8 +35,8 @@ const CFG: AliasesConfig = {
 
 function fakeRegistry(): RegistryLike {
 	const models = [
-		{ id: "hai-heavy", provider: "hai-proxy", baseUrl: "https://hai.example", api: "openai-completions" },
-		{ id: "hai-light", provider: "hai-proxy", baseUrl: "https://hai.example", api: "openai-completions" },
+		{ id: "or-heavy", provider: "openrouter", baseUrl: "https://openrouter.example", api: "openai-completions" },
+		{ id: "or-light", provider: "openrouter", baseUrl: "https://openrouter.example", api: "openai-completions" },
 		{ id: "copilot-heavy", provider: "github-copilot", baseUrl: "https://copilot.example", api: "openai-completions" },
 		{ id: "copilot-light", provider: "github-copilot", baseUrl: "https://copilot.example", api: "openai-completions" },
 	];
@@ -44,8 +44,8 @@ function fakeRegistry(): RegistryLike {
 		find: (p, id) => models.find((m) => m.provider === p && m.id === id),
 		getProvider: (n) => (models.some((m) => m.provider === n) ? { id: n } : undefined),
 		getRegisteredProviderConfig: (n) =>
-			n === "hai-proxy"
-				? { apiKey: "!echo hai-tok", baseUrl: "https://hai.example", api: "openai-completions" }
+			n === "openrouter"
+				? { apiKey: "!echo or-tok", baseUrl: "https://openrouter.example", api: "openai-completions" }
 				: undefined,
 		getAll: () => models.map((m) => ({ id: m.id, provider: m.provider })),
 		getApiKeyForProvider: async (n) => `resolved-${n}`,
@@ -88,7 +88,7 @@ describe("GatewayController — debounce", () => {
 		await drainMicrotasks();
 		register.mockClear();
 
-		// Simulate three transitions in quick succession (all route to hai-proxy).
+		// Simulate three transitions in quick succession (all route to openrouter).
 		controller.handleMessageEnd({
 			errorMessage: "402: {}",
 			stopReason: "error",
@@ -134,7 +134,7 @@ describe("GatewayController — re-registration reflects transitions", () => {
 			scheduleMicrotask: (fn) => microtasks.push(fn),
 		});
 
-		// Initial registration to populate routing (heavy-1 → hai-proxy).
+		// Initial registration to populate routing (heavy-1 → openrouter).
 		controller.requestReregister();
 		microtasks.shift()!();
 		await drainMicrotasks();
@@ -151,7 +151,7 @@ describe("GatewayController — re-registration reflects transitions", () => {
 
 		const [_name, cfg] = register.mock.calls[0];
 		const heavy1 = cfg.models.find((m: { id: string }) => m.id === "heavy-1");
-		// heavy-1 should now route to github-copilot since hai-proxy is unhealthy.
+		// heavy-1 should now route to github-copilot since openrouter is unhealthy.
 		expect(heavy1?.headers.Authorization).toBe("Bearer resolved-github-copilot");
 	});
 });
@@ -186,10 +186,10 @@ describe("GatewayController — notify shape", () => {
 		microtasks[0]();
 		await drainMicrotasks();
 
-		const warnings = notify.mock.calls.filter((c) => String(c[0]).includes("hai-proxy"));
+		const warnings = notify.mock.calls.filter((c) => String(c[0]).includes("openrouter"));
 		expect(warnings.length).toBeGreaterThan(0);
 		// Expect: backend name + something time-shaped
-		expect(warnings[0][0]).toMatch(/hai-proxy.*(resets|in \d)/);
+		expect(warnings[0][0]).toMatch(/openrouter.*(resets|in \d)/);
 	});
 });
 
@@ -210,12 +210,12 @@ describe("GatewayController — all-down case", () => {
 			scheduleMicrotask: (fn) => microtasks.push(fn),
 		});
 
-		// Initial registration: heavy-1 → hai-proxy.
+		// Initial registration: heavy-1 → openrouter.
 		controller.requestReregister();
 		microtasks.shift()!();
 		await drainMicrotasks();
 
-		// First cap takes out hai-proxy; re-compose routes heavy-1 → github-copilot.
+		// First cap takes out openrouter; re-compose routes heavy-1 → github-copilot.
 		controller.handleMessageEnd({
 			errorMessage: "402: {}",
 			stopReason: "error",
@@ -257,7 +257,7 @@ describe("GatewayController — sweepExpiries", () => {
 		writeState(statePath, {
 			...emptyState(),
 			unhealthyUntil: {
-				"hai-proxy": {
+				"openrouter": {
 					until: new Date("2025-01-15T10:00:00.000Z").toISOString(),
 					reason: "old",
 				},

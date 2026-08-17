@@ -15,12 +15,12 @@ import { renderStatusSections, renderStatusText } from "../src/status-view.js";
 import { emptyState, readState, updateState, writeState, type GatewayState } from "../src/state.js";
 
 const CFG: AliasesConfig = {
-	fallbackChain: ["hai-proxy", "github-copilot"],
+	fallbackChain: ["openrouter", "github-copilot"],
 	backends: {
-		"hai-proxy": {
+		"openrouter": {
 			resetSchedule: "utc-midnight",
-			tiers: { heavy: ["hai-opus", "hai-gpt"], light: ["hai-light"] },
-			quotaHint: "hai-daily-eur",
+			tiers: { heavy: ["or-opus", "or-gpt"], light: ["or-light"] },
+			quotaHint: "daily-eur-cap",
 			capStatusCodes: [402, 429],
 		},
 		"github-copilot": {
@@ -53,14 +53,14 @@ describe("renderStatusSections — four sections present", () => {
 		});
 		const joined = s.header.join("\n");
 		expect(joined).toContain("github-copilot");
-		expect(joined).toContain("hai-proxy → github-copilot");
+		expect(joined).toContain("openrouter → github-copilot");
 	});
 
 	it("backends section shows unhealthy status + reset ETA + quota when present", () => {
 		const state: GatewayState = {
 			...emptyState(),
 			unhealthyUntil: {
-				"hai-proxy": {
+				"openrouter": {
 					until: "2025-01-16T00:00:00.000Z",
 					reason: "cap",
 					quota: { spent: 50.27, cap: 50.0, currency: "EUR" },
@@ -68,7 +68,7 @@ describe("renderStatusSections — four sections present", () => {
 			},
 		};
 		const s = renderStatusSections({ aliases: CFG, state, now: NOW });
-		const row = s.backends.find((r) => r.startsWith("hai-proxy"));
+		const row = s.backends.find((r) => r.startsWith("openrouter"));
 		expect(row).toBeDefined();
 		expect(row).toContain("unhealthy");
 		expect(row).toMatch(/in \d+h/);
@@ -78,13 +78,13 @@ describe("renderStatusSections — four sections present", () => {
 	it("aliases section shows indexed neutral rows and no family-pinned rows", () => {
 		const s = renderStatusSections({ aliases: CFG, state: emptyState(), now: NOW });
 		const ids = s.aliases.filter((r) => /^\w+-/.test(r.trim())).map((r) => r.trim().split(/\s+/)[0]);
-		// Indexed diversity from hai-proxy's 2-model heavy list.
+		// Indexed diversity from openrouter's 2-model heavy list.
 		expect(ids).toContain("heavy-1");
 		expect(ids).toContain("heavy-2");
 		expect(ids).toContain("light-1");
 		// No family-pinned aliases anymore.
 		expect(ids.some((id) => /-[a-z]+-1$/.test(id))).toBe(false);
-		// heavy-1/heavy-2 route to the two distinct hai-proxy models.
+		// heavy-1/heavy-2 route to the two distinct openrouter models.
 		const byRow = Object.fromEntries(
 			s.aliases
 				.filter((r) => /^\w+-\d/.test(r.trim()))
@@ -93,8 +93,8 @@ describe("renderStatusSections — four sections present", () => {
 					return [id, route];
 				}),
 		);
-		expect(byRow["heavy-1"]).toBe("hai-proxy/hai-opus");
-		expect(byRow["heavy-2"]).toBe("hai-proxy/hai-gpt");
+		expect(byRow["heavy-1"]).toBe("openrouter/or-opus");
+		expect(byRow["heavy-2"]).toBe("openrouter/or-gpt");
 	});
 
 	it("footer lists all keybindings", () => {
@@ -110,28 +110,28 @@ describe("renderStatusText — combined view snapshot", () => {
 	it("matches a stable snapshot for the empty-state case", () => {
 		const text = renderStatusText({ aliases: CFG, state: emptyState(), now: NOW });
 		expect(text).toMatchInlineSnapshot(`
-"═══ gateway ══════════════════════════════════════════════════════════
-Active override: (none — use fallback chain)
-Fallback chain : hai-proxy → github-copilot
+			"═══ gateway ══════════════════════════════════════════════════════════
+			Active override: (none — use fallback chain)
+			Fallback chain : openrouter → github-copilot
 
-─── Backends ─────────────────────────────────────────────────────────
-Backend             Health     Resets                Quota
-─────────────────── ────────── ───────────────────── ─────────────────────
-hai-proxy           healthy                          
-github-copilot      healthy                          
+			─── Backends ─────────────────────────────────────────────────────────
+			Backend             Health     Resets                Quota
+			─────────────────── ────────── ───────────────────── ─────────────────────
+			openrouter          healthy                          
+			github-copilot      healthy                          
 
-─── Aliases ──────────────────────────────────────────────────────────
-Alias             Routes-to
-───────────────── ─────────────────────────────────────────
-heavy-1           hai-proxy/hai-opus
-heavy-2           hai-proxy/hai-gpt
-light-1           hai-proxy/hai-light
+			─── Aliases ──────────────────────────────────────────────────────────
+			Alias             Routes-to
+			───────────────── ─────────────────────────────────────────
+			heavy-1           openrouter/or-opus
+			heavy-2           openrouter/or-gpt
+			light-1           openrouter/or-light
 
-─── Keys ─────────────────────────────────────────────────────────────
-[c] change active override    [f] force / clear override
-[r] reorder fallback chain    [m] toggle backend health
-[R] reload config from disk   [q] quit"
-`);
+			─── Keys ─────────────────────────────────────────────────────────────
+			[c] change active override    [f] force / clear override
+			[r] reorder fallback chain    [m] toggle backend health
+			[R] reload config from disk   [q] quit"
+		`);
 	});
 });
 
@@ -164,7 +164,7 @@ describe("actions — setActiveOverride", () => {
 	});
 	it("clears override when passed undefined", () => {
 		const result = setActiveOverride(
-			{ ...emptyState(), activeBackendOverride: "hai-proxy" },
+			{ ...emptyState(), activeBackendOverride: "openrouter" },
 			CFG,
 			undefined,
 		);
@@ -176,18 +176,18 @@ describe("actions — setActiveOverride", () => {
 
 describe("actions — setFallbackChainOverride", () => {
 	it("sets chain override with valid backend list", () => {
-		const result = setFallbackChainOverride(emptyState(), CFG, ["github-copilot", "hai-proxy"]);
+		const result = setFallbackChainOverride(emptyState(), CFG, ["github-copilot", "openrouter"]);
 		expect(result.kind).toBe("state-updated");
 		if (result.kind !== "state-updated") throw new Error("unreachable");
 		const persisted = updateState(statePath, () => result.nextState);
 		expect(readState(statePath).fallbackChainOverride).toEqual([
 			"github-copilot",
-			"hai-proxy",
+			"openrouter",
 		]);
 	});
 	it("throws on unknown entry", () => {
 		expect(() =>
-			setFallbackChainOverride(emptyState(), CFG, ["hai-proxy", "ghost"]),
+			setFallbackChainOverride(emptyState(), CFG, ["openrouter", "ghost"]),
 		).toThrowError(/unknown backend/);
 	});
 	it("throws on empty chain", () => {
@@ -200,23 +200,23 @@ describe("actions — setFallbackChainOverride", () => {
 describe("actions — toggleBackendHealth", () => {
 	it("marks a healthy backend unhealthy", () => {
 		const until = new Date("2025-01-16T00:00:00.000Z");
-		const result = toggleBackendHealth(emptyState(), CFG, "hai-proxy", until);
+		const result = toggleBackendHealth(emptyState(), CFG, "openrouter", until);
 		expect(result.kind).toBe("state-updated");
 		if (result.kind !== "state-updated") throw new Error("unreachable");
 		const persisted = updateState(statePath, () => result.nextState);
-		expect(readState(statePath).unhealthyUntil["hai-proxy"].until).toBe(until.toISOString());
+		expect(readState(statePath).unhealthyUntil["openrouter"].until).toBe(until.toISOString());
 	});
 	it("clears unhealthy entry when toggling back", () => {
 		const initial: GatewayState = {
 			...emptyState(),
 			unhealthyUntil: {
-				"hai-proxy": { until: "2025-01-16T00:00:00.000Z", reason: "prior" },
+				"openrouter": { until: "2025-01-16T00:00:00.000Z", reason: "prior" },
 			},
 		};
-		const result = toggleBackendHealth(initial, CFG, "hai-proxy", new Date());
+		const result = toggleBackendHealth(initial, CFG, "openrouter", new Date());
 		expect(result.kind).toBe("state-updated");
 		if (result.kind !== "state-updated") throw new Error("unreachable");
-		expect(result.nextState.unhealthyUntil["hai-proxy"]).toBeUndefined();
+		expect(result.nextState.unhealthyUntil["openrouter"]).toBeUndefined();
 	});
 });
 

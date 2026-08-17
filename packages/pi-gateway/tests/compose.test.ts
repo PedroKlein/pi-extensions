@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { AliasesConfig } from "../src/config.js";
 import { TIER_SLOTS } from "../src/config.js";
 import {
-	backendFamilySuffix,
 	composeGatewayModels,
 	isBackendUnhealthy,
 	type ComposeInput,
@@ -76,9 +75,9 @@ const ALL_TIERS = {
 
 describe("composeGatewayModels — output counts", () => {
 	it("two backends, all single-model tiers → 5 indexed neutral aliases (no family-pinned)", () => {
-		const backends = [backend("hai-proxy", ALL_TIERS), backend("github-copilot", ALL_TIERS)];
+		const backends = [backend("openrouter", ALL_TIERS), backend("github-copilot", ALL_TIERS)];
 		const input: ComposeInput = {
-			fallbackChain: ["hai-proxy", "github-copilot"],
+			fallbackChain: ["openrouter", "github-copilot"],
 			backends,
 			state: emptyState(),
 			resolveApiKey: (b) => `tok-${b.name}`,
@@ -90,19 +89,19 @@ describe("composeGatewayModels — output counts", () => {
 		expect(ids).toEqual(
 			["heavy-1", "medium-1", "light-1", "xlight-1", "minimal-1"].sort(),
 		);
-		// No family-pinned aliases (e.g. heavy-hai-1) are emitted anymore.
+		// No family-pinned aliases (e.g. heavy-<backend>-1) are emitted anymore.
 		expect(models.some((m) => /-[a-z]+-1$/.test(m.id))).toBe(false);
-		// heavy-1 routes to the primary backend (hai-proxy).
+		// heavy-1 routes to the primary backend (openrouter).
 		const heavy1 = models.find((m) => m.id === "heavy-1");
-		expect(heavy1?.baseUrl).toBe("https://hai-proxy.example.com");
+		expect(heavy1?.baseUrl).toBe("https://openrouter.example.com");
 	});
 
 	it("indexed diversity within one backend: heavy list [opus, gpt] → heavy-1, heavy-2", () => {
 		const backends = [
-			backend("hai-proxy", { heavy: ["opus", "gpt"], light: ["haiku", "mini"] }),
+			backend("openrouter", { heavy: ["opus", "gpt"], light: ["haiku", "mini"] }),
 		];
 		const { models, warnings } = composeGatewayModels({
-			fallbackChain: ["hai-proxy"],
+			fallbackChain: ["openrouter"],
 			backends,
 			state: emptyState(),
 			resolveApiKey: () => "tok",
@@ -122,17 +121,17 @@ describe("composeGatewayModels — output counts", () => {
 
 	it("disjoint tier slots: neutral aliases fill from whichever backend has each slot", () => {
 		const backends = [
-			backend("hai-proxy", { heavy: "hai-heavy", medium: "hai-medium" }),
+			backend("openrouter", { heavy: "or-heavy", medium: "or-medium" }),
 			backend("github-copilot", { light: "copilot-light", xlight: "copilot-xlight" }),
 		];
 		const input: ComposeInput = {
-			fallbackChain: ["hai-proxy", "github-copilot"],
+			fallbackChain: ["openrouter", "github-copilot"],
 			backends,
 			state: emptyState(),
 			resolveApiKey: (b) => `tok-${b.name}`,
 		};
 		const { models, warnings } = composeGatewayModels(input);
-		// Neutral only: heavy-1, medium-1 (from hai), light-1, xlight-1 (from copilot).
+		// Neutral only: heavy-1, medium-1 (from openrouter), light-1, xlight-1 (from copilot).
 		// No minimal — no backend declares it. No family-pinned aliases.
 		expect(models).toHaveLength(4);
 		expect(models.map((m) => m.id).sort()).toEqual(
@@ -141,15 +140,15 @@ describe("composeGatewayModels — output counts", () => {
 		// No warning because minimal is simply not declared anywhere.
 		expect(warnings).toEqual([]);
 
-		// heavy-1 should route to hai-proxy (first in chain that has it)
+		// heavy-1 should route to openrouter (first in chain that has it)
 		const heavy1 = models.find((m) => m.id === "heavy-1");
-		expect(heavy1?.baseUrl).toBe("https://hai-proxy.example.com");
+		expect(heavy1?.baseUrl).toBe("https://openrouter.example.com");
 	});
 
 	it("single-backend, single-model tiers: 5 indexed neutral aliases", () => {
-		const backends = [backend("hai-proxy", ALL_TIERS)];
+		const backends = [backend("openrouter", ALL_TIERS)];
 		const { models } = composeGatewayModels({
-			fallbackChain: ["hai-proxy"],
+			fallbackChain: ["openrouter"],
 			backends,
 			state: emptyState(),
 			resolveApiKey: () => "tok",
@@ -161,16 +160,16 @@ describe("composeGatewayModels — output counts", () => {
 
 describe("composeGatewayModels — output shape", () => {
 	it("each output has baseUrl, api, headers.Authorization and copies capability fields", () => {
-		const backends = [backend("hai-proxy", { heavy: "hai-heavy" })];
+		const backends = [backend("openrouter", { heavy: "or-heavy" })];
 		const { models } = composeGatewayModels({
-			fallbackChain: ["hai-proxy"],
+			fallbackChain: ["openrouter"],
 			backends,
 			state: emptyState(),
 			resolveApiKey: () => "the-token",
 		});
 		expect(models).toHaveLength(1);
 		for (const m of models) {
-			expect(m.baseUrl).toBe("https://hai-proxy.example.com");
+			expect(m.baseUrl).toBe("https://openrouter.example.com");
 			expect(m.api).toBe("openai-completions");
 			expect(m.headers.Authorization).toBe("Bearer the-token");
 			// Capability fields
@@ -188,29 +187,29 @@ describe("composeGatewayModels — output shape", () => {
 describe("composeGatewayModels — indexed failover fallthrough", () => {
 	it("primary capped → heavy-2 routes to the secondary backend's list position 2", () => {
 		const backends = [
-			backend("hai-proxy", { heavy: ["hai-opus", "hai-gpt"] }),
-			backend("sap-ai-core", { heavy: ["sap-opus", "sap-gpt"] }),
+			backend("openrouter", { heavy: ["or-opus", "or-gpt"] }),
+			backend("groq", { heavy: ["gq-opus", "gq-gpt"] }),
 		];
 		const state: GatewayState = {
 			...emptyState(),
 			unhealthyUntil: {
-				"hai-proxy": {
+				"openrouter": {
 					until: new Date(Date.now() + 3_600_000).toISOString(),
 					reason: "cap",
 				},
 			},
 		};
 		const { models } = composeGatewayModels({
-			fallbackChain: ["hai-proxy", "sap-ai-core"],
+			fallbackChain: ["openrouter", "groq"],
 			backends,
 			state,
 			resolveApiKey: (b) => `tok-${b.name}`,
 		});
 		const byId = Object.fromEntries(models.map((m) => [m.id, m]));
 		// Both indexed aliases now served by the healthy secondary backend.
-		expect(byId["heavy-1"].name).toBe("sap-opus name");
-		expect(byId["heavy-2"].name).toBe("sap-gpt name");
-		expect(byId["heavy-1"].baseUrl).toBe("https://sap-ai-core.example.com");
+		expect(byId["heavy-1"].name).toBe("gq-opus name");
+		expect(byId["heavy-2"].name).toBe("gq-gpt name");
+		expect(byId["heavy-1"].baseUrl).toBe("https://groq.example.com");
 	});
 
 	it("alias count is stable (set by primary); index clamps when router has fewer models", () => {
@@ -219,20 +218,20 @@ describe("composeGatewayModels — indexed failover fallthrough", () => {
 		// referenceable: heavy-2 clamps to the secondary's single (last/best) model
 		// so a caller pinned to gateway/heavy-2 keeps working.
 		const backends = [
-			backend("hai-proxy", { heavy: ["hai-opus", "hai-gpt"] }),
-			backend("sap-ai-core", { heavy: ["sap-only"] }),
+			backend("openrouter", { heavy: ["or-opus", "or-gpt"] }),
+			backend("groq", { heavy: ["gq-only"] }),
 		];
 		const state: GatewayState = {
 			...emptyState(),
 			unhealthyUntil: {
-				"hai-proxy": {
+				"openrouter": {
 					until: new Date(Date.now() + 3_600_000).toISOString(),
 					reason: "cap",
 				},
 			},
 		};
 		const { models } = composeGatewayModels({
-			fallbackChain: ["hai-proxy", "sap-ai-core"],
+			fallbackChain: ["openrouter", "groq"],
 			backends,
 			state,
 			resolveApiKey: (b) => `tok-${b.name}`,
@@ -241,29 +240,29 @@ describe("composeGatewayModels — indexed failover fallthrough", () => {
 		expect(ids).toEqual(["heavy-1", "heavy-2"]);
 		const byId = Object.fromEntries(models.map((m) => [m.id, m]));
 		// Both clamp to the secondary's only model.
-		expect(byId["heavy-1"].name).toBe("sap-only name");
-		expect(byId["heavy-2"].name).toBe("sap-only name");
-		expect(byId["heavy-2"].baseUrl).toBe("https://sap-ai-core.example.com");
+		expect(byId["heavy-1"].name).toBe("gq-only name");
+		expect(byId["heavy-2"].name).toBe("gq-only name");
+		expect(byId["heavy-2"].baseUrl).toBe("https://groq.example.com");
 	});
 });
 
 describe("composeGatewayModels — fallback chain semantics", () => {
 	it("neutral alias picks first HEALTHY backend in chain that has the slot", () => {
 		const backends = [
-			backend("hai-proxy", { heavy: "hai-heavy" }),
+			backend("openrouter", { heavy: "or-heavy" }),
 			backend("github-copilot", { heavy: "copilot-heavy" }),
 		];
 		const state: GatewayState = {
 			...emptyState(),
 			unhealthyUntil: {
-				"hai-proxy": {
+				"openrouter": {
 					until: new Date(Date.now() + 3_600_000).toISOString(),
 					reason: "cap hit",
 				},
 			},
 		};
 		const { models } = composeGatewayModels({
-			fallbackChain: ["hai-proxy", "github-copilot"],
+			fallbackChain: ["openrouter", "github-copilot"],
 			backends,
 			state,
 			resolveApiKey: (b) => `tok-${b.name}`,
@@ -275,7 +274,7 @@ describe("composeGatewayModels — fallback chain semantics", () => {
 
 	it("activeBackendOverride reorders the chain", () => {
 		const backends = [
-			backend("hai-proxy", { heavy: "hai-heavy" }),
+			backend("openrouter", { heavy: "or-heavy" }),
 			backend("github-copilot", { heavy: "copilot-heavy" }),
 		];
 		const state: GatewayState = {
@@ -283,7 +282,7 @@ describe("composeGatewayModels — fallback chain semantics", () => {
 			activeBackendOverride: "github-copilot",
 		};
 		const { models } = composeGatewayModels({
-			fallbackChain: ["hai-proxy", "github-copilot"],
+			fallbackChain: ["openrouter", "github-copilot"],
 			backends,
 			state,
 			resolveApiKey: (b) => `tok-${b.name}`,
@@ -293,18 +292,18 @@ describe("composeGatewayModels — fallback chain semantics", () => {
 	});
 
 	it("all backends unhealthy → neutral alias for that tier omitted with a warning", () => {
-		const backends = [backend("hai-proxy", { heavy: "hai-heavy" })];
+		const backends = [backend("openrouter", { heavy: "or-heavy" })];
 		const state: GatewayState = {
 			...emptyState(),
 			unhealthyUntil: {
-				"hai-proxy": {
+				"openrouter": {
 					until: new Date(Date.now() + 3_600_000).toISOString(),
 					reason: "cap",
 				},
 			},
 		};
 		const { models, warnings } = composeGatewayModels({
-			fallbackChain: ["hai-proxy"],
+			fallbackChain: ["openrouter"],
 			backends,
 			state,
 			resolveApiKey: () => "tok",
@@ -321,64 +320,48 @@ describe("composeGatewayModels — fallback chain semantics", () => {
 describe("composeGatewayModels — auth resolution failures", () => {
 	it("skips a backend when resolveApiKey returns undefined", () => {
 		const backends = [
-			backend("hai-proxy", { heavy: "hai-heavy" }),
+			backend("openrouter", { heavy: "or-heavy" }),
 			backend("github-copilot", { heavy: "copilot-heavy" }),
 		];
 		const { models } = composeGatewayModels({
-			fallbackChain: ["hai-proxy", "github-copilot"],
+			fallbackChain: ["openrouter", "github-copilot"],
 			backends,
 			state: emptyState(),
-			resolveApiKey: (b) => (b.name === "hai-proxy" ? undefined : "tok"),
+			resolveApiKey: (b) => (b.name === "openrouter" ? undefined : "tok"),
 		});
-		// heavy-1 falls through to copilot; hai contributes nothing (no token).
+		// heavy-1 falls through to copilot; openrouter contributes nothing (no token).
 		const heavy1 = models.find((m) => m.id === "heavy-1");
 		expect(heavy1?.headers.Authorization).toBe("Bearer tok");
 		expect(heavy1?.baseUrl).toBe("https://github-copilot.example.com");
 	});
 });
 
-describe("backendFamilySuffix", () => {
-	const cases: Array<[string, string]> = [
-		["hai-proxy", "hai"],
-		["github-copilot", "copilot"],
-		["sap-ai-core", "sap"],
-		["openai", "openai"],
-		["anthropic", "anthropic"],
-		["my-corp-api", "corp"],
-	];
-	for (const [input, expected] of cases) {
-		it(`${input} → ${expected}`, () => {
-			expect(backendFamilySuffix(input)).toBe(expected);
-		});
-	}
-});
-
 describe("isBackendUnhealthy", () => {
 	it("returns false when no entry", () => {
-		expect(isBackendUnhealthy("hai-proxy", emptyState())).toBe(false);
+		expect(isBackendUnhealthy("openrouter", emptyState())).toBe(false);
 	});
 	it("returns true when until is in the future", () => {
 		const state: GatewayState = {
 			...emptyState(),
 			unhealthyUntil: {
-				"hai-proxy": {
+				"openrouter": {
 					until: new Date(Date.now() + 60_000).toISOString(),
 					reason: "cap",
 				},
 			},
 		};
-		expect(isBackendUnhealthy("hai-proxy", state)).toBe(true);
+		expect(isBackendUnhealthy("openrouter", state)).toBe(true);
 	});
 	it("returns false when until has expired (lazy healing)", () => {
 		const state: GatewayState = {
 			...emptyState(),
 			unhealthyUntil: {
-				"hai-proxy": {
+				"openrouter": {
 					until: new Date(Date.now() - 60_000).toISOString(),
 					reason: "cap",
 				},
 			},
 		};
-		expect(isBackendUnhealthy("hai-proxy", state)).toBe(false);
+		expect(isBackendUnhealthy("openrouter", state)).toBe(false);
 	});
 });

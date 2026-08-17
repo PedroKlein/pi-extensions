@@ -21,32 +21,32 @@ const FIXTURE = join(
 describe("aliases.json loader — valid inputs", () => {
 	it("parses the full sample fixture from tests/fixtures", () => {
 		const cfg = parseAliasesConfig(readFileSync(FIXTURE, "utf8"), FIXTURE);
-		expect(cfg.fallbackChain).toEqual(["hai-proxy", "github-copilot"]);
+		expect(cfg.fallbackChain).toEqual(["openrouter", "github-copilot"]);
 		// Single-string tiers normalize to 1-element arrays.
-		expect(cfg.backends["hai-proxy"].tiers.heavy).toEqual(["anthropic--claude-sonnet-4-5"]);
-		expect(cfg.backends["hai-proxy"].capStatusCodes).toEqual([402, 429]);
+		expect(cfg.backends["openrouter"].tiers.heavy).toEqual(["anthropic--claude-sonnet-4-5"]);
+		expect(cfg.backends["openrouter"].capStatusCodes).toEqual([402, 429]);
 	});
 
 	it("accepts a minimal single-backend config with only tiers", () => {
 		const src = JSON.stringify({
-			fallbackChain: ["hai-proxy"],
-			backends: { "hai-proxy": { tiers: { heavy: "some/model" } } },
+			fallbackChain: ["openrouter"],
+			backends: { "openrouter": { tiers: { heavy: "some/model" } } },
 		});
 		const cfg = parseAliasesConfig(src);
-		expect(cfg.fallbackChain).toEqual(["hai-proxy"]);
+		expect(cfg.fallbackChain).toEqual(["openrouter"]);
 		// Single string is normalized to a 1-element array.
-		expect(cfg.backends["hai-proxy"].tiers).toEqual({ heavy: ["some/model"] });
+		expect(cfg.backends["openrouter"].tiers).toEqual({ heavy: ["some/model"] });
 		// Defaults applied
-		expect(cfg.backends["hai-proxy"].capStatusCodes).toEqual(DEFAULT_CAP_STATUS_CODES);
-		expect(cfg.backends["hai-proxy"].resetSchedule).toBeUndefined();
-		expect(cfg.backends["hai-proxy"].quotaHint).toBeUndefined();
+		expect(cfg.backends["openrouter"].capStatusCodes).toEqual(DEFAULT_CAP_STATUS_CODES);
+		expect(cfg.backends["openrouter"].resetSchedule).toBeUndefined();
+		expect(cfg.backends["openrouter"].quotaHint).toBeUndefined();
 	});
 
 	it("accepts an ordered list of models per tier (indexed diversity)", () => {
 		const src = JSON.stringify({
-			fallbackChain: ["hai-proxy"],
+			fallbackChain: ["openrouter"],
 			backends: {
-				"hai-proxy": {
+				"openrouter": {
 					tiers: {
 						heavy: ["anthropic--claude-4.8-opus", "gpt-5.5"],
 						light: ["anthropic--claude-4.5-haiku", "gpt-5-mini"],
@@ -55,11 +55,11 @@ describe("aliases.json loader — valid inputs", () => {
 			},
 		});
 		const cfg = parseAliasesConfig(src);
-		expect(cfg.backends["hai-proxy"].tiers.heavy).toEqual([
+		expect(cfg.backends["openrouter"].tiers.heavy).toEqual([
 			"anthropic--claude-4.8-opus",
 			"gpt-5.5",
 		]);
-		expect(cfg.backends["hai-proxy"].tiers.light).toEqual([
+		expect(cfg.backends["openrouter"].tiers.light).toEqual([
 			"anthropic--claude-4.5-haiku",
 			"gpt-5-mini",
 		]);

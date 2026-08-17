@@ -25,8 +25,8 @@
     indices reuse its last/best model). Availability wins over diversity.
   - **Cap attribution:** now uses a compose-time `alias → backend` routing map
     instead of parsing the alias name (indexed aliases are backend-agnostic).
-  - **BREAKING (behavioral):** family-pinned aliases (`heavy-hai-1`,
-    `heavy-copilot-1`, ...) are **removed**. Use `/gateway force <backend>` to
+  - **BREAKING (behavioral):** family-pinned aliases (`heavy-<backend>-1`,
+    e.g. `heavy-openrouter-1`, ...) are **removed**. Use `/gateway force <backend>` to
     pin routing to a specific backend.
 
 ## 0.2.0
@@ -37,7 +37,7 @@
 
   Virtual provider extension that exposes stable tier aliases (`heavy-1`,
   `medium-1`, `light-1`, `xlight-1`, `minimal-1`) plus family-pinned variants
-  (`heavy-hai-1`, `heavy-copilot-1`, ...) routing to already-registered pi
+  (`heavy-<backend>-1`, ...) routing to already-registered pi
   providers with automatic failover on HTTP 402 / 429 cap hits.
 
   Features:
@@ -46,7 +46,7 @@
   - Automatic detection of cap hits via `message_end` (with `stopReason: "error"`).
   - Persistent state at `~/.pi/agent/gateway-state.json` with atomic writes + lockfile.
   - Named reset-schedule presets: `utc-midnight`, `utc-monthly-1st`, `utc-hourly`.
-  - Optional `quotaHint` enrichers (v1: `hai-daily-eur`) for spend/cap display.
+  - Optional `quotaHint` enrichers (v1: `daily-eur-cap`) for spend/cap display.
   - Debounced re-registration on state change so multiple simultaneous transitions collapse to one `pi.registerProvider` call.
   - Periodic token refresh (default 30min, configurable via `PI_GATEWAY_OAUTH_REFRESH_MS`) for backends whose auth token changes over time.
   - `/gateway` command with subcommands: `status`, `force <backend>`, `force none`, `clear`, `toggle <backend>`, `reload`.

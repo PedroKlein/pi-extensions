@@ -21,11 +21,11 @@ function fakeRegistry(
 describe("registerGatewayProvider — happy path", () => {
 	it("calls registerProvider exactly once with name 'gateway'", async () => {
 		const aliases: AliasesConfig = {
-			fallbackChain: ["hai-proxy"],
+			fallbackChain: ["openrouter"],
 			backends: {
-				"hai-proxy": {
+				"openrouter": {
 					resetSchedule: "utc-midnight",
-					tiers: { heavy: ["hai-heavy"], light: ["hai-light"] },
+					tiers: { heavy: ["or-heavy"], light: ["or-light"] },
 					quotaHint: undefined,
 					capStatusCodes: [402],
 				},
@@ -33,11 +33,11 @@ describe("registerGatewayProvider — happy path", () => {
 		};
 		const registry = fakeRegistry(
 			[
-				{ id: "hai-heavy", provider: "hai-proxy", contextWindow: 200_000, api: "openai-completions" },
-				{ id: "hai-light", provider: "hai-proxy", contextWindow: 128_000, api: "openai-completions" },
+				{ id: "or-heavy", provider: "openrouter", contextWindow: 200_000, api: "openai-completions" },
+				{ id: "or-light", provider: "openrouter", contextWindow: 128_000, api: "openai-completions" },
 			],
-			{ "hai-proxy": { apiKey: "!echo hai-token", baseUrl: "https://hai.example" } },
-			{ "hai-proxy": "resolved-hai-token" },
+			{ "openrouter": { apiKey: "!echo or-token", baseUrl: "https://openrouter.example" } },
+			{ "openrouter": "resolved-or-token" },
 		);
 		const register = vi.fn();
 		const notify = vi.fn();
@@ -55,7 +55,7 @@ describe("registerGatewayProvider — happy path", () => {
 		const [_name, cfg] = register.mock.calls[0];
 		expect(cfg.models).toHaveLength(2); // 2 indexed neutral aliases (heavy-1, light-1)
 		for (const m of cfg.models) {
-			expect(m.headers.Authorization).toBe("Bearer resolved-hai-token");
+			expect(m.headers.Authorization).toBe("Bearer resolved-or-token");
 		}
 		expect(result.modelsRegistered).toBe(2);
 	});
@@ -64,11 +64,11 @@ describe("registerGatewayProvider — happy path", () => {
 describe("registerGatewayProvider — unregistered backend graceful degradation", () => {
 	it("registers models from remaining backends and notifies about the missing one", async () => {
 		const aliases: AliasesConfig = {
-			fallbackChain: ["hai-proxy", "ghost"],
+			fallbackChain: ["openrouter", "ghost"],
 			backends: {
-				"hai-proxy": {
+				"openrouter": {
 					resetSchedule: undefined,
-					tiers: { heavy: ["hai-heavy"] },
+					tiers: { heavy: ["or-heavy"] },
 					quotaHint: undefined,
 					capStatusCodes: [402],
 				},
@@ -80,11 +80,11 @@ describe("registerGatewayProvider — unregistered backend graceful degradation"
 				},
 			},
 		};
-		// Only hai-proxy is registered in the fake registry; ghost is missing.
+		// Only openrouter is registered in the fake registry; ghost is missing.
 		const registry = fakeRegistry(
-			[{ id: "hai-heavy", provider: "hai-proxy", contextWindow: 200_000, api: "openai-completions" }],
-			{ "hai-proxy": { apiKey: "!echo hai-token" } },
-			{ "hai-proxy": "resolved-hai-token" },
+			[{ id: "or-heavy", provider: "openrouter", contextWindow: 200_000, api: "openai-completions" }],
+			{ "openrouter": { apiKey: "!echo or-token" } },
+			{ "openrouter": "resolved-or-token" },
 		);
 		const register = vi.fn();
 		const notify = vi.fn();
@@ -114,11 +114,11 @@ describe("registerGatewayProvider — unregistered backend graceful degradation"
 describe("registerGatewayProvider — state override respected", () => {
 	it("neutral aliases use activeBackendOverride when set", async () => {
 		const aliases: AliasesConfig = {
-			fallbackChain: ["hai-proxy", "github-copilot"],
+			fallbackChain: ["openrouter", "github-copilot"],
 			backends: {
-				"hai-proxy": {
+				"openrouter": {
 					resetSchedule: undefined,
-					tiers: { heavy: ["hai-heavy"] },
+					tiers: { heavy: ["or-heavy"] },
 					quotaHint: undefined,
 					capStatusCodes: [402],
 				},
@@ -132,11 +132,11 @@ describe("registerGatewayProvider — state override respected", () => {
 		};
 		const registry = fakeRegistry(
 			[
-				{ id: "hai-heavy", provider: "hai-proxy", baseUrl: "https://hai.example", api: "x" },
+				{ id: "or-heavy", provider: "openrouter", baseUrl: "https://openrouter.example", api: "x" },
 				{ id: "copilot-heavy", provider: "github-copilot", baseUrl: "https://copilot.example", api: "x" },
 			],
 			{},
-			{ "hai-proxy": "hai-tok", "github-copilot": "copilot-tok" },
+			{ "openrouter": "or-tok", "github-copilot": "copilot-tok" },
 		);
 		const register = vi.fn();
 		const state: GatewayState = { ...emptyState(), activeBackendOverride: "github-copilot" };

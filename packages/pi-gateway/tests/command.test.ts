@@ -13,11 +13,11 @@ import type { RegistryLike } from "../src/session.js";
 import type { AliasesConfig } from "../src/config.js";
 
 const ALIASES_JSON = {
-	fallbackChain: ["hai-proxy", "github-copilot"],
+	fallbackChain: ["openrouter", "github-copilot"],
 	backends: {
-		"hai-proxy": {
+		"openrouter": {
 			resetSchedule: "utc-midnight",
-			tiers: { heavy: "hai-heavy", light: "hai-light" },
+			tiers: { heavy: "or-heavy", light: "or-light" },
 			capStatusCodes: [402, 429],
 		},
 		"github-copilot": {
@@ -30,8 +30,8 @@ const ALIASES_JSON = {
 
 function fakeRegistry(): RegistryLike {
 	const models = [
-		{ id: "hai-heavy", provider: "hai-proxy" },
-		{ id: "hai-light", provider: "hai-proxy" },
+		{ id: "or-heavy", provider: "openrouter" },
+		{ id: "or-light", provider: "openrouter" },
 		{ id: "copilot-heavy", provider: "github-copilot" },
 	];
 	return {
@@ -131,13 +131,13 @@ describe("/gateway force <backend>", () => {
 	});
 
 	it("`force none` clears the override", async () => {
-		writeState(statePath, { ...emptyState(), activeBackendOverride: "hai-proxy" });
+		writeState(statePath, { ...emptyState(), activeBackendOverride: "openrouter" });
 		await handler!("force none", ctx);
 		expect(readState(statePath).activeBackendOverride).toBeUndefined();
 	});
 
 	it("bare `force` (no arg) also clears", async () => {
-		writeState(statePath, { ...emptyState(), activeBackendOverride: "hai-proxy" });
+		writeState(statePath, { ...emptyState(), activeBackendOverride: "openrouter" });
 		await handler!("force", ctx);
 		expect(readState(statePath).activeBackendOverride).toBeUndefined();
 	});
@@ -164,11 +164,11 @@ describe("/gateway reload", () => {
 		writeFileSync(
 			aliasesPath,
 			JSON.stringify({
-				fallbackChain: ["hai-proxy"],
+				fallbackChain: ["openrouter"],
 				backends: {
-					"hai-proxy": {
+					"openrouter": {
 						resetSchedule: "utc-midnight",
-						tiers: { heavy: "hai-heavy" },
+						tiers: { heavy: "or-heavy" },
 						capStatusCodes: [402],
 					},
 				},
@@ -197,17 +197,17 @@ describe("/gateway status (default)", () => {
 		expect(pi.sendUserMessage).toHaveBeenCalledTimes(1);
 		const text = pi.sendUserMessage.mock.calls[0][0];
 		expect(text).toContain("gateway");
-		expect(text).toContain("hai-proxy");
+		expect(text).toContain("openrouter");
 	});
 });
 
 describe("/gateway toggle <backend>", () => {
 	it("flips a backend's health", async () => {
-		await handler!("toggle hai-proxy", ctx);
-		expect(readState(statePath).unhealthyUntil["hai-proxy"]).toBeDefined();
+		await handler!("toggle openrouter", ctx);
+		expect(readState(statePath).unhealthyUntil["openrouter"]).toBeDefined();
 		// Toggle again → healthy.
-		await handler!("toggle hai-proxy", ctx);
-		expect(readState(statePath).unhealthyUntil["hai-proxy"]).toBeUndefined();
+		await handler!("toggle openrouter", ctx);
+		expect(readState(statePath).unhealthyUntil["openrouter"]).toBeUndefined();
 	});
 
 	it("errors on unknown backend name", async () => {

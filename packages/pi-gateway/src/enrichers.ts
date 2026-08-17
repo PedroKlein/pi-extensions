@@ -5,10 +5,10 @@
  * into a structured { spent, cap, currency } tuple, purely for TUI display.
  * Cap detection itself does NOT depend on enricher output.
  *
- * v1 ships a single enricher — `hai-daily-eur` — matching HAI's
- * `DAILY_CAP_EXCEEDED` shape. Add more entries here as backends reveal
- * their error formats. Enrichers must never throw; return `undefined` on
- * anything unrecognized.
+ * v1 ships a single enricher — `daily-eur-cap` — matching a
+ * `DAILY_CAP_EXCEEDED` error body with `cap_eur` / `spent_eur` fields. Add
+ * more entries here as backends reveal their error formats. Enrichers must
+ * never throw; return `undefined` on anything unrecognized.
  */
 
 import type { QuotaHint } from "./config.js";
@@ -17,7 +17,7 @@ import type { QuotaInfo } from "./state.js";
 export type QuotaEnricher = (body: string) => QuotaInfo | undefined;
 
 export const ENRICHERS: Record<QuotaHint, QuotaEnricher> = {
-	"hai-daily-eur": haiDailyEurEnricher,
+	"daily-eur-cap": dailyEurCapEnricher,
 };
 
 /**
@@ -35,7 +35,7 @@ export function enrichQuota(hint: QuotaHint | undefined, body: string): QuotaInf
 	}
 }
 
-function haiDailyEurEnricher(body: string): QuotaInfo | undefined {
+function dailyEurCapEnricher(body: string): QuotaInfo | undefined {
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(body);

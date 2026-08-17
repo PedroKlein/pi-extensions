@@ -23,12 +23,12 @@ import type { RegistryLike } from "../src/session.js";
 import { emptyState, readState, writeState } from "../src/state.js";
 
 const CFG: AliasesConfig = {
-	fallbackChain: ["hai-proxy", "github-copilot"],
+	fallbackChain: ["openrouter", "github-copilot"],
 	backends: {
-		"hai-proxy": {
+		"openrouter": {
 			resetSchedule: "utc-midnight",
-			tiers: { heavy: ["hai-heavy"], light: ["hai-light"] },
-			quotaHint: "hai-daily-eur",
+			tiers: { heavy: ["or-heavy"], light: ["or-light"] },
+			quotaHint: "daily-eur-cap",
 			capStatusCodes: [402, 429],
 		},
 		"github-copilot": {
@@ -42,8 +42,8 @@ const CFG: AliasesConfig = {
 
 function fakeRegistry(): RegistryLike {
 	const models = [
-		{ id: "hai-heavy", provider: "hai-proxy", baseUrl: "https://hai.example", api: "openai-completions" },
-		{ id: "hai-light", provider: "hai-proxy", baseUrl: "https://hai.example", api: "openai-completions" },
+		{ id: "or-heavy", provider: "openrouter", baseUrl: "https://openrouter.example", api: "openai-completions" },
+		{ id: "or-light", provider: "openrouter", baseUrl: "https://openrouter.example", api: "openai-completions" },
 		{ id: "copilot-heavy", provider: "github-copilot", baseUrl: "https://copilot.example", api: "openai-completions" },
 		{ id: "copilot-light", provider: "github-copilot", baseUrl: "https://copilot.example", api: "openai-completions" },
 	];
@@ -72,7 +72,7 @@ afterEach(() => {
 });
 
 describe("integration — full failover + heal cycle", () => {
-	it("cap hit on hai-proxy → swap to github-copilot; reset expires → swap back", async () => {
+	it("cap hit on openrouter → swap to github-copilot; reset expires → swap back", async () => {
 		let now = new Date("2025-01-15T12:00:00.000Z");
 		const microtasks: Array<() => void> = [];
 		const register = vi.fn();
@@ -96,9 +96,9 @@ describe("integration — full failover + heal cycle", () => {
 		expect(register).toHaveBeenCalledTimes(1);
 		let cfg = register.mock.calls[0][1];
 		let heavy1 = cfg.models.find((m: { id: string }) => m.id === "heavy-1");
-		expect(heavy1?.headers.Authorization).toBe("Bearer resolved-hai-proxy");
+		expect(heavy1?.headers.Authorization).toBe("Bearer resolved-openrouter");
 
-		// Trigger a 402 through heavy-1 (currently routed to hai-proxy).
+		// Trigger a 402 through heavy-1 (currently routed to openrouter).
 		controller.handleMessageEnd({
 			errorMessage:
 				'402: {"error":{"cap_eur":"50.00","code":"DAILY_CAP_EXCEEDED","spent_eur":"50.27","type":"billing_error"}}',
@@ -116,17 +116,17 @@ describe("integration — full failover + heal cycle", () => {
 
 		// State file records the transition, including quota enrichment.
 		const persisted = readState(statePath);
-		expect(persisted.unhealthyUntil["hai-proxy"]).toBeDefined();
-		expect(persisted.unhealthyUntil["hai-proxy"].until).toBe("2025-01-16T00:00:00.000Z");
-		expect(persisted.unhealthyUntil["hai-proxy"].quota).toEqual({
+		expect(persisted.unhealthyUntil["openrouter"]).toBeDefined();
+		expect(persisted.unhealthyUntil["openrouter"].until).toBe("2025-01-16T00:00:00.000Z");
+		expect(persisted.unhealthyUntil["openrouter"].quota).toEqual({
 			spent: 50.27,
 			cap: 50.0,
 			currency: "EUR",
 		});
 
-		// Notify fired at least twice: one warning about hai-proxy unhealthy,
+		// Notify fired at least twice: one warning about openrouter unhealthy,
 		// one info about the swap (fired by re-registration).
-		const warnings = notify.mock.calls.filter((c) => String(c[0]).includes("hai-proxy"));
+		const warnings = notify.mock.calls.filter((c) => String(c[0]).includes("openrouter"));
 		expect(warnings.length).toBeGreaterThanOrEqual(1);
 
 		// Advance clock past reset instant → sweep heals → re-register.
@@ -138,13 +138,13 @@ describe("integration — full failover + heal cycle", () => {
 		expect(register).toHaveBeenCalledTimes(3);
 		cfg = register.mock.calls[2][1];
 		heavy1 = cfg.models.find((m: { id: string }) => m.id === "heavy-1");
-		// Back to hai-proxy since it's healthy again AND first in the chain.
-		expect(heavy1?.headers.Authorization).toBe("Bearer resolved-hai-proxy");
+		// Back to openrouter since it's healthy again AND first in the chain.
+		expect(heavy1?.headers.Authorization).toBe("Bearer resolved-openrouter");
 		expect(readState(statePath).unhealthyUntil).toEqual({});
 
 		// A "healthy again" notify fired.
 		const healed = notify.mock.calls.find(
-			(c) => String(c[0]).includes("hai-proxy") && String(c[0]).includes("healthy"),
+			(c) => String(c[0]).includes("openrouter") && String(c[0]).includes("healthy"),
 		);
 		expect(healed).toBeDefined();
 	});
@@ -167,12 +167,12 @@ describe("integration — both backends down", () => {
 			scheduleMicrotask: (fn) => microtasks.push(fn),
 		});
 
-		// Initial register to populate routing (heavy-1/light-1 → hai-proxy).
+		// Initial register to populate routing (heavy-1/light-1 → openrouter).
 		controller.requestReregister();
 		microtasks.shift()!();
 		await drain();
 
-		// First wave: cap heavy-1 and light-1 (route to hai-proxy) → hai unhealthy.
+		// First wave: cap heavy-1 and light-1 (route to openrouter) → openrouter unhealthy.
 		// Re-compose routes both to github-copilot.
 		controller.handleMessageEnd({
 			errorMessage: "402: {}",

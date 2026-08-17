@@ -87,26 +87,6 @@ export interface ComposeResult {
 }
 
 /**
- * Given a backend's registered name, produce a short family suffix used in
- * pinned alias IDs. Examples:
- *   "hai-proxy"      -> "hai"
- *   "github-copilot" -> "copilot"
- *   "sap-ai-core"    -> "sap"
- *   "openai"         -> "openai"
- */
-export function backendFamilySuffix(backendName: string): string {
-	const parts = backendName.split(/[-_]/).filter(Boolean);
-	if (parts.length === 0) return backendName;
-	// Walk right-to-left, skipping common generic suffixes.
-	const GENERIC = new Set(["proxy", "api", "core", "ai", "llm", "gateway"]);
-	for (let i = parts.length - 1; i >= 0; i--) {
-		const p = parts[i];
-		if (p.length >= 3 && !GENERIC.has(p)) return p;
-	}
-	return parts[0];
-}
-
-/**
  * Whether the backend is unhealthy per the state's TTL. Expired entries are
  * treated as healthy — the composer never mutates state; the caller (P4)
  * sweeps expiries and re-composes.

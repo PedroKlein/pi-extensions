@@ -11,7 +11,7 @@
  *   lookups use `modelRegistry.find(name, modelId)`.
  * - `getRegisteredProviderConfig(name)` returns undefined for built-in
  *   providers (anthropic/openai/google), for some extension-registered
- *   providers (github-copilot, sap-ai-core), and for OAuth providers with
+ *   providers (github-copilot, custom OAuth providers), and for OAuth providers with
  *   no `apiKey` field. Treat that as `authMode: "resolved"` — the composer
  *   will fetch a live key via `getApiKeyForProvider` at re-register time.
  * - authMode is only used downstream to decide whether P6's periodic-refresh

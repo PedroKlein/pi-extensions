@@ -11,8 +11,8 @@
  *         "quota": { "spent": 50.27, "cap": 50.00, "currency": "EUR" }
  *       }
  *     },
- *     "activeBackendOverride": "hai-proxy",
- *     "fallbackChainOverride": ["hai-proxy", "github-copilot"]
+ *     "activeBackendOverride": "openrouter",
+ *     "fallbackChainOverride": ["openrouter", "groq"]
  *   }
  *
  * Persistence rules:
