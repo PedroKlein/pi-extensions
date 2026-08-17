@@ -54,11 +54,19 @@ const TResetSchedule = Type.Union(RESET_SCHEDULES.map((v) => Type.Literal(v)));
 const TQuotaHint = Type.Union(QUOTA_HINTS.map((v) => Type.Literal(v)));
 
 // Tiers is an open-shape object where each key is a known TierSlot and each
-// value is a non-empty string. All slots are optional. Extra slots are
-// rejected via additionalProperties: false.
+// value is either a non-empty string (single model) or a non-empty ordered
+// list of model IDs (indexed diversity: heavy-1, heavy-2, ...). All slots are
+// optional. Extra slots are rejected via additionalProperties: false.
+// Empty arrays are rejected by the explicit semantic check in
+// parseAliasesConfig (cause="semantic"), so no minItems here — that keeps the
+// error cause stable and the message specific to the offending tier slot.
+const TTierValue = Type.Union([
+	Type.String({ minLength: 1 }),
+	Type.Array(Type.String({ minLength: 1 })),
+]);
 const tierPropSchemas: Record<string, ReturnType<typeof Type.Optional>> = {};
 for (const slot of TIER_SLOTS) {
-	tierPropSchemas[slot] = Type.Optional(Type.String({ minLength: 1 }));
+	tierPropSchemas[slot] = Type.Optional(TTierValue);
 }
 const TTiers = Type.Object(tierPropSchemas, { additionalProperties: false });
 
@@ -84,10 +92,14 @@ export const AliasesConfigRawSchema = Type.Object(
 export type AliasesConfigRaw = Static<typeof AliasesConfigRawSchema>;
 export type BackendConfigRaw = Static<typeof TBackend>;
 
-/** Normalized runtime config. Optional fields resolved to defaults. */
+/**
+ * Normalized runtime config. Optional fields resolved to defaults. Each tier
+ * value is normalized to a non-empty ordered list of model IDs; a single
+ * string in the source file becomes a 1-element array.
+ */
 export interface BackendConfig {
 	resetSchedule: ResetSchedule | undefined;
-	tiers: Readonly<Partial<Record<TierSlot, string>>>;
+	tiers: Readonly<Partial<Record<TierSlot, readonly string[]>>>;
 	quotaHint: QuotaHint | undefined;
 	capStatusCodes: readonly number[];
 }
@@ -173,7 +185,9 @@ export function parseAliasesConfig(source: string, filePath = "<aliases.json>"):
 		}
 	}
 
-	// Every backend must declare at least one tier.
+	// Every backend must declare at least one tier, and no tier may be an empty
+	// list. (TypeBox minItems catches empty arrays at schema level, but keep an
+	// explicit semantic check so the error cause is stable for callers.)
 	for (const [name, backend] of Object.entries(rawConfig.backends)) {
 		if (Object.keys(backend.tiers).length === 0) {
 			throw new AliasesConfigError(
@@ -181,6 +195,15 @@ export function parseAliasesConfig(source: string, filePath = "<aliases.json>"):
 				"semantic",
 				`${filePath}/backends/${name}/tiers`,
 			);
+		}
+		for (const [slot, value] of Object.entries(backend.tiers)) {
+			if (Array.isArray(value) && value.length === 0) {
+				throw new AliasesConfigError(
+					`backend '${name}' tier '${slot}' is an empty list`,
+					"semantic",
+					`${filePath}/backends/${name}/tiers/${slot}`,
+				);
+			}
 		}
 	}
 
@@ -190,9 +213,13 @@ export function parseAliasesConfig(source: string, filePath = "<aliases.json>"):
 function normalize(raw: AliasesConfigRaw): AliasesConfig {
 	const backends: Record<string, BackendConfig> = {};
 	for (const [name, b] of Object.entries(raw.backends)) {
+		const tiers: Partial<Record<TierSlot, readonly string[]>> = {};
+		for (const [slot, value] of Object.entries(b.tiers)) {
+			tiers[slot as TierSlot] = Array.isArray(value) ? [...value] : [value];
+		}
 		backends[name] = {
 			resetSchedule: b.resetSchedule,
-			tiers: { ...b.tiers },
+			tiers,
 			quotaHint: b.quotaHint,
 			capStatusCodes: b.capStatusCodes ?? DEFAULT_CAP_STATUS_CODES,
 		};

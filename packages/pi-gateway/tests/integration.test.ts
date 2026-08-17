@@ -27,13 +27,13 @@ const CFG: AliasesConfig = {
 	backends: {
 		"hai-proxy": {
 			resetSchedule: "utc-midnight",
-			tiers: { heavy: "hai-heavy", light: "hai-light" },
+			tiers: { heavy: ["hai-heavy"], light: ["hai-light"] },
 			quotaHint: "hai-daily-eur",
 			capStatusCodes: [402, 429],
 		},
 		"github-copilot": {
 			resetSchedule: "utc-midnight",
-			tiers: { heavy: "copilot-heavy", light: "copilot-light" },
+			tiers: { heavy: ["copilot-heavy"], light: ["copilot-light"] },
 			quotaHint: undefined,
 			capStatusCodes: [402],
 		},
@@ -98,13 +98,13 @@ describe("integration — full failover + heal cycle", () => {
 		let heavy1 = cfg.models.find((m: { id: string }) => m.id === "heavy-1");
 		expect(heavy1?.headers.Authorization).toBe("Bearer resolved-hai-proxy");
 
-		// Trigger a 402 through heavy-hai-1.
+		// Trigger a 402 through heavy-1 (currently routed to hai-proxy).
 		controller.handleMessageEnd({
 			errorMessage:
 				'402: {"error":{"cap_eur":"50.00","code":"DAILY_CAP_EXCEEDED","spent_eur":"50.27","type":"billing_error"}}',
 			stopReason: "error",
 			provider: "gateway",
-			modelId: "heavy-hai-1",
+			modelId: "heavy-1",
 		});
 		expect(microtasks).toHaveLength(1);
 		microtasks.shift()!();
@@ -167,41 +167,53 @@ describe("integration — both backends down", () => {
 			scheduleMicrotask: (fn) => microtasks.push(fn),
 		});
 
+		// Initial register to populate routing (heavy-1/light-1 → hai-proxy).
+		controller.requestReregister();
+		microtasks.shift()!();
+		await drain();
+
+		// First wave: cap heavy-1 and light-1 (route to hai-proxy) → hai unhealthy.
+		// Re-compose routes both to github-copilot.
 		controller.handleMessageEnd({
 			errorMessage: "402: {}",
 			stopReason: "error",
 			provider: "gateway",
-			modelId: "heavy-hai-1",
+			modelId: "heavy-1",
 		});
 		controller.handleMessageEnd({
 			errorMessage: "402: {}",
 			stopReason: "error",
 			provider: "gateway",
-			modelId: "heavy-copilot-1",
+			modelId: "light-1",
+		});
+		microtasks.shift()!();
+		await drain();
+
+		// Second wave: cap heavy-1 and light-1 again (now routed to github-copilot)
+		// → copilot unhealthy too. No healthy backend remains for either tier.
+		register.mockClear();
+		controller.handleMessageEnd({
+			errorMessage: "402: {}",
+			stopReason: "error",
+			provider: "gateway",
+			modelId: "heavy-1",
 		});
 		controller.handleMessageEnd({
 			errorMessage: "402: {}",
 			stopReason: "error",
 			provider: "gateway",
-			modelId: "light-hai-1",
+			modelId: "light-1",
 		});
-		controller.handleMessageEnd({
-			errorMessage: "402: {}",
-			stopReason: "error",
-			provider: "gateway",
-			modelId: "light-copilot-1",
-		});
-		// All four transitions coalesce into a single debounced re-register.
 		expect(microtasks).toHaveLength(1);
 		microtasks.shift()!();
 		await drain();
 
 		const cfg = register.mock.calls[0][1];
-		// Neither heavy-1 nor light-1 present.
+		// Neither heavy-1 nor light-1 present — no healthy backend, no family-pinned
+		// fallback anymore.
 		expect(cfg.models.find((m: { id: string }) => m.id === "heavy-1")).toBeUndefined();
 		expect(cfg.models.find((m: { id: string }) => m.id === "light-1")).toBeUndefined();
-		// Family-pinned still present.
-		expect(cfg.models.find((m: { id: string }) => m.id === "heavy-hai-1")).toBeDefined();
+		expect(cfg.models).toHaveLength(0);
 
 		// Distinct "no healthy backend" error notify.
 		const allDownHeavy = notify.mock.calls.find(

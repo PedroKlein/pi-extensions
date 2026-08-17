@@ -47,7 +47,7 @@ describe("classifyCapEvent — quota attached when quotaHint declared", () => {
 		backends: {
 			"hai-proxy": {
 				resetSchedule: "utc-midnight",
-				tiers: { heavy: "hai-heavy" },
+				tiers: { heavy: ["hai-heavy"] },
 				quotaHint: "hai-daily-eur",
 				capStatusCodes: [402],
 			},
@@ -60,7 +60,7 @@ describe("classifyCapEvent — quota attached when quotaHint declared", () => {
 				errorMessage: `402: ${REAL_HAI_402}`,
 				stopReason: "error",
 				provider: "gateway",
-				modelId: "heavy-hai-1",
+				modelId: "heavy-1",
 			},
 			CFG,
 			new Date("2025-01-15T12:00:00.000Z"),
@@ -75,7 +75,7 @@ describe("classifyCapEvent — quota attached when quotaHint declared", () => {
 			backends: {
 				"hai-proxy": {
 					resetSchedule: "utc-midnight",
-					tiers: { heavy: "hai-heavy" },
+					tiers: { heavy: ["hai-heavy"] },
 					quotaHint: undefined,
 					capStatusCodes: [402],
 				},
@@ -86,7 +86,7 @@ describe("classifyCapEvent — quota attached when quotaHint declared", () => {
 				errorMessage: `402: ${REAL_HAI_402}`,
 				stopReason: "error",
 				provider: "gateway",
-				modelId: "heavy-hai-1",
+				modelId: "heavy-1",
 			},
 			cfg,
 			new Date("2025-01-15T12:00:00.000Z"),

@@ -35,7 +35,7 @@ const HAPPY_CFG: AliasesConfig = {
 	backends: {
 		"hai-proxy": {
 			resetSchedule: "utc-midnight",
-			tiers: { heavy: "hai/heavy-model", light: "hai/light-model" },
+			tiers: { heavy: ["hai/heavy-model"], light: ["hai/light-model"] },
 			quotaHint: "hai-daily-eur",
 			capStatusCodes: [402, 429],
 		},
@@ -67,8 +67,8 @@ describe("resolveBackends — happy path", () => {
 		expect(b.baseUrl).toBe("https://hai.example.com");
 		expect(b.api).toBe("openai-completions");
 		expect(b.tiers.size).toBe(2);
-		expect(b.tiers.get("heavy")?.realModelId).toBe("hai/heavy-model");
-		expect(b.tiers.get("light")?.realModelId).toBe("hai/light-model");
+		expect(b.tiers.get("heavy")?.models.map((m) => m.realModelId)).toEqual(["hai/heavy-model"]);
+		expect(b.tiers.get("light")?.models.map((m) => m.realModelId)).toEqual(["hai/light-model"]);
 		expect(b.config.quotaHint).toBe("hai-daily-eur");
 		expect(b.config.capStatusCodes).toEqual([402, 429]);
 	});
@@ -79,8 +79,8 @@ describe("resolveBackends — partial failures", () => {
 		const cfg: AliasesConfig = {
 			fallbackChain: ["hai-proxy", "ghost"],
 			backends: {
-				"hai-proxy": { tiers: { heavy: "hai/heavy" }, capStatusCodes: [402] },
-				ghost: { tiers: { light: "some/model" }, capStatusCodes: [402] },
+				"hai-proxy": { tiers: { heavy: ["hai/heavy"] }, capStatusCodes: [402] },
+				ghost: { tiers: { light: ["some/model"] }, capStatusCodes: [402] },
 			},
 		};
 		const registry = mockRegistry({
@@ -99,7 +99,7 @@ describe("resolveBackends — partial failures", () => {
 			fallbackChain: ["hai-proxy"],
 			backends: {
 				"hai-proxy": {
-					tiers: { heavy: "hai/heavy", light: "hai/does-not-exist" },
+					tiers: { heavy: ["hai/heavy"], light: ["hai/does-not-exist"] },
 					capStatusCodes: [402],
 				},
 			},
@@ -112,12 +112,59 @@ describe("resolveBackends — partial failures", () => {
 		expect(backends).toHaveLength(1);
 		const b = backends[0];
 		expect(b.tiers.size).toBe(1);
-		expect(b.tiers.get("heavy")?.realModelId).toBe("hai/heavy");
+		expect(b.tiers.get("heavy")?.models.map((m) => m.realModelId)).toEqual(["hai/heavy"]);
 		expect(b.tiers.has("light")).toBe(false);
 		expect(warnings).toHaveLength(1);
 		expect(warnings[0].kind).toBe("unknown-model");
 		expect(warnings[0].realModelId).toBe("hai/does-not-exist");
 		expect(warnings[0].tierSlot).toBe("light");
+	});
+
+	it("resolves an ordered list of models per tier (indexed diversity)", () => {
+		const cfg: AliasesConfig = {
+			fallbackChain: ["hai-proxy"],
+			backends: {
+				"hai-proxy": {
+					tiers: { heavy: ["hai/opus", "hai/gpt"] },
+					capStatusCodes: [402],
+				},
+			},
+		};
+		const registry = mockRegistry({
+			models: [
+				{ id: "hai/opus", provider: "hai-proxy" },
+				{ id: "hai/gpt", provider: "hai-proxy" },
+			],
+			configs: { "hai-proxy": { apiKey: "k", api: "openai-completions" } },
+		});
+		const { backends, warnings } = resolveBackends(cfg, registry);
+		expect(warnings).toEqual([]);
+		const heavy = backends[0].tiers.get("heavy");
+		expect(heavy?.models.map((m) => m.realModelId)).toEqual(["hai/opus", "hai/gpt"]);
+	});
+
+	it("drops one unresolvable model from a list but keeps the good ones, preserving order", () => {
+		const cfg: AliasesConfig = {
+			fallbackChain: ["hai-proxy"],
+			backends: {
+				"hai-proxy": {
+					tiers: { heavy: ["hai/opus", "hai/ghost", "hai/gpt"] },
+					capStatusCodes: [402],
+				},
+			},
+		};
+		const registry = mockRegistry({
+			models: [
+				{ id: "hai/opus", provider: "hai-proxy" },
+				{ id: "hai/gpt", provider: "hai-proxy" },
+			],
+			configs: { "hai-proxy": { apiKey: "k", api: "openai-completions" } },
+		});
+		const { backends, warnings } = resolveBackends(cfg, registry);
+		const heavy = backends[0].tiers.get("heavy");
+		expect(heavy?.models.map((m) => m.realModelId)).toEqual(["hai/opus", "hai/gpt"]);
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0].realModelId).toBe("hai/ghost");
 	});
 });
 

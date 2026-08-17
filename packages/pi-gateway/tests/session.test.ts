@@ -25,7 +25,7 @@ describe("registerGatewayProvider — happy path", () => {
 			backends: {
 				"hai-proxy": {
 					resetSchedule: "utc-midnight",
-					tiers: { heavy: "hai-heavy", light: "hai-light" },
+					tiers: { heavy: ["hai-heavy"], light: ["hai-light"] },
 					quotaHint: undefined,
 					capStatusCodes: [402],
 				},
@@ -53,11 +53,11 @@ describe("registerGatewayProvider — happy path", () => {
 		expect(register).toHaveBeenCalledTimes(1);
 		expect(register).toHaveBeenCalledWith("gateway", expect.objectContaining({ models: expect.any(Array) }));
 		const [_name, cfg] = register.mock.calls[0];
-		expect(cfg.models).toHaveLength(4); // 2 neutral + 2 pinned
+		expect(cfg.models).toHaveLength(2); // 2 indexed neutral aliases (heavy-1, light-1)
 		for (const m of cfg.models) {
 			expect(m.headers.Authorization).toBe("Bearer resolved-hai-token");
 		}
-		expect(result.modelsRegistered).toBe(4);
+		expect(result.modelsRegistered).toBe(2);
 	});
 });
 
@@ -68,13 +68,13 @@ describe("registerGatewayProvider — unregistered backend graceful degradation"
 			backends: {
 				"hai-proxy": {
 					resetSchedule: undefined,
-					tiers: { heavy: "hai-heavy" },
+					tiers: { heavy: ["hai-heavy"] },
 					quotaHint: undefined,
 					capStatusCodes: [402],
 				},
 				ghost: {
 					resetSchedule: undefined,
-					tiers: { light: "ghost-light" },
+					tiers: { light: ["ghost-light"] },
 					quotaHint: undefined,
 					capStatusCodes: [402],
 				},
@@ -99,11 +99,9 @@ describe("registerGatewayProvider — unregistered backend graceful degradation"
 
 		expect(register).toHaveBeenCalledTimes(1);
 		const [_n, cfg] = register.mock.calls[0];
-		// heavy-1 (neutral) + heavy-hai-1 (pinned) — light-1 impossible because
-		// only backend that has 'light' is ghost.
-		expect(cfg.models.map((m: { id: string }) => m.id).sort()).toEqual(
-			["heavy-1", "heavy-hai-1"].sort(),
-		);
+		// Only heavy-1 — light-1 impossible because the only backend that has
+		// 'light' (ghost) is unregistered. No family-pinned aliases anymore.
+		expect(cfg.models.map((m: { id: string }) => m.id).sort()).toEqual(["heavy-1"]);
 
 		// Notify was called with a warning about ghost.
 		const warningCall = notify.mock.calls.find((c) => String(c[0]).includes("ghost"));
@@ -120,13 +118,13 @@ describe("registerGatewayProvider — state override respected", () => {
 			backends: {
 				"hai-proxy": {
 					resetSchedule: undefined,
-					tiers: { heavy: "hai-heavy" },
+					tiers: { heavy: ["hai-heavy"] },
 					quotaHint: undefined,
 					capStatusCodes: [402],
 				},
 				"github-copilot": {
 					resetSchedule: undefined,
-					tiers: { heavy: "copilot-heavy" },
+					tiers: { heavy: ["copilot-heavy"] },
 					quotaHint: undefined,
 					capStatusCodes: [402],
 				},

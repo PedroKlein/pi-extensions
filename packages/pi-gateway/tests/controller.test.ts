@@ -20,13 +20,13 @@ const CFG: AliasesConfig = {
 	backends: {
 		"hai-proxy": {
 			resetSchedule: "utc-midnight",
-			tiers: { heavy: "hai-heavy", light: "hai-light" },
+			tiers: { heavy: ["hai-heavy"], light: ["hai-light"] },
 			quotaHint: "hai-daily-eur",
 			capStatusCodes: [402, 429],
 		},
 		"github-copilot": {
 			resetSchedule: "utc-midnight",
-			tiers: { heavy: "copilot-heavy", light: "copilot-light" },
+			tiers: { heavy: ["copilot-heavy"], light: ["copilot-light"] },
 			quotaHint: undefined,
 			capStatusCodes: [402],
 		},
@@ -80,24 +80,32 @@ describe("GatewayController — debounce", () => {
 			scheduleMicrotask: (fn) => microtasks.push(fn),
 		});
 
-		// Simulate three transitions in quick succession.
+		// Populate the routing map via the initial registration (as session_start
+		// does), then drain so `heavy-1`/`light-1` attribute correctly.
+		controller.requestReregister();
+		expect(microtasks).toHaveLength(1);
+		microtasks.shift()!();
+		await drainMicrotasks();
+		register.mockClear();
+
+		// Simulate three transitions in quick succession (all route to hai-proxy).
 		controller.handleMessageEnd({
 			errorMessage: "402: {}",
 			stopReason: "error",
 			provider: "gateway",
-			modelId: "heavy-hai-1",
+			modelId: "heavy-1",
 		});
 		controller.handleMessageEnd({
 			errorMessage: "402: {}",
 			stopReason: "error",
 			provider: "gateway",
-			modelId: "light-hai-1",
+			modelId: "light-1",
 		});
 		controller.handleMessageEnd({
 			errorMessage: "402: {}",
 			stopReason: "error",
 			provider: "gateway",
-			modelId: "heavy-copilot-1",
+			modelId: "heavy-1",
 		});
 
 		// Drain the microtask queue.
@@ -126,11 +134,17 @@ describe("GatewayController — re-registration reflects transitions", () => {
 			scheduleMicrotask: (fn) => microtasks.push(fn),
 		});
 
+		// Initial registration to populate routing (heavy-1 → hai-proxy).
+		controller.requestReregister();
+		microtasks.shift()!();
+		await drainMicrotasks();
+		register.mockClear();
+
 		controller.handleMessageEnd({
 			errorMessage: "402: {}",
 			stopReason: "error",
 			provider: "gateway",
-			modelId: "heavy-hai-1",
+			modelId: "heavy-1",
 		});
 		microtasks[0]();
 		await drainMicrotasks();
@@ -159,11 +173,15 @@ describe("GatewayController — notify shape", () => {
 			scheduleMicrotask: (fn) => microtasks.push(fn),
 		});
 
+		controller.requestReregister();
+		microtasks.shift()!();
+		await drainMicrotasks();
+
 		controller.handleMessageEnd({
 			errorMessage: "402: {}",
 			stopReason: "error",
 			provider: "gateway",
-			modelId: "heavy-hai-1",
+			modelId: "heavy-1",
 		});
 		microtasks[0]();
 		await drainMicrotasks();
@@ -192,20 +210,30 @@ describe("GatewayController — all-down case", () => {
 			scheduleMicrotask: (fn) => microtasks.push(fn),
 		});
 
-		// Take out both hai-proxy and github-copilot for the 'heavy' tier.
+		// Initial registration: heavy-1 → hai-proxy.
+		controller.requestReregister();
+		microtasks.shift()!();
+		await drainMicrotasks();
+
+		// First cap takes out hai-proxy; re-compose routes heavy-1 → github-copilot.
 		controller.handleMessageEnd({
 			errorMessage: "402: {}",
 			stopReason: "error",
 			provider: "gateway",
-			modelId: "heavy-hai-1",
+			modelId: "heavy-1",
 		});
+		microtasks.shift()!();
+		await drainMicrotasks();
+
+		// Second cap on heavy-1 now attributes to github-copilot, taking out the
+		// last healthy backend for the tier.
+		register.mockClear();
 		controller.handleMessageEnd({
 			errorMessage: "402: {}",
 			stopReason: "error",
 			provider: "gateway",
-			modelId: "heavy-copilot-1",
+			modelId: "heavy-1",
 		});
-		expect(microtasks).toHaveLength(1);
 		microtasks[0]();
 		await drainMicrotasks();
 

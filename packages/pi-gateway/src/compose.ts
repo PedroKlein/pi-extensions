@@ -77,6 +77,13 @@ export interface ComposeWarning {
 export interface ComposeResult {
 	models: GatewayModelEntry[];
 	warnings: ComposeWarning[];
+	/**
+	 * Map of emitted alias id (e.g. `heavy-2`) → the backend name it actually
+	 * routed to at compose time. Cap attribution (detect.ts) uses this instead
+	 * of parsing the alias name, since indexed aliases are backend-agnostic and
+	 * routing depends on live health.
+	 */
+	routing: Record<string, string>;
 }
 
 /**
@@ -123,6 +130,7 @@ export function composeGatewayModels(input: ComposeInput): ComposeResult {
 	const now = input.now ? input.now() : new Date();
 	const warnings: ComposeWarning[] = [];
 	const models: GatewayModelEntry[] = [];
+	const routing: Record<string, string> = {};
 
 	// Index backends by name for chain lookup.
 	const byName = new Map<string, ResolvedBackend>();
@@ -164,64 +172,80 @@ export function composeGatewayModels(input: ComposeInput): ComposeResult {
 		}
 	}
 
-	// 1. Family-neutral aliases.
+	// Indexed neutral aliases: `<tier>-<N>` (1-based). For each tier, pick the
+	// first HEALTHY backend in the effective chain that declares that tier and
+	// has a valid token, then emit one alias per model in that backend's ordered
+	// tier list. Diversity lives WITHIN the picked backend (heavy-1, heavy-2,
+	// ...). Failover is inherent: when the primary backend is unhealthy, the
+	// picker walks to the next backend and indexes into ITS list (t4 semantics).
 	for (const tierSlot of TIER_SLOTS) {
+		// (a) Canonical alias count K: the number of indexed aliases for this tier
+		// is defined by the FIRST backend in the effective chain that declares the
+		// tier, IGNORING health. This makes the alias set (heavy-1..heavy-K) stable
+		// across cap transitions — a caller pinned to `heavy-2` never sees it
+		// vanish when the primary backend caps.
+		let canonicalCount = 0;
+		for (const name of orderedNames) {
+			const b = byName.get(name);
+			const tier = b?.tiers.get(tierSlot);
+			if (tier && tier.models.length > 0) {
+				canonicalCount = tier.models.length;
+				break;
+			}
+		}
+		if (canonicalCount === 0) continue; // tier declared by no backend
+
+		// (b) Routing backend: the first HEALTHY backend with a valid token that
+		// declares the tier. This is where requests actually go.
 		let picked: { backend: ResolvedBackend; token: string } | undefined;
 		for (const name of orderedNames) {
 			const b = byName.get(name);
 			if (!b) continue;
 			if (isBackendUnhealthy(name, input.state, now)) continue;
 			const tier = b.tiers.get(tierSlot);
-			if (!tier) continue;
+			if (!tier || tier.models.length === 0) continue;
 			const token = authByBackend.get(name);
 			if (!token) continue;
 			picked = { backend: b, token };
 			break;
 		}
 		if (!picked) {
-			// Only warn if AT LEAST ONE backend declared this tier — otherwise it's
-			// simply "this deployment doesn't use that tier" and silence is right.
-			const anyDeclared = input.backends.some((b) => b.tiers.has(tierSlot));
-			if (anyDeclared) {
-				warnings.push({
-					kind: "no-healthy-backend-for-tier",
-					tierSlot,
-					message: `no healthy backend for tier '${tierSlot}' — neutral alias '${tierSlot}-1' omitted`,
-				});
-			}
+			warnings.push({
+				kind: "no-healthy-backend-for-tier",
+				tierSlot,
+				message: `no healthy backend for tier '${tierSlot}' — neutral aliases '${tierSlot}-*' omitted`,
+			});
 			continue;
 		}
-		models.push(makeEntry(`${tierSlot}-1`, tierSlot, picked.backend, picked.token));
-	}
 
-	// 2. Family-pinned aliases.
-	for (const b of input.backends) {
-		const suffix = backendFamilySuffix(b.name);
-		const token = authByBackend.get(b.name);
-		if (!token) continue;
-		for (const tierSlot of TIER_SLOTS) {
-			const tier = b.tiers.get(tierSlot);
-			if (!tier) continue;
-			models.push(makeEntry(`${tierSlot}-${suffix}-1`, tierSlot, b, token));
+		// (c) Emit heavy-1..heavy-K. Each index routes into the picked backend's
+		// list, CLAMPED to its length — when the router has fewer models than K
+		// (failover to a smaller backend), high indices reuse its last/best model.
+		// Diversity is best-effort; availability wins.
+		const tier = picked.backend.tiers.get(tierSlot);
+		if (!tier) continue;
+		for (let n = 1; n <= canonicalCount; n++) {
+			const idx = Math.min(n, tier.models.length) - 1;
+			const id = `${tierSlot}-${n}`;
+			models.push(makeEntry(id, picked.backend, tier.models[idx], picked.token));
+			routing[id] = picked.backend.name;
 		}
 	}
 
-	return { models, warnings };
+	return { models, warnings, routing };
 }
 
 function makeEntry(
 	id: string,
-	tierSlot: TierSlot,
 	backend: ResolvedBackend,
+	model: { realModelId: string; realModel: unknown },
 	bearerToken: string,
 ): GatewayModelEntry {
-	const tier = backend.tiers.get(tierSlot);
-	if (!tier) throw new Error(`makeEntry: backend ${backend.name} has no tier ${tierSlot}`);
-	const real = tier.realModel as Record<string, unknown> | undefined;
+	const real = model.realModel as Record<string, unknown> | undefined;
 
 	const entry: GatewayModelEntry = {
 		id,
-		name: `${id} → ${backend.name}/${tier.realModelId}`,
+		name: `${id} → ${backend.name}/${model.realModelId}`,
 		headers: { Authorization: `Bearer ${bearerToken}` },
 	};
 

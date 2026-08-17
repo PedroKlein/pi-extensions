@@ -22,7 +22,8 @@ describe("aliases.json loader — valid inputs", () => {
 	it("parses the full sample fixture from tests/fixtures", () => {
 		const cfg = parseAliasesConfig(readFileSync(FIXTURE, "utf8"), FIXTURE);
 		expect(cfg.fallbackChain).toEqual(["hai-proxy", "github-copilot"]);
-		expect(cfg.backends["hai-proxy"].tiers.heavy).toBe("anthropic--claude-sonnet-4-5");
+		// Single-string tiers normalize to 1-element arrays.
+		expect(cfg.backends["hai-proxy"].tiers.heavy).toEqual(["anthropic--claude-sonnet-4-5"]);
 		expect(cfg.backends["hai-proxy"].capStatusCodes).toEqual([402, 429]);
 	});
 
@@ -33,11 +34,45 @@ describe("aliases.json loader — valid inputs", () => {
 		});
 		const cfg = parseAliasesConfig(src);
 		expect(cfg.fallbackChain).toEqual(["hai-proxy"]);
-		expect(cfg.backends["hai-proxy"].tiers).toEqual({ heavy: "some/model" });
+		// Single string is normalized to a 1-element array.
+		expect(cfg.backends["hai-proxy"].tiers).toEqual({ heavy: ["some/model"] });
 		// Defaults applied
 		expect(cfg.backends["hai-proxy"].capStatusCodes).toEqual(DEFAULT_CAP_STATUS_CODES);
 		expect(cfg.backends["hai-proxy"].resetSchedule).toBeUndefined();
 		expect(cfg.backends["hai-proxy"].quotaHint).toBeUndefined();
+	});
+
+	it("accepts an ordered list of models per tier (indexed diversity)", () => {
+		const src = JSON.stringify({
+			fallbackChain: ["hai-proxy"],
+			backends: {
+				"hai-proxy": {
+					tiers: {
+						heavy: ["anthropic--claude-4.8-opus", "gpt-5.5"],
+						light: ["anthropic--claude-4.5-haiku", "gpt-5-mini"],
+					},
+				},
+			},
+		});
+		const cfg = parseAliasesConfig(src);
+		expect(cfg.backends["hai-proxy"].tiers.heavy).toEqual([
+			"anthropic--claude-4.8-opus",
+			"gpt-5.5",
+		]);
+		expect(cfg.backends["hai-proxy"].tiers.light).toEqual([
+			"anthropic--claude-4.5-haiku",
+			"gpt-5-mini",
+		]);
+	});
+
+	it("rejects an empty tier list with cause=semantic", () => {
+		const src = JSON.stringify({
+			fallbackChain: ["a"],
+			backends: { a: { tiers: { heavy: [] } } },
+		});
+		expect(() => parseAliasesConfig(src)).toThrowError(
+			expect.objectContaining({ cause: "semantic" }),
+		);
 	});
 
 	it("normalizes optional fields to defaults so downstream sees a stable shape", () => {
@@ -144,6 +179,6 @@ describe("aliases.json loader — filesystem round-trip", () => {
 			}),
 		);
 		const cfg = loadAliasesConfig(path);
-		expect(cfg.backends.a.tiers.light).toBe("m");
+		expect(cfg.backends.a.tiers.light).toEqual(["m"]);
 	});
 });

@@ -10,13 +10,13 @@ const CFG: AliasesConfig = {
 	backends: {
 		"hai-proxy": {
 			resetSchedule: "utc-midnight",
-			tiers: { heavy: "hai-heavy", light: "hai-light" },
+			tiers: { heavy: ["hai-heavy"], light: ["hai-light"] },
 			quotaHint: "hai-daily-eur",
 			capStatusCodes: [402, 429],
 		},
 		"github-copilot": {
 			resetSchedule: "utc-monthly-1st",
-			tiers: { heavy: "copilot-heavy" },
+			tiers: { heavy: ["copilot-heavy"] },
 			quotaHint: undefined,
 			capStatusCodes: [402],
 		},
@@ -86,16 +86,18 @@ describe("classifyCapEvent", () => {
 	const HAI_402 = '402: {"error":{"cap_eur":"50.00","code":"DAILY_CAP_EXCEEDED","message":"Daily spending limit reached (€50.27 of €50.00)","spent_eur":"50.27","type":"billing_error"}}';
 	const NOW = new Date("2025-01-15T12:30:00.000Z");
 
-	it("marks hai-proxy unhealthy on 402 through the heavy-hai-1 pinned alias", () => {
+	it("attributes a cap hit via the compose-time routing map (indexed alias)", () => {
+		const routing = { "heavy-1": "hai-proxy", "heavy-2": "hai-proxy" };
 		const r = classifyCapEvent(
 			{
 				errorMessage: HAI_402,
 				stopReason: "error",
 				provider: "gateway",
-				modelId: "heavy-hai-1",
+				modelId: "heavy-2",
 			},
 			CFG,
 			NOW,
+			routing,
 		);
 		expect(r.capHit).toBe(true);
 		expect(r.backendName).toBe("hai-proxy");
@@ -104,7 +106,27 @@ describe("classifyCapEvent", () => {
 		expect(r.body).toContain("DAILY_CAP_EXCEEDED");
 	});
 
-	it("attributes a heavy-1 neutral hit to the first fallback-chain backend that has the slot", () => {
+	it("routing map wins over the tier-slot fallback (heavy-1 routed to secondary under failover)", () => {
+		// heavy-1 is normally hai-proxy, but under failover it routed to copilot.
+		// The routing map is authoritative, so the cap is attributed to copilot.
+		const routing = { "heavy-1": "github-copilot" };
+		const r = classifyCapEvent(
+			{
+				errorMessage: "402: {}",
+				stopReason: "error",
+				provider: "gateway",
+				modelId: "heavy-1",
+			},
+			CFG,
+			NOW,
+			routing,
+		);
+		expect(r.capHit).toBe(true);
+		expect(r.backendName).toBe("github-copilot");
+		expect(r.entry?.until).toBe("2025-02-01T00:00:00.000Z");
+	});
+
+	it("falls back to the first chain backend for the tier when no routing map is given", () => {
 		const r = classifyCapEvent(
 			{
 				errorMessage: HAI_402,
@@ -116,25 +138,23 @@ describe("classifyCapEvent", () => {
 			NOW,
 		);
 		expect(r.capHit).toBe(true);
-		// hai-proxy is first in the chain and has heavy → attribution lands there.
+		// hai-proxy is first in the chain and declares heavy → attribution lands there.
 		expect(r.backendName).toBe("hai-proxy");
 	});
 
-	it("marks github-copilot unhealthy on 402 through heavy-copilot-1", () => {
+	it("unknown alias with no routing entry → capHit false (never mis-attributes)", () => {
 		const r = classifyCapEvent(
 			{
 				errorMessage: "402: {}",
 				stopReason: "error",
 				provider: "gateway",
-				modelId: "heavy-copilot-1",
+				modelId: "bogus-9",
 			},
 			CFG,
 			NOW,
+			{},
 		);
-		expect(r.capHit).toBe(true);
-		expect(r.backendName).toBe("github-copilot");
-		// utc-monthly-1st preset → Feb 1
-		expect(r.entry?.until).toBe("2025-02-01T00:00:00.000Z");
+		expect(r.capHit).toBe(false);
 	});
 
 	it("ignores 200 (successful) responses", () => {

@@ -42,6 +42,8 @@ export interface RegisterGatewayResult {
 	modelsRegistered: number;
 	resolverWarnings: readonly ResolverWarning[];
 	composeWarnings: readonly ComposeWarning[];
+	/** alias id → backend name, from the compose step. Used for cap attribution. */
+	routing: Record<string, string>;
 }
 
 /**
@@ -69,7 +71,7 @@ export async function registerGatewayProvider(
 	}
 
 	// 3. Compose.
-	const { models, warnings: composeWarnings } = composeGatewayModels({
+	const { models, warnings: composeWarnings, routing } = composeGatewayModels({
 		fallbackChain: aliases.fallbackChain,
 		backends,
 		state,
@@ -90,5 +92,6 @@ export async function registerGatewayProvider(
 		modelsRegistered: models.length,
 		resolverWarnings,
 		composeWarnings,
+		routing,
 	};
 }

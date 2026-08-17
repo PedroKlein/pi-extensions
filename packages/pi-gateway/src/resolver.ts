@@ -44,10 +44,21 @@ export type AuthMode = "command" | "env" | "static" | "resolved" | "unknown";
  */
 export type RealModel = unknown;
 
-export interface ResolvedTier {
-	tierSlot: TierSlot;
+/** A single resolved model within a tier's ordered list. */
+export interface ResolvedModel {
 	realModelId: string;
 	realModel: RealModel;
+}
+
+export interface ResolvedTier {
+	tierSlot: TierSlot;
+	/**
+	 * Ordered list of resolved models for this tier. Index N (1-based) maps to
+	 * the `<tier>-N` gateway alias. Unresolvable model IDs are dropped (with a
+	 * warning) so a partial list still yields usable aliases. Never empty — a
+	 * tier whose models all fail to resolve is omitted from the map entirely.
+	 */
+	models: ResolvedModel[];
 }
 
 export interface ResolvedBackend {
@@ -115,21 +126,26 @@ export function resolveBackends(
 		const authMode = classifyAuthMode(apiKeyRaw, cfg);
 
 		const tiers = new Map<TierSlot, ResolvedTier>();
-		for (const [slotRaw, realModelId] of Object.entries(backendCfg.tiers)) {
+		for (const [slotRaw, modelIds] of Object.entries(backendCfg.tiers)) {
 			const tierSlot = slotRaw as TierSlot;
-			if (!realModelId) continue;
-			const realModel = registry.find(name, realModelId);
-			if (!realModel) {
-				warnings.push({
-					kind: "unknown-model",
-					backend: name,
-					tierSlot,
-					realModelId,
-					message: `backend '${name}' tier '${tierSlot}' references unknown real model '${realModelId}' — omitting this alias`,
-				});
-				continue;
+			if (!modelIds || modelIds.length === 0) continue;
+			const models: ResolvedModel[] = [];
+			for (const realModelId of modelIds) {
+				const realModel = registry.find(name, realModelId);
+				if (!realModel) {
+					warnings.push({
+						kind: "unknown-model",
+						backend: name,
+						tierSlot,
+						realModelId,
+						message: `backend '${name}' tier '${tierSlot}' references unknown real model '${realModelId}' — omitting this alias`,
+					});
+					continue;
+				}
+				models.push({ realModelId, realModel });
 			}
-			tiers.set(tierSlot, { tierSlot, realModelId, realModel });
+			// Omit the tier entirely if every model failed to resolve.
+			if (models.length > 0) tiers.set(tierSlot, { tierSlot, models });
 		}
 
 		backends.push({

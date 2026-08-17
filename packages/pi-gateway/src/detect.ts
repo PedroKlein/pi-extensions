@@ -50,6 +50,7 @@ export function classifyCapEvent(
 	event: CapEventInput,
 	aliases: AliasesConfig,
 	now: Date = new Date(),
+	routing?: Record<string, string>,
 ): CapEventOutcome {
 	if (event.stopReason !== "error") return { capHit: false };
 	if (!event.errorMessage) return { capHit: false };
@@ -58,7 +59,7 @@ export function classifyCapEvent(
 	// Only fires for the gateway provider itself — if the message went out via
 	// a different provider (e.g. user selected anthropic directly), we don't
 	// track it.
-	const backendName = resolveGatewayModelToBackend(event.provider, event.modelId, aliases);
+	const backendName = resolveGatewayModelToBackend(event.provider, event.modelId, aliases, routing);
 	if (!backendName) return { capHit: false };
 
 	const parsed = parseStatusPrefix(event.errorMessage);
@@ -113,42 +114,36 @@ export function applyCapOutcome(
 }
 
 /**
- * Given a gateway alias id and the aliases config, figure out which backend
- * the alias currently routes to.
+ * Given a gateway alias id, figure out which backend the alias routed to.
  *
- * For family-pinned aliases (e.g. `heavy-hai-1`), the backend is unambiguous.
- * For family-neutral aliases (e.g. `heavy-1`), we can't determine the backend
- * from static aliases alone — but the caller passes `ctx.model` which has
- * already resolved to a specific baseUrl. In practice this attribution runs
- * during error handling; the caller must decide whether to attribute
- * ambiguous cases (see docs). For now we return the family-pinned backend
- * or the first backend in fallbackChain that declares this tier.
+ * Indexed neutral aliases (e.g. `heavy-2`) are backend-agnostic by design, and
+ * their routing depends on live health at compose time. The authoritative
+ * source is therefore the `routing` map produced by composeGatewayModels
+ * (alias id → backend name). When that map is provided and contains the alias,
+ * it wins.
+ *
+ * Fallback (map absent, e.g. a stale event that predates the latest compose):
+ * best-effort attribution to the first backend in the fallback chain that
+ * declares the alias's tier slot. This can be imprecise under failover, so the
+ * routing map is strongly preferred.
  */
 function resolveGatewayModelToBackend(
 	provider: string,
 	modelId: string | undefined,
 	aliases: AliasesConfig,
+	routing?: Record<string, string>,
 ): string | undefined {
 	if (provider !== "gateway") return undefined;
 	if (!modelId) return undefined;
 
-	// Family-pinned: "<slot>-<family-suffix>-1"
-	const familyMatch = modelId.match(/^(heavy|medium|light|xlight|minimal)-([a-z0-9]+)-1$/);
-	if (familyMatch) {
-		const suffix = familyMatch[2];
-		for (const name of Object.keys(aliases.backends)) {
-			if (backendMatchesSuffix(name, suffix)) return name;
-		}
-		return undefined;
-	}
+	// Authoritative: the compose-time routing map.
+	if (routing && modelId in routing) return routing[modelId];
 
-	// Family-neutral: "<slot>-1". Attribute to the first backend in chain that
-	// declares this tier — this is a best-effort attribution. In practice P4-T2
-	// takes the current composed model list (which encodes actual routing) into
-	// account; the message_end handler can pass a `resolvedBackend` override.
-	const neutralMatch = modelId.match(/^(heavy|medium|light|xlight|minimal)-1$/);
-	if (neutralMatch) {
-		const slot = neutralMatch[1];
+	// Best-effort fallback: parse the tier slot from the indexed alias and
+	// attribute to the first chain backend that declares it.
+	const indexedMatch = modelId.match(/^(heavy|medium|light|xlight|minimal)-(\d+)$/);
+	if (indexedMatch) {
+		const slot = indexedMatch[1];
 		for (const name of aliases.fallbackChain) {
 			const backend = aliases.backends[name];
 			if (backend && slot in backend.tiers) return name;
@@ -156,11 +151,6 @@ function resolveGatewayModelToBackend(
 	}
 
 	return undefined;
-}
-
-function backendMatchesSuffix(backendName: string, suffix: string): boolean {
-	const parts = backendName.split(/[-_]/).filter(Boolean);
-	return parts.includes(suffix);
 }
 
 /** Parse "<status>: <body>" leading prefix from an errorMessage. */

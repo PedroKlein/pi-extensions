@@ -36,6 +36,9 @@ export class GatewayController {
 	private state: GatewayState;
 	private dirty = false;
 	private previousUnhealthy: Record<string, string> = {};
+	/** alias id → backend name from the most recent compose. Cap attribution
+	 * for backend-agnostic indexed aliases relies on this. */
+	private routing: Record<string, string> = {};
 	private readonly opts: Required<Omit<ControllerOptions, "now" | "scheduleMicrotask">> & {
 		now: () => Date;
 		scheduleMicrotask: (fn: () => void) => void;
@@ -65,7 +68,7 @@ export class GatewayController {
 	 * re-registration, and returns true.
 	 */
 	handleMessageEnd(event: CapEventInput): boolean {
-		const outcome = classifyCapEvent(event, this.opts.aliases, this.opts.now());
+		const outcome = classifyCapEvent(event, this.opts.aliases, this.opts.now(), this.routing);
 		if (!outcome.capHit || !outcome.backendName || !outcome.entry) return false;
 
 		this.state = updateState(this.opts.statePath, (cur) =>
@@ -129,13 +132,14 @@ export class GatewayController {
 		this.previousUnhealthy = current;
 
 		try {
-			await registerGatewayProvider({
+			const result = await registerGatewayProvider({
 				aliases: this.opts.aliases,
 				state: this.state,
 				registry: this.opts.registry,
 				register: this.opts.register,
 				now: this.opts.now,
 			});
+			this.routing = result.routing;
 		} catch (err) {
 			this.opts.notify(`gateway re-registration failed: ${(err as Error).message}`, "error");
 			return;

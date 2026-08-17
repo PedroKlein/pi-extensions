@@ -31,17 +31,20 @@ function realModel(id: string, provider: string, extra?: Record<string, unknown>
 	};
 }
 
+// tierMap values may be a single model id or an ordered list of ids.
 function backend(
 	name: string,
-	tierMap: Record<string, string>,
+	tierMap: Record<string, string | string[]>,
 	extra?: Partial<ResolvedBackend>,
 ): ResolvedBackend {
 	const tiers = new Map();
-	for (const [slot, modelId] of Object.entries(tierMap)) {
+	const cfgTiers: Record<string, string[]> = {};
+	for (const [slot, value] of Object.entries(tierMap)) {
+		const ids = Array.isArray(value) ? value : [value];
+		cfgTiers[slot] = ids;
 		tiers.set(slot as (typeof TIER_SLOTS)[number], {
 			tierSlot: slot,
-			realModelId: modelId,
-			realModel: realModel(modelId, name),
+			models: ids.map((id) => ({ realModelId: id, realModel: realModel(id, name) })),
 		});
 	}
 	return {
@@ -53,7 +56,7 @@ function backend(
 		tiers,
 		config: {
 			resetSchedule: "utc-midnight",
-			tiers: tierMap,
+			tiers: cfgTiers,
 			quotaHint: undefined,
 			capStatusCodes: [402, 429],
 		},
@@ -72,7 +75,7 @@ const ALL_TIERS = {
 // -- Tests ------------------------------------------------------------------
 
 describe("composeGatewayModels — output counts", () => {
-	it("two backends with all 5 tiers → 5 neutral + 10 pinned = 15 outputs", () => {
+	it("two backends, all single-model tiers → 5 indexed neutral aliases (no family-pinned)", () => {
 		const backends = [backend("hai-proxy", ALL_TIERS), backend("github-copilot", ALL_TIERS)];
 		const input: ComposeInput = {
 			fallbackChain: ["hai-proxy", "github-copilot"],
@@ -82,15 +85,39 @@ describe("composeGatewayModels — output counts", () => {
 		};
 		const { models, warnings } = composeGatewayModels(input);
 		expect(warnings).toEqual([]);
-		expect(models).toHaveLength(15);
+		expect(models).toHaveLength(5);
 		const ids = models.map((m) => m.id).sort();
 		expect(ids).toEqual(
-			[
-				"heavy-1", "medium-1", "light-1", "xlight-1", "minimal-1",
-				"heavy-hai-1", "medium-hai-1", "light-hai-1", "xlight-hai-1", "minimal-hai-1",
-				"heavy-copilot-1", "medium-copilot-1", "light-copilot-1", "xlight-copilot-1", "minimal-copilot-1",
-			].sort(),
+			["heavy-1", "medium-1", "light-1", "xlight-1", "minimal-1"].sort(),
 		);
+		// No family-pinned aliases (e.g. heavy-hai-1) are emitted anymore.
+		expect(models.some((m) => /-[a-z]+-1$/.test(m.id))).toBe(false);
+		// heavy-1 routes to the primary backend (hai-proxy).
+		const heavy1 = models.find((m) => m.id === "heavy-1");
+		expect(heavy1?.baseUrl).toBe("https://hai-proxy.example.com");
+	});
+
+	it("indexed diversity within one backend: heavy list [opus, gpt] → heavy-1, heavy-2", () => {
+		const backends = [
+			backend("hai-proxy", { heavy: ["opus", "gpt"], light: ["haiku", "mini"] }),
+		];
+		const { models, warnings } = composeGatewayModels({
+			fallbackChain: ["hai-proxy"],
+			backends,
+			state: emptyState(),
+			resolveApiKey: () => "tok",
+		});
+		expect(warnings).toEqual([]);
+		expect(models.map((m) => m.id).sort()).toEqual(
+			["heavy-1", "heavy-2", "light-1", "light-2"].sort(),
+		);
+		// Each alias carries its own underlying model's capabilities. The mock's
+		// realModel(id).name is `${id} name`, which proves index→model routing.
+		const byId = Object.fromEntries(models.map((m) => [m.id, m]));
+		expect(byId["heavy-1"].name).toBe("opus name");
+		expect(byId["heavy-2"].name).toBe("gpt name");
+		expect(byId["light-1"].name).toBe("haiku name");
+		expect(byId["light-2"].name).toBe("mini name");
 	});
 
 	it("disjoint tier slots: neutral aliases fill from whichever backend has each slot", () => {
@@ -105,15 +132,11 @@ describe("composeGatewayModels — output counts", () => {
 			resolveApiKey: (b) => `tok-${b.name}`,
 		};
 		const { models, warnings } = composeGatewayModels(input);
-		// Neutral: heavy-1, medium-1, light-1, xlight-1 (no minimal — no backend has it)
-		// Pinned: 2 hai + 2 copilot = 4
-		expect(models).toHaveLength(8);
+		// Neutral only: heavy-1, medium-1 (from hai), light-1, xlight-1 (from copilot).
+		// No minimal — no backend declares it. No family-pinned aliases.
+		expect(models).toHaveLength(4);
 		expect(models.map((m) => m.id).sort()).toEqual(
-			[
-				"heavy-1", "medium-1", "light-1", "xlight-1",
-				"heavy-hai-1", "medium-hai-1",
-				"light-copilot-1", "xlight-copilot-1",
-			].sort(),
+			["heavy-1", "medium-1", "light-1", "xlight-1"].sort(),
 		);
 		// No warning because minimal is simply not declared anywhere.
 		expect(warnings).toEqual([]);
@@ -123,7 +146,7 @@ describe("composeGatewayModels — output counts", () => {
 		expect(heavy1?.baseUrl).toBe("https://hai-proxy.example.com");
 	});
 
-	it("single-backend: 5 neutral + 5 pinned = 10 outputs", () => {
+	it("single-backend, single-model tiers: 5 indexed neutral aliases", () => {
 		const backends = [backend("hai-proxy", ALL_TIERS)];
 		const { models } = composeGatewayModels({
 			fallbackChain: ["hai-proxy"],
@@ -131,7 +154,8 @@ describe("composeGatewayModels — output counts", () => {
 			state: emptyState(),
 			resolveApiKey: () => "tok",
 		});
-		expect(models).toHaveLength(10);
+		expect(models).toHaveLength(5);
+		expect(models.some((m) => /-[a-z]+-1$/.test(m.id))).toBe(false);
 	});
 });
 
@@ -144,7 +168,7 @@ describe("composeGatewayModels — output shape", () => {
 			state: emptyState(),
 			resolveApiKey: () => "the-token",
 		});
-		expect(models).toHaveLength(2);
+		expect(models).toHaveLength(1);
 		for (const m of models) {
 			expect(m.baseUrl).toBe("https://hai-proxy.example.com");
 			expect(m.api).toBe("openai-completions");
@@ -158,6 +182,68 @@ describe("composeGatewayModels — output shape", () => {
 			expect(m.thinkingLevelMap).toBeDefined();
 			expect(m.compat).toBeDefined();
 		}
+	});
+});
+
+describe("composeGatewayModels — indexed failover fallthrough", () => {
+	it("primary capped → heavy-2 routes to the secondary backend's list position 2", () => {
+		const backends = [
+			backend("hai-proxy", { heavy: ["hai-opus", "hai-gpt"] }),
+			backend("sap-ai-core", { heavy: ["sap-opus", "sap-gpt"] }),
+		];
+		const state: GatewayState = {
+			...emptyState(),
+			unhealthyUntil: {
+				"hai-proxy": {
+					until: new Date(Date.now() + 3_600_000).toISOString(),
+					reason: "cap",
+				},
+			},
+		};
+		const { models } = composeGatewayModels({
+			fallbackChain: ["hai-proxy", "sap-ai-core"],
+			backends,
+			state,
+			resolveApiKey: (b) => `tok-${b.name}`,
+		});
+		const byId = Object.fromEntries(models.map((m) => [m.id, m]));
+		// Both indexed aliases now served by the healthy secondary backend.
+		expect(byId["heavy-1"].name).toBe("sap-opus name");
+		expect(byId["heavy-2"].name).toBe("sap-gpt name");
+		expect(byId["heavy-1"].baseUrl).toBe("https://sap-ai-core.example.com");
+	});
+
+	it("alias count is stable (set by primary); index clamps when router has fewer models", () => {
+		// Primary declares 2 heavy models → canonical alias set is heavy-1, heavy-2.
+		// Secondary declares only 1. When the primary is capped, BOTH aliases stay
+		// referenceable: heavy-2 clamps to the secondary's single (last/best) model
+		// so a caller pinned to gateway/heavy-2 keeps working.
+		const backends = [
+			backend("hai-proxy", { heavy: ["hai-opus", "hai-gpt"] }),
+			backend("sap-ai-core", { heavy: ["sap-only"] }),
+		];
+		const state: GatewayState = {
+			...emptyState(),
+			unhealthyUntil: {
+				"hai-proxy": {
+					until: new Date(Date.now() + 3_600_000).toISOString(),
+					reason: "cap",
+				},
+			},
+		};
+		const { models } = composeGatewayModels({
+			fallbackChain: ["hai-proxy", "sap-ai-core"],
+			backends,
+			state,
+			resolveApiKey: (b) => `tok-${b.name}`,
+		});
+		const ids = models.map((m) => m.id).sort();
+		expect(ids).toEqual(["heavy-1", "heavy-2"]);
+		const byId = Object.fromEntries(models.map((m) => [m.id, m]));
+		// Both clamp to the secondary's only model.
+		expect(byId["heavy-1"].name).toBe("sap-only name");
+		expect(byId["heavy-2"].name).toBe("sap-only name");
+		expect(byId["heavy-2"].baseUrl).toBe("https://sap-ai-core.example.com");
 	});
 });
 
@@ -223,8 +309,9 @@ describe("composeGatewayModels — fallback chain semantics", () => {
 			state,
 			resolveApiKey: () => "tok",
 		});
-		// Family-pinned still emitted; neutral not.
-		expect(models.map((m) => m.id)).toEqual(["heavy-hai-1"]);
+		// No family-pinned fallback anymore: the only backend is unhealthy, so
+		// no aliases are emitted and a warning is produced.
+		expect(models).toEqual([]);
 		expect(warnings).toHaveLength(1);
 		expect(warnings[0].kind).toBe("no-healthy-backend-for-tier");
 		expect(warnings[0].tierSlot).toBe("heavy");
@@ -243,11 +330,10 @@ describe("composeGatewayModels — auth resolution failures", () => {
 			state: emptyState(),
 			resolveApiKey: (b) => (b.name === "hai-proxy" ? undefined : "tok"),
 		});
-		// heavy-1 falls through to copilot; hai family-pinned is dropped for missing token.
+		// heavy-1 falls through to copilot; hai contributes nothing (no token).
 		const heavy1 = models.find((m) => m.id === "heavy-1");
 		expect(heavy1?.headers.Authorization).toBe("Bearer tok");
-		expect(models.find((m) => m.id === "heavy-hai-1")).toBeUndefined();
-		expect(models.find((m) => m.id === "heavy-copilot-1")).toBeDefined();
+		expect(heavy1?.baseUrl).toBe("https://github-copilot.example.com");
 	});
 });
 

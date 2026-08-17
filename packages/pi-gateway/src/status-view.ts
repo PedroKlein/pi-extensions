@@ -16,7 +16,7 @@
 
 import type { AliasesConfig } from "./config.js";
 import { TIER_SLOTS } from "./config.js";
-import { backendFamilySuffix, isBackendUnhealthy } from "./compose.js";
+import { isBackendUnhealthy } from "./compose.js";
 import type { GatewayState } from "./state.js";
 
 export interface StatusRenderInput {
@@ -109,40 +109,41 @@ function renderAliases(input: StatusRenderInput, now: Date): string[] {
 	for (const n of chain) if (!ordered.includes(n)) ordered.push(n);
 	for (const n of Object.keys(input.aliases.backends)) if (!ordered.includes(n)) ordered.push(n);
 
-	// Family-neutral aliases
+	// Indexed neutral aliases: <tier>-<N>. The alias count K is set by the first
+	// backend in the effective chain that declares the tier (health-agnostic),
+	// keeping the alias set stable. Routing targets the first HEALTHY backend,
+	// with the index clamped to that backend's list length.
 	for (const slot of TIER_SLOTS) {
-		let picked: string | undefined;
+		// Canonical count from the first backend (any health) declaring the tier.
+		let canonicalCount = 0;
 		for (const name of ordered) {
-			const b = input.aliases.backends[name];
-			if (!b) continue;
-			if (isBackendUnhealthy(name, input.state, now)) continue;
-			if (slot in b.tiers) {
-				picked = name;
+			const list = input.aliases.backends[name]?.tiers[slot];
+			if (list && list.length > 0) {
+				canonicalCount = list.length;
 				break;
 			}
 		}
-		if (picked) {
-			rows.push(
-				`${`${slot}-1`.padEnd(17)} ${picked}/${input.aliases.backends[picked].tiers[slot]}`,
-			);
-		} else {
-			// Only show a "no route" row if at least one backend declared this tier.
-			const anyDeclared = Object.values(input.aliases.backends).some((b) => slot in b.tiers);
-			if (anyDeclared) {
-				rows.push(`${`${slot}-1`.padEnd(17)} (no healthy backend)`);
-			}
-		}
-	}
+		if (canonicalCount === 0) continue;
 
-	// Family-pinned aliases
-	for (const [name, b] of Object.entries(input.aliases.backends)) {
-		const suffix = backendFamilySuffix(name);
-		for (const slot of TIER_SLOTS) {
-			if (slot in b.tiers) {
-				rows.push(
-					`${`${slot}-${suffix}-1`.padEnd(17)} ${name}/${b.tiers[slot]}`,
-				);
+		// First healthy backend that declares the tier.
+		let picked: string | undefined;
+		for (const name of ordered) {
+			const list = input.aliases.backends[name]?.tiers[slot];
+			if (!list || list.length === 0) continue;
+			if (isBackendUnhealthy(name, input.state, now)) continue;
+			picked = name;
+			break;
+		}
+
+		for (let n = 1; n <= canonicalCount; n++) {
+			const id = `${slot}-${n}`;
+			if (!picked) {
+				rows.push(`${id.padEnd(17)} (no healthy backend)`);
+				continue;
 			}
+			const list = input.aliases.backends[picked].tiers[slot]!;
+			const model = list[Math.min(n, list.length) - 1];
+			rows.push(`${id.padEnd(17)} ${picked}/${model}`);
 		}
 	}
 	return rows;

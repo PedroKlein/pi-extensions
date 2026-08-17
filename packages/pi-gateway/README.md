@@ -1,13 +1,20 @@
 # pi-gateway
 
-Virtual provider for [Pi](https://pi.dev) that exposes stable tier aliases —
-`heavy-1`, `medium-1`, `light-1`, `xlight-1`, `minimal-1` — routing to
-already-registered pi providers with automatic failover on cap hits (HTTP 402 /
-429).
+Virtual provider for [Pi](https://pi.dev) that exposes stable, **provider-agnostic
+tier aliases** — `heavy-1`, `heavy-2`, `medium-1`, `light-1`, `light-2`, … —
+routing to already-registered pi providers with automatic failover on cap hits
+(HTTP 402 / 429).
 
-Reference `gateway/heavy-1` from prompts, extensions, and settings without
-tying yourself to a specific backend. When one backend hits its daily cap, the
-alias transparently swaps to the next healthy backend in your fallback chain.
+The number in `<tier>-<N>` is a **diversity index**: each tier declares an
+*ordered list* of models, and `heavy-1`, `heavy-2` route to the first, second,
+… model in that list. This lets you keep several distinct models per tier
+(e.g. `heavy-1` = Claude Opus, `heavy-2` = GPT-5.5) behind names that reveal
+nothing about the backend underneath.
+
+Reference `gateway/heavy-2` from prompts, extensions, subagents, and settings
+without tying yourself to a specific backend. When a backend hits its daily
+cap, the alias transparently fails over to the next healthy backend in your
+fallback chain — the alias set stays stable so pinned references never break.
 
 ## Install
 
@@ -29,10 +36,20 @@ using `gateway/heavy-1`, `gateway/medium-1`, etc. anywhere pi accepts a
 
 **Aliases emitted:**
 
-| Alias | Kind | Routes to |
-|-------|------|-----------|
-| `heavy-1`, `medium-1`, `light-1`, `xlight-1`, `minimal-1` | Family-neutral | First healthy backend in the fallback chain that declares this tier |
-| `<tier>-<family>-1` (e.g. `heavy-hai-1`, `heavy-copilot-1`) | Family-pinned | Named backend, always — even when unhealthy |
+| Alias | Routes to |
+|-------|-----------|
+| `<tier>-<N>` (e.g. `heavy-1`, `heavy-2`, `light-1`) | The N-th model (1-based) in the tier's ordered list, served by the first healthy backend in the fallback chain that declares the tier. Provider-agnostic. |
+
+The alias **count** per tier (how many `<tier>-<N>` exist) is fixed by the
+first backend in the chain that declares the tier — this keeps the alias set
+stable across cap transitions. Under failover, the index routes into the
+healthy backend's list, **clamped** to its length: if that backend has fewer
+models, the high indices reuse its last (best) model. Diversity is best-effort;
+availability wins.
+
+> **Note.** Family-pinned aliases (`heavy-hai-1` etc.) were **removed** — the
+> alias names are intentionally backend-agnostic. Use `/gateway force <backend>`
+> to pin routing to a specific backend when you need it.
 
 **Commands:**
 
@@ -59,38 +76,45 @@ The config is a **pure mapping** — it never duplicates provider settings
 (baseUrl, apiKey, api). Those live on already-registered pi providers; the
 gateway reads them from `ctx.modelRegistry` at re-register time.
 
+Each tier value is either a **single model ID** or an **ordered list** of model
+IDs. A list declares indexed diversity: index 1 → `<tier>-1`, index 2 →
+`<tier>-2`, and so on. A single string is shorthand for a 1-element list.
+
 ```json
 {
-  "fallbackChain": ["hai-proxy", "github-copilot"],
+  "fallbackChain": ["hai-proxy", "sap-ai-core"],
   "backends": {
     "hai-proxy": {
       "resetSchedule": "utc-midnight",
       "tiers": {
-        "heavy":   "anthropic--claude-sonnet-4-5",
-        "medium":  "anthropic--claude-haiku-4-5",
-        "light":   "openai--gpt-5-mini",
-        "xlight":  "openai--gpt-5-nano",
-        "minimal": "openai--gpt-5-nano"
+        "heavy":   ["anthropic--claude-4.8-opus", "gpt-5.5"],
+        "medium":  "anthropic--claude-4.6-sonnet",
+        "light":   ["anthropic--claude-4.5-haiku", "gpt-5-mini"],
+        "xlight":  "gemini-2.5-flash-lite",
+        "minimal": "gemini-2.5-flash-lite"
       },
       "quotaHint": "hai-daily-eur",
       "capStatusCodes": [402, 429]
     },
-    "github-copilot": {
-      "resetSchedule": "utc-monthly-1st",
+    "sap-ai-core": {
       "tiers": {
-        "heavy":  "claude-sonnet-4-5",
-        "medium": "claude-haiku-4-5",
-        "light":  "gpt-4o-mini"
+        "heavy":  ["claude-4.8-opus", "gpt-5.5"],
+        "medium": "claude-4.6-sonnet",
+        "light":  ["claude-4.5-haiku", "gpt-5-mini"]
       }
     }
   }
 }
 ```
 
+With the config above, `hai-proxy` alone yields `gateway/heavy-1`
+(Claude 4.8 Opus) and `gateway/heavy-2` (GPT-5.5) — two distinct models on one
+backend, named agnostically.
+
 **Field reference:**
 
-- `fallbackChain` — ordered list of backend names. First healthy backend that declares a given tier wins routing for that neutral alias.
-- `backends[name].tiers` — map of `heavy | medium | light | xlight | minimal` → real model ID as registered by the backing pi provider. At least one required.
+- `fallbackChain` — ordered list of backend names. First healthy backend that declares a given tier wins routing for that tier's indexed aliases.
+- `backends[name].tiers` — map of `heavy | medium | light | xlight | minimal` → a model ID **or an ordered list of model IDs** as registered by the backing pi provider. At least one tier required; a list may not be empty.
 - `backends[name].resetSchedule` (optional) — named preset for computing "next reset instant" after a cap hit:
   - `utc-midnight` — daily reset at 00:00 UTC
   - `utc-monthly-1st` — monthly reset at 00:00 UTC on the 1st
@@ -111,7 +135,7 @@ too.
   "unhealthyUntil": {
     "hai-proxy": {
       "until": "2025-01-16T00:00:00.000Z",
-      "reason": "HTTP 402 on heavy-hai-1 — cap hit",
+      "reason": "HTTP 402 on heavy-1 — cap hit",
       "quota": { "spent": 50.27, "cap": 50.00, "currency": "EUR" }
     }
   },
@@ -135,12 +159,22 @@ debounces a re-registration of the `gateway` provider (multiple
 near-simultaneous transitions coalesce into one call), and emits a user-visible
 toast with the backend name and reset ETA.
 
-**Family-neutral routing.** When the composer emits `heavy-1`, it picks the
-first backend in the effective chain (`activeBackendOverride` first, then
-`fallbackChainOverride ?? fallbackChain`, then any remaining backends) that is
-both healthy and declares the `heavy` tier. Unhealthy backends drop out
-transparently; family-pinned aliases still route to their named backend even
-when unhealthy.
+**Indexed routing + failover.** For each tier the composer first fixes the
+alias count `K` from the first backend in the effective chain
+(`activeBackendOverride` first, then `fallbackChainOverride ?? fallbackChain`,
+then any remaining backends) that declares the tier — *ignoring health*, so the
+alias set `<tier>-1..<tier>-K` is stable across cap transitions. It then picks
+the first **healthy** backend with a valid token that declares the tier and
+emits `<tier>-1..K` routing into that backend's list, clamping the index to its
+length. Unhealthy backends drop out transparently; when the router has fewer
+models than `K`, high indices reuse its last model.
+
+**Cap attribution.** Because indexed aliases are backend-agnostic, a cap hit on
+`heavy-2` can't be attributed by name. The composer emits an `alias → backend`
+routing map alongside the model list; the controller keeps the latest map and
+uses it to attribute 402/429s to the exact backend the alias routed to. If no
+map entry exists (e.g. a stale event), it falls back to the first chain backend
+declaring that tier slot.
 
 **Token freshness.** Each emitted model entry embeds a literal
 `Bearer <resolved-token>` header, resolved via

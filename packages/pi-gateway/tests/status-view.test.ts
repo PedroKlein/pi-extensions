@@ -19,13 +19,13 @@ const CFG: AliasesConfig = {
 	backends: {
 		"hai-proxy": {
 			resetSchedule: "utc-midnight",
-			tiers: { heavy: "hai-heavy", light: "hai-light" },
+			tiers: { heavy: ["hai-opus", "hai-gpt"], light: ["hai-light"] },
 			quotaHint: "hai-daily-eur",
 			capStatusCodes: [402, 429],
 		},
 		"github-copilot": {
 			resetSchedule: "utc-monthly-1st",
-			tiers: { heavy: "copilot-heavy" },
+			tiers: { heavy: ["copilot-heavy"] },
 			quotaHint: undefined,
 			capStatusCodes: [402],
 		},
@@ -75,14 +75,26 @@ describe("renderStatusSections — four sections present", () => {
 		expect(row).toContain("50.27/50.00 EUR");
 	});
 
-	it("aliases section shows both neutral and family-pinned rows", () => {
+	it("aliases section shows indexed neutral rows and no family-pinned rows", () => {
 		const s = renderStatusSections({ aliases: CFG, state: emptyState(), now: NOW });
 		const ids = s.aliases.filter((r) => /^\w+-/.test(r.trim())).map((r) => r.trim().split(/\s+/)[0]);
+		// Indexed diversity from hai-proxy's 2-model heavy list.
 		expect(ids).toContain("heavy-1");
+		expect(ids).toContain("heavy-2");
 		expect(ids).toContain("light-1");
-		expect(ids).toContain("heavy-hai-1");
-		expect(ids).toContain("light-hai-1");
-		expect(ids).toContain("heavy-copilot-1");
+		// No family-pinned aliases anymore.
+		expect(ids.some((id) => /-[a-z]+-1$/.test(id))).toBe(false);
+		// heavy-1/heavy-2 route to the two distinct hai-proxy models.
+		const byRow = Object.fromEntries(
+			s.aliases
+				.filter((r) => /^\w+-\d/.test(r.trim()))
+				.map((r) => {
+					const [id, route] = r.trim().split(/\s+/);
+					return [id, route];
+				}),
+		);
+		expect(byRow["heavy-1"]).toBe("hai-proxy/hai-opus");
+		expect(byRow["heavy-2"]).toBe("hai-proxy/hai-gpt");
 	});
 
 	it("footer lists all keybindings", () => {
@@ -111,11 +123,9 @@ github-copilot      healthy
 ─── Aliases ──────────────────────────────────────────────────────────
 Alias             Routes-to
 ───────────────── ─────────────────────────────────────────
-heavy-1           hai-proxy/hai-heavy
+heavy-1           hai-proxy/hai-opus
+heavy-2           hai-proxy/hai-gpt
 light-1           hai-proxy/hai-light
-heavy-hai-1       hai-proxy/hai-heavy
-light-hai-1       hai-proxy/hai-light
-heavy-copilot-1   github-copilot/copilot-heavy
 
 ─── Keys ─────────────────────────────────────────────────────────────
 [c] change active override    [f] force / clear override
