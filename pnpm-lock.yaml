@@ -51,25 +51,6 @@ importers:
         specifier: ^3.0.0
         version: 3.2.6(@types/node@25.9.4)(jiti@2.7.0)(yaml@2.9.0)
 
-  packages/gateway:
-    dependencies:
-      '@sinclair/typebox':
-        specifier: ^0.34.0
-        version: 0.34.49
-    devDependencies:
-      '@earendil-works/pi-coding-agent':
-        specifier: '*'
-        version: 0.80.3(ws@8.21.0)(zod@4.4.3)
-      tsup:
-        specifier: ^8.0.0
-        version: 8.5.1(jiti@2.7.0)(postcss@8.5.16)(typescript@5.9.3)(yaml@2.9.0)
-      typescript:
-        specifier: ^5.7.0
-        version: 5.9.3
-      vitest:
-        specifier: ^3.0.0
-        version: 3.2.6(@types/node@25.9.4)(jiti@2.7.0)(yaml@2.9.0)
-
   packages/pi-adhd:
     devDependencies:
       '@earendil-works/pi-ai':
@@ -179,24 +160,6 @@ importers:
       '@earendil-works/pi-coding-agent':
         specifier: '*'
         version: 0.80.3(ws@8.21.0)(zod@4.4.3)
-      tsup:
-        specifier: ^8.0.0
-        version: 8.5.1(jiti@2.7.0)(postcss@8.5.16)(typescript@5.9.3)(yaml@2.9.0)
-      typescript:
-        specifier: ^5.7.0
-        version: 5.9.3
-      vitest:
-        specifier: ^3.0.0
-        version: 3.2.6(@types/node@25.9.4)(jiti@2.7.0)(yaml@2.9.0)
-
-  packages/pi-handoff:
-    devDependencies:
-      '@earendil-works/pi-coding-agent':
-        specifier: '*'
-        version: 0.80.3(ws@8.21.0)(zod@4.4.3)
-      '@earendil-works/pi-tui':
-        specifier: '*'
-        version: 0.80.3
       tsup:
         specifier: ^8.0.0
         version: 8.5.1(jiti@2.7.0)(postcss@8.5.16)(typescript@5.9.3)(yaml@2.9.0)
