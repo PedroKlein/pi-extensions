@@ -54,8 +54,12 @@ describe("registerGatewayProvider — happy path", () => {
 		expect(register).toHaveBeenCalledWith("gateway", expect.objectContaining({ models: expect.any(Array) }));
 		const [_name, cfg] = register.mock.calls[0];
 		expect(cfg.models).toHaveLength(2); // 2 indexed neutral aliases (heavy-1, light-1)
+		// Auth is provider-level now (pi >= 0.84): a single apiKey for the effective
+		// backend, not baked per-model headers.
+		expect(cfg.apiKey).toBe("resolved-or-token");
+		expect(cfg.baseUrl).toBe("https://openrouter.example");
 		for (const m of cfg.models) {
-			expect(m.headers.Authorization).toBe("Bearer resolved-or-token");
+			expect(m.headers).toBeUndefined();
 		}
 		expect(result.modelsRegistered).toBe(2);
 	});
@@ -143,8 +147,56 @@ describe("registerGatewayProvider — state override respected", () => {
 
 		await registerGatewayProvider({ aliases, state, registry, register });
 
-		const models = register.mock.calls[0][1].models as Array<{ id: string; headers: Record<string, string> }>;
-		const heavy1 = models.find((m) => m.id === "heavy-1");
-		expect(heavy1?.headers.Authorization).toBe("Bearer copilot-tok");
+		const cfg = register.mock.calls[0][1] as { apiKey?: string; models: Array<{ id: string }> };
+		const heavy1 = cfg.models.find((m) => m.id === "heavy-1");
+		expect(heavy1).toBeDefined();
+		// activeBackendOverride routes all aliases to github-copilot, so the
+		// provider-level credential is copilot's token.
+		expect(cfg.apiKey).toBe("copilot-tok");
+	});
+});
+
+describe("registerGatewayProvider — multi-backend degradation", () => {
+	it("disjoint tiers span two backends: serves the primary and warns about the rest", async () => {
+		const aliases: AliasesConfig = {
+			fallbackChain: ["openrouter", "github-copilot"],
+			backends: {
+				"openrouter": {
+					resetSchedule: undefined,
+					tiers: { heavy: ["or-heavy"], medium: ["or-medium"] },
+					quotaHint: undefined,
+					capStatusCodes: [402],
+				},
+				"github-copilot": {
+					resetSchedule: undefined,
+					tiers: { light: ["copilot-light"] },
+					quotaHint: undefined,
+					capStatusCodes: [402],
+				},
+			},
+		};
+		const registry = fakeRegistry(
+			[
+				{ id: "or-heavy", provider: "openrouter", baseUrl: "https://openrouter.example", api: "x" },
+				{ id: "or-medium", provider: "openrouter", baseUrl: "https://openrouter.example", api: "x" },
+				{ id: "copilot-light", provider: "github-copilot", baseUrl: "https://copilot.example", api: "x" },
+			],
+			{},
+			{ "openrouter": "or-tok", "github-copilot": "copilot-tok" },
+		);
+		const register = vi.fn();
+		const notify = vi.fn();
+
+		const result = await registerGatewayProvider({ aliases, state: emptyState(), registry, register, notify });
+
+		const cfg = register.mock.calls[0][1] as { apiKey?: string; models: Array<{ id: string }> };
+		// Only openrouter (primary, first in chain) aliases are registered.
+		expect(cfg.models.map((m) => m.id).sort()).toEqual(["heavy-1", "medium-1"]);
+		expect(cfg.apiKey).toBe("or-tok");
+		expect(result.modelsRegistered).toBe(2);
+		// A warning explains the omission of github-copilot.
+		const warn = notify.mock.calls.find((c) => String(c[0]).includes("multiple backends"));
+		expect(warn).toBeDefined();
+		expect(warn?.[1]).toBe("warning");
 	});
 });

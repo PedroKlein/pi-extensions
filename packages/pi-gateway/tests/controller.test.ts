@@ -150,9 +150,9 @@ describe("GatewayController — re-registration reflects transitions", () => {
 		await drainMicrotasks();
 
 		const [_name, cfg] = register.mock.calls[0];
-		const heavy1 = cfg.models.find((m: { id: string }) => m.id === "heavy-1");
-		// heavy-1 should now route to github-copilot since openrouter is unhealthy.
-		expect(heavy1?.headers.Authorization).toBe("Bearer resolved-github-copilot");
+		// heavy-1 should now route to github-copilot since openrouter is unhealthy;
+		// auth is provider-level, so the effective backend's token is the apiKey.
+		expect(cfg.apiKey).toBe("resolved-github-copilot");
 	});
 });
 

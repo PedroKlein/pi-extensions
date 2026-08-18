@@ -159,7 +159,7 @@ describe("composeGatewayModels — output counts", () => {
 });
 
 describe("composeGatewayModels — output shape", () => {
-	it("each output has baseUrl, api, headers.Authorization and copies capability fields", () => {
+	it("each output has baseUrl, api and copies capability fields (no baked auth headers)", () => {
 		const backends = [backend("openrouter", { heavy: "or-heavy" })];
 		const { models } = composeGatewayModels({
 			fallbackChain: ["openrouter"],
@@ -171,7 +171,8 @@ describe("composeGatewayModels — output shape", () => {
 		for (const m of models) {
 			expect(m.baseUrl).toBe("https://openrouter.example.com");
 			expect(m.api).toBe("openai-completions");
-			expect(m.headers.Authorization).toBe("Bearer the-token");
+			// Auth is provider-level now; entries carry no Authorization header.
+			expect(m.headers).toBeUndefined();
 			// Capability fields
 			expect(m.contextWindow).toBe(200_000);
 			expect(m.maxTokens).toBe(8_000);
@@ -269,7 +270,6 @@ describe("composeGatewayModels — fallback chain semantics", () => {
 		});
 		const heavy1 = models.find((m) => m.id === "heavy-1");
 		expect(heavy1?.baseUrl).toBe("https://github-copilot.example.com");
-		expect(heavy1?.headers.Authorization).toBe("Bearer tok-github-copilot");
 	});
 
 	it("activeBackendOverride reorders the chain", () => {
@@ -331,7 +331,6 @@ describe("composeGatewayModels — auth resolution failures", () => {
 		});
 		// heavy-1 falls through to copilot; openrouter contributes nothing (no token).
 		const heavy1 = models.find((m) => m.id === "heavy-1");
-		expect(heavy1?.headers.Authorization).toBe("Bearer tok");
 		expect(heavy1?.baseUrl).toBe("https://github-copilot.example.com");
 	});
 });

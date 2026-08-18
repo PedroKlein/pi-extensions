@@ -95,8 +95,7 @@ describe("integration — full failover + heal cycle", () => {
 		await drain();
 		expect(register).toHaveBeenCalledTimes(1);
 		let cfg = register.mock.calls[0][1];
-		let heavy1 = cfg.models.find((m: { id: string }) => m.id === "heavy-1");
-		expect(heavy1?.headers.Authorization).toBe("Bearer resolved-openrouter");
+		expect(cfg.apiKey).toBe("resolved-openrouter");
 
 		// Trigger a 402 through heavy-1 (currently routed to openrouter).
 		controller.handleMessageEnd({
@@ -111,8 +110,7 @@ describe("integration — full failover + heal cycle", () => {
 		await drain();
 		expect(register).toHaveBeenCalledTimes(2);
 		cfg = register.mock.calls[1][1];
-		heavy1 = cfg.models.find((m: { id: string }) => m.id === "heavy-1");
-		expect(heavy1?.headers.Authorization).toBe("Bearer resolved-github-copilot");
+		expect(cfg.apiKey).toBe("resolved-github-copilot");
 
 		// State file records the transition, including quota enrichment.
 		const persisted = readState(statePath);
@@ -137,9 +135,8 @@ describe("integration — full failover + heal cycle", () => {
 		await drain();
 		expect(register).toHaveBeenCalledTimes(3);
 		cfg = register.mock.calls[2][1];
-		heavy1 = cfg.models.find((m: { id: string }) => m.id === "heavy-1");
 		// Back to openrouter since it's healthy again AND first in the chain.
-		expect(heavy1?.headers.Authorization).toBe("Bearer resolved-openrouter");
+		expect(cfg.apiKey).toBe("resolved-openrouter");
 		expect(readState(statePath).unhealthyUntil).toEqual({});
 
 		// A "healthy again" notify fired.

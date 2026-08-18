@@ -42,13 +42,22 @@ const CAPABILITY_FIELDS = [
 	"name",
 ] as const;
 
-/** Shape emitted for pi.registerProvider("gateway", { models: [...] }). */
+/**
+ * Shape emitted for pi.registerProvider("gateway", { models: [...] }).
+ *
+ * Auth is NOT baked per-model. In pi >= 0.84 a provider is only "configured"
+ * (and therefore selectable in the model picker) when it has a provider-level
+ * `apiKey`/`oauth`; per-model `Authorization` headers are ignored once provider
+ * auth resolves. So the session registers a single provider-level `apiKey` for
+ * the effective backend and lets pi's native transport apply it. Each entry
+ * still carries `baseUrl`/`api` (per-model overrides) identifying where it
+ * routes; the transport is resolved from the global api registry by `api`.
+ */
 export interface GatewayModelEntry {
 	id: string;
 	name: string;
 	baseUrl?: string;
 	api?: string;
-	headers: Record<string, string>;
 	// Every capability field copied verbatim from the underlying real model.
 	[key: string]: unknown;
 }
@@ -207,7 +216,7 @@ export function composeGatewayModels(input: ComposeInput): ComposeResult {
 		for (let n = 1; n <= canonicalCount; n++) {
 			const idx = Math.min(n, tier.models.length) - 1;
 			const id = `${tierSlot}-${n}`;
-			models.push(makeEntry(id, picked.backend, tier.models[idx], picked.token));
+			models.push(makeEntry(id, picked.backend, tier.models[idx]));
 			routing[id] = picked.backend.name;
 		}
 	}
@@ -219,14 +228,12 @@ function makeEntry(
 	id: string,
 	backend: ResolvedBackend,
 	model: { realModelId: string; realModel: unknown },
-	bearerToken: string,
 ): GatewayModelEntry {
 	const real = model.realModel as Record<string, unknown> | undefined;
 
 	const entry: GatewayModelEntry = {
 		id,
 		name: `${id} → ${backend.name}/${model.realModelId}`,
-		headers: { Authorization: `Bearer ${bearerToken}` },
 	};
 
 	// Prefer per-real-model baseUrl/api; fall back to backend-level.
