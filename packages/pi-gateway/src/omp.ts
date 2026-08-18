@@ -18,7 +18,13 @@
  */
 
 import type { GatewayHostApi } from "./host.js";
-import { createOmpGatewayTransport, ompRegisterProvider, type OmpRegisterApi } from "./omp-platform.js";
+import {
+	adaptOmpRegistry,
+	createOmpGatewayTransport,
+	ompRegisterProvider,
+	type OmpModelRegistry,
+	type OmpRegisterApi,
+} from "./omp-platform.js";
 import { activateGateway, type GatewayPlatform } from "./runtime.js";
 
 export {
@@ -33,6 +39,7 @@ export default function (pi: GatewayHostApi & OmpRegisterApi) {
 	const platform: GatewayPlatform = {
 		transport: createOmpGatewayTransport(),
 		registerProvider: ompRegisterProvider(pi),
+		adaptRegistry: (registry) => adaptOmpRegistry(registry as OmpModelRegistry),
 	};
 	activateGateway(pi, platform);
 }

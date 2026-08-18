@@ -17,7 +17,7 @@ import { GatewayController } from "./controller.js";
 import type { GatewayHostApi, GatewayHostContext } from "./host.js";
 import { installRefreshTimer, type RefreshTimerHandle } from "./refresh-timer.js";
 import { resolveBackends } from "./resolver.js";
-import type { RegisterFn } from "./session.js";
+import type { RegisterFn, RegistryLike } from "./session.js";
 import { GatewayStateError } from "./state.js";
 import type { GatewayTransport } from "./transport-core.js";
 
@@ -55,6 +55,13 @@ export interface GatewayPlatform {
 	transport: GatewayTransport;
 	/** Register (or replace) the gateway provider in the harness. */
 	registerProvider: RegisterFn;
+	/**
+	 * Adapt the host's `ctx.modelRegistry` to the {@link RegistryLike} surface the
+	 * shared resolver/session expect. pi's registry already satisfies it, so the
+	 * pi entry omits this; oh-my-pi supplies an adapter (its registry exposes a
+	 * different method set).
+	 */
+	adaptRegistry?: (registry: unknown) => RegistryLike;
 }
 
 /**
@@ -66,10 +73,13 @@ export function activateGateway(pi: GatewayHostApi, platform: GatewayPlatform): 
 
 	async function buildController(ctx: GatewayHostContext): Promise<void> {
 		const aliases = loadAliasesConfig(ALIASES_PATH);
+		const registry: RegistryLike = platform.adaptRegistry
+			? platform.adaptRegistry(ctx.modelRegistry)
+			: (ctx.modelRegistry as never);
 		controller = new GatewayController({
 			aliases,
 			statePath: STATE_PATH,
-			registry: ctx.modelRegistry as never,
+			registry: registry as never,
 			register: platform.registerProvider,
 			setRoutes: (targets) => platform.transport.setRoutes(targets),
 			notify: (msg, type) => ctx.ui.notify(msg, type),
@@ -78,7 +88,7 @@ export function activateGateway(pi: GatewayHostApi, platform: GatewayPlatform): 
 
 		// Install (or re-install) the periodic token-refresh timer.
 		refreshTimer?.stop();
-		const { backends } = resolveBackends(aliases, ctx.modelRegistry as never);
+		const { backends } = resolveBackends(aliases, registry);
 		refreshTimer = installRefreshTimer({
 			backends,
 			isIdle: () => (ctx.isIdle ? ctx.isIdle() : true),

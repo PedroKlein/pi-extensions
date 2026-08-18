@@ -25,7 +25,8 @@ vi.mock("@oh-my-pi/pi-ai", () => ({
 	},
 }));
 
-import { createOmpGatewayTransport, ompRegisterProvider, toOmpModels } from "../src/omp-platform.js";
+import { adaptOmpRegistry, createOmpGatewayTransport, ompRegisterProvider, toOmpModels } from "../src/omp-platform.js";
+import { resolveBackends } from "../src/resolver.js";
 
 beforeEach(() => {
 	calls.registerCustomApi.length = 0;
@@ -129,5 +130,59 @@ describe("ompRegisterProvider", () => {
 		const reg = ompRegisterProvider({ registerProvider: (name, cfg) => captured.push({ name, cfg }) });
 		reg("gateway", { models: [] });
 		expect(() => new URL(captured[0].cfg.baseUrl)).not.toThrow();
+	});
+});
+
+describe("adaptOmpRegistry", () => {
+	// A faithful oh-my-pi ModelRegistry: only the methods oh-my-pi actually
+	// exposes. Crucially it has NO getProvider / getRegisteredProviderConfig —
+	// the exact gap that crashed session_start ("registry.getProvider is not a
+	// function"). If the adapter ever leaks a pi-only call onto this object, the
+	// missing method throws and this test fails.
+	function makeOmpRegistry() {
+		const models = [
+			{ provider: "sap-ai-core", id: "gpt-4o", api: "sap-ai-core" },
+			{ provider: "sap-ai-core", id: "claude-3-7-sonnet", api: "sap-ai-core" },
+		];
+		return {
+			find: (provider: string, modelId: string) =>
+				models.find((m) => m.provider === provider && m.id === modelId),
+			getAll: () => models,
+			hasProvider: (p: string) => models.some((m) => m.provider === p),
+			getProviderBaseUrl: (p: string) =>
+				p === "sap-ai-core" ? "https://real.example/v2" : undefined,
+			getApiKeyForProvider: async (p: string) =>
+				p === "sap-ai-core" ? "tok-123" : undefined,
+		};
+	}
+
+	it("resolveBackends works through the adapter (no pi-only registry methods)", () => {
+		const reg = adaptOmpRegistry(makeOmpRegistry());
+		const config = {
+			fallbackChain: ["sap-ai-core"],
+			backends: {
+				"sap-ai-core": { tiers: { "heavy-1": ["gpt-4o"], "medium-1": ["claude-3-7-sonnet"] } },
+			},
+		} as any;
+		const { backends, warnings } = resolveBackends(config, reg);
+		expect(warnings).toEqual([]);
+		expect(backends).toHaveLength(1);
+		expect(backends[0].name).toBe("sap-ai-core");
+		expect(backends[0].baseUrl).toBe("https://real.example/v2");
+		expect(backends[0].api).toBe("sap-ai-core");
+		// tiers resolved to real models
+		expect([...backends[0].tiers.keys()].sort()).toEqual(["heavy-1", "medium-1"]);
+	});
+
+	it("getProvider synthesized from hasProvider; unknown provider -> undefined", () => {
+		const reg = adaptOmpRegistry(makeOmpRegistry());
+		expect(reg.getProvider("sap-ai-core")).toEqual({ id: "sap-ai-core" });
+		expect(reg.getProvider("nope")).toBeUndefined();
+		expect(reg.getRegisteredProviderConfig("nope")).toBeUndefined();
+	});
+
+	it("getApiKeyForProvider passes through to oh-my-pi", async () => {
+		const reg = adaptOmpRegistry(makeOmpRegistry());
+		await expect(reg.getApiKeyForProvider("sap-ai-core")).resolves.toBe("tok-123");
 	});
 });

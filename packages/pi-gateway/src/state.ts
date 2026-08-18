@@ -31,10 +31,7 @@ import {
 	readFileSync,
 } from "node:fs";
 
-// See config.ts: import `Type` from the `/type` subpath so it and `Value`
-// (below) both resolve to real typebox on oh-my-pi (whose loader redirects the
-// bare `@sinclair/typebox` root to an omptype facade, but not subpaths).
-import { Type, type Static } from "@sinclair/typebox/type";
+import { Type, type Static } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
 
 export const STATE_FILE_VERSION = 1 as const;

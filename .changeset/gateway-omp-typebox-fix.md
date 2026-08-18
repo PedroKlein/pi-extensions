@@ -2,11 +2,20 @@
 "@pedro_klein/pi-gateway": patch
 ---
 
-Fix "Unknown type" crash on oh-my-pi session start. oh-my-pi's extension loader
-redirects the bare `@sinclair/typebox` root import to its omptype TypeBox facade
-but leaves subpaths on real typebox, so mixing facade-built schemas (`Type`)
-with the real `@sinclair/typebox/value` checker (`Value`) threw "Unknown type"
-during config/state validation. Import `Type` from the `@sinclair/typebox/type`
-subpath so `Type` and `Value` resolve to the same (real) typebox on both
-harnesses. Added a regression guard asserting no runtime import uses the bare
-root specifier.
+Fix two oh-my-pi runtime crashes on session start, and load the built bundle on
+both harnesses.
+
+- **"Unknown type" / missing `/type` subpath (TypeBox).** pi and oh-my-pi each
+  redirect a bare `@sinclair/typebox` import to their own bundled/facade typebox
+  at extension-load time, and inconsistently across the root vs `/value`
+  subpath — corrupting schema validation. TypeBox is now inlined into the build
+  (`tsup` `noExternal`) and both entry points load the built `dist/*.js` instead
+  of raw `src/*.ts`, so `Type`/`Value` always come from one real copy. The
+  pi-family packages stay external so each host still resolves them to its own
+  shared runtime (single api/model registry).
+
+- **"registry.getProvider is not a function".** oh-my-pi's `ModelRegistry`
+  exposes a different surface than pi's (`hasProvider`/`getProviderBaseUrl` vs
+  `getProvider`/`getRegisteredProviderConfig`). Added an `adaptOmpRegistry`
+  shim, injected via a new optional `GatewayPlatform.adaptRegistry` seam, so the
+  shared resolver/session work unchanged on both harnesses.

@@ -39,7 +39,7 @@ marketplace ref (`name@marketplace`), or a local path — a local path is
 omp install /path/to/pi-extensions/packages/pi-gateway
 ```
 
-oh-my-pi reads the `omp` manifest key (`omp.extensions` → `./src/omp.ts`),
+oh-my-pi reads the `omp` manifest key (`omp.extensions` → `./dist/omp.js`),
 falling back to `pi` if absent — so the same package serves both harnesses.
 At load time oh-my-pi remaps pi-family imports (`@oh-my-pi/*`,
 `@earendil-works/*`, `@mariozechner/*` for `pi-ai`/`pi-tui`/`pi-coding-agent`/…)
@@ -64,9 +64,13 @@ pi-gateway runs on both **pi** (`@earendil-works/pi-coding-agent`) and
 entry points:
 
 ```jsonc
-"pi":  { "extensions": ["./src/index.ts"] },  // pi
-"omp": { "extensions": ["./src/omp.ts"] }     // oh-my-pi
+"pi":  { "extensions": ["./dist/index.js"] },  // pi
+"omp": { "extensions": ["./dist/omp.js"] }     // oh-my-pi
 ```
+
+Both entries load the **built bundle** (not raw `src`): TypeBox is inlined so
+neither harness's typebox import-redirect can split `Type` from `Value`. Run
+`pnpm build` before loading the extension from a local checkout.
 
 Both share the same runtime, config, editor, and routing logic — only the
 provider-registration and request-transport seams differ per harness:

@@ -1,85 +1,87 @@
 {
-  "name": "@pedro_klein/pi-gateway",
-  "version": "0.5.0",
-  "description": "Gateway extension for Pi — virtual provider exposing tier aliases (heavy/medium/light) that route to registered backends with automatic failover on cap hits",
-  "type": "module",
-  "main": "./src/index.ts",
-  "types": "./dist/index.d.ts",
-  "exports": {
-    ".": {
-      "import": "./dist/index.js",
-      "types": "./dist/index.d.ts"
-    }
-  },
-  "files": [
-    "src"
-  ],
-  "scripts": {
-    "dev": "tsup --watch",
-    "build": "tsup",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "typecheck": "tsc --noEmit",
-    "clean": "rm -rf dist"
-  },
-  "pi": {
-    "extensions": [
-      "./src/index.ts"
-    ]
-  },
-  "omp": {
-    "extensions": [
-      "./src/omp.ts"
-    ]
-  },
-  "keywords": [
-    "pi-package",
-    "pi",
-    "gateway",
-    "fallback",
-    "coding-agent"
-  ],
-  "license": "MIT",
-  "author": "Pedro Klein",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/PedroKlein/pi-extensions",
-    "directory": "packages/pi-gateway"
-  },
-  "homepage": "https://github.com/PedroKlein/pi-extensions/tree/main/packages/pi-gateway",
-  "engines": {
-    "node": ">=20.0.0"
-  },
-  "peerDependencies": {
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*",
-    "@oh-my-pi/pi-ai": "*"
-  },
-  "peerDependenciesMeta": {
-    "@earendil-works/pi-ai": {
-      "optional": true
-    },
-    "@earendil-works/pi-coding-agent": {
-      "optional": true
-    },
-    "@earendil-works/pi-tui": {
-      "optional": true
-    },
-    "@oh-my-pi/pi-ai": {
-      "optional": true
-    }
-  },
-  "dependencies": {
-    "@sinclair/typebox": "^0.34.0"
-  },
-  "devDependencies": {
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*",
-    "@oh-my-pi/pi-ai": "^17.3.5",
-    "tsup": "^8.0.0",
-    "typescript": "^5.7.0",
-    "vitest": "^3.0.0"
-  }
+	"name": "@pedro_klein/pi-gateway",
+	"version": "0.5.0",
+	"description": "Gateway extension for Pi \u2014 virtual provider exposing tier aliases (heavy/medium/light) that route to registered backends with automatic failover on cap hits",
+	"type": "module",
+	"main": "./src/index.ts",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"import": "./dist/index.js",
+			"types": "./dist/index.d.ts"
+		}
+	},
+	"files": [
+		"dist",
+		"src"
+	],
+	"scripts": {
+		"dev": "tsup --watch",
+		"build": "tsup",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"typecheck": "tsc --noEmit",
+		"clean": "rm -rf dist",
+		"prepublishOnly": "tsup"
+	},
+	"pi": {
+		"extensions": [
+			"./dist/index.js"
+		]
+	},
+	"omp": {
+		"extensions": [
+			"./dist/omp.js"
+		]
+	},
+	"keywords": [
+		"pi-package",
+		"pi",
+		"gateway",
+		"fallback",
+		"coding-agent"
+	],
+	"license": "MIT",
+	"author": "Pedro Klein",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/PedroKlein/pi-extensions",
+		"directory": "packages/pi-gateway"
+	},
+	"homepage": "https://github.com/PedroKlein/pi-extensions/tree/main/packages/pi-gateway",
+	"engines": {
+		"node": ">=20.0.0"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-ai": "*",
+		"@earendil-works/pi-coding-agent": "*",
+		"@earendil-works/pi-tui": "*",
+		"@oh-my-pi/pi-ai": "*"
+	},
+	"peerDependenciesMeta": {
+		"@earendil-works/pi-ai": {
+			"optional": true
+		},
+		"@earendil-works/pi-coding-agent": {
+			"optional": true
+		},
+		"@earendil-works/pi-tui": {
+			"optional": true
+		},
+		"@oh-my-pi/pi-ai": {
+			"optional": true
+		}
+	},
+	"dependencies": {
+		"@sinclair/typebox": "^0.34.0"
+	},
+	"devDependencies": {
+		"@earendil-works/pi-ai": "*",
+		"@earendil-works/pi-coding-agent": "*",
+		"@earendil-works/pi-tui": "*",
+		"@oh-my-pi/pi-ai": "^17.3.5",
+		"tsup": "^8.0.0",
+		"typescript": "^5.7.0",
+		"vitest": "^3.0.0"
+	}
 }

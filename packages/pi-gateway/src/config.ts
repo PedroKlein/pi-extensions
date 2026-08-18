@@ -29,13 +29,7 @@
 
 import { readFileSync } from "node:fs";
 
-// Import the `Type` builder from the `/type` subpath (not the bare
-// `@sinclair/typebox` root). oh-my-pi's extension loader redirects the *root*
-// specifier to its omptype TypeBox facade, but leaves subpaths alone; keeping
-// `Type` and `Value` (below) both on real-typebox subpaths avoids a
-// facade-schema vs real-checker mismatch that throws "Unknown type" at
-// validation time. On pi both resolve to real typebox as well.
-import { Type, type Static } from "@sinclair/typebox/type";
+import { Type, type Static } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
 
 /** Named reset-schedule presets. Extendable in future without breaking configs. */
