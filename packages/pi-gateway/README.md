@@ -186,9 +186,23 @@ selectable in the `/model` picker and authenticated at request time — when it
 carries a provider-level `apiKey`/`oauth`. (Per-model `Authorization` headers
 are ignored once provider auth resolves, so the gateway does **not** bake them.)
 The resolved secret is escaped for pi's config-value resolver (`$`→`$$`, leading
-`!`), so opaque bearer tokens and JSON service keys pass through intact. pi's
-native transport then applies the credential and streams the response — the
-gateway adds no request-time indirection.
+`!`), so opaque bearer tokens and JSON service keys pass through intact.
+
+**Request routing (why a custom transport).** pi sends `model.id` verbatim as
+the wire model name — every builtin transport does `model: model.id`. A neutral
+alias like `heavy-1` is *not* a real model name, so registering gateway models
+under a builtin api makes the backend reject the request
+(`Model name 'heavy-1' is not supported`). To fix this the gateway registers its
+own api (`gateway`) in pi's **global** api registry and registers its models
+with `api: "gateway"`. At request time pi resolves the provider credential into
+`options.apiKey` and calls the gateway transport, which looks up the alias in a
+live routing map, swaps in the **real** backend model (real wire id, api, and
+baseUrl — captured at compose time), and delegates to that backend's real
+transport via `getApiProvider(realApi)`. Native streaming is fully preserved and
+the real transport consumes `options.apiKey`/headers exactly as for a direct
+request (bearer for hai-proxy, service-key JSON for SAP AI Core). The routing
+map is replaced on every re-register, so failover transparently reroutes
+in-flight aliases without re-registering the api.
 
 **Single effective backend per registration.** Because one provider carries one
 credential, all emitted aliases must resolve to a single backend at any moment.
@@ -201,11 +215,11 @@ backends. Force or reorder to switch which backend is served.
 **Custom-transport backends.** A backend that uses a custom `api` transport
 (not a pi built-in like `anthropic-messages`/`openai-completions`) only works
 through the gateway if that transport is registered in pi's **global** api
-registry (`registerApiProvider` from `@earendil-works/pi-ai/compat`). Providers
-that bind their transport only to their own instance (e.g. via `createProvider`)
-must also register it globally for the gateway to stream their models. Example:
-the SAP AI Core provider registers its `sap-ai-core` api globally so gateway
-aliases can route to it.
+registry (`registerApiProvider` from `@earendil-works/pi-ai/compat`) — the
+gateway transport delegates to it by `api` id. Providers that bind their
+transport only to their own instance (e.g. via `createProvider`) must also
+register it globally. Example: the SAP AI Core provider registers its
+`sap-ai-core` api globally so gateway aliases can route to it.
 
 **Token freshness.** Two mechanisms keep the provider-level credential fresh:
 
@@ -231,7 +245,7 @@ providers (see `pi --list-models`).
 ## Development
 
 ```bash
-pnpm test           # run tests (138 tests, 14 files)
+pnpm test           # run tests (143 tests, 15 files)
 pnpm build          # build for publish
 pnpm typecheck      # type-check without emitting
 ```

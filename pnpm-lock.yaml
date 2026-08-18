@@ -157,6 +157,9 @@ importers:
         specifier: ^0.34.0
         version: 0.34.49
     devDependencies:
+      '@earendil-works/pi-ai':
+        specifier: '*'
+        version: 0.80.3(ws@8.21.0)(zod@4.4.3)
       '@earendil-works/pi-coding-agent':
         specifier: '*'
         version: 0.80.3(ws@8.21.0)(zod@4.4.3)

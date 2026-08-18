@@ -5,27 +5,26 @@
  * marks some backends unhealthy) + a fallback chain, produce the list of
  * gateway model entries to pass to `pi.registerProvider("gateway", ...)`.
  *
- * The composer emits two shapes of alias:
+ * The composer emits **family-neutral** aliases: one entry per tier slot in ID
+ * form `<slot>-N`, routing to the first healthy backend in `fallbackChain` that
+ * has that tier. Examples: `heavy-1`, `medium-1`, `light-1`.
  *
- * 1. **Family-neutral** — one entry per tier slot in ID form `<slot>-1`,
- *    routing to the first healthy backend in `fallbackChain` that has that
- *    tier. Examples: `heavy-1`, `medium-1`, `light-1`.
+ * Each entry is registered with `api: GATEWAY_API` (see transport.ts) so pi
+ * routes its requests to the gateway transport, which maps the alias to the
+ * real backend model and delegates. The composer also returns a `targets` map
+ * (alias id → real backend model/api/baseUrl) that the session publishes to
+ * that transport.
  *
- * 2. **Family-pinned** — one entry per `(backend, tierSlot)`, in ID form
- *    `<slot>-<backend-short>-1`. Routes only to that specific backend even
- *    when the backend is unhealthy (escape hatch for callers who don't want
- *    transparent failover). Examples: `heavy-hai-1`, `heavy-copilot-1`.
- *
- * Auth: each emitted entry carries `headers.Authorization = "Bearer <token>"`
- * where `<token>` is provided by the caller via `resolveApiKey`. Callers
- * typically wire this to `ctx.modelRegistry.getApiKeyForProvider(backend)`.
+ * Auth is NOT baked per-model. In pi >= 0.84 a provider is only "configured"
+ * (selectable in the picker, and its per-request auth resolves) when it has a
+ * provider-level `apiKey`; the session registers one for the effective backend.
  *
  * Purity: the composer takes fully-resolved inputs only. No filesystem, no
  * modelRegistry calls. That makes it trivially unit-testable and lets the
  * session_start handler decide when to invoke it.
  */
 
-import { DEFAULT_CAP_STATUS_CODES, TIER_SLOTS, type TierSlot } from "./config.js";
+import { DEFAULT_CAP_STATUS_CODES, GATEWAY_API, TIER_SLOTS, type TierSlot } from "./config.js";
 import type { ResolvedBackend } from "./resolver.js";
 import type { GatewayState } from "./state.js";
 
@@ -62,6 +61,20 @@ export interface GatewayModelEntry {
 	[key: string]: unknown;
 }
 
+/**
+ * Delegation target for one alias. The gateway transport (transport.ts) uses
+ * this to route a request for alias `id` to the real backend model: it swaps in
+ * `realModel` (with the real wire `id`, `api`, and `baseUrl`) and delegates to
+ * that api's real transport. Captured at compose time from the live registry.
+ */
+export interface GatewayRouteTarget {
+	realApi: string;
+	realModelId: string;
+	realBaseUrl: string;
+	/** The full real Model<Api> object, forwarded verbatim to the real transport. */
+	realModel: unknown;
+}
+
 export interface ComposeInput {
 	fallbackChain: readonly string[];
 	backends: readonly ResolvedBackend[];
@@ -93,6 +106,12 @@ export interface ComposeResult {
 	 * routing depends on live health.
 	 */
 	routing: Record<string, string>;
+	/**
+	 * Map of emitted alias id → delegation target. Passed to the gateway
+	 * transport so it can map the alias to the real backend model at request
+	 * time. Keyed identically to `routing`.
+	 */
+	targets: Record<string, GatewayRouteTarget>;
 }
 
 /**
@@ -120,6 +139,7 @@ export function composeGatewayModels(input: ComposeInput): ComposeResult {
 	const warnings: ComposeWarning[] = [];
 	const models: GatewayModelEntry[] = [];
 	const routing: Record<string, string> = {};
+	const targets: Record<string, GatewayRouteTarget> = {};
 
 	// Index backends by name for chain lookup.
 	const byName = new Map<string, ResolvedBackend>();
@@ -216,36 +236,52 @@ export function composeGatewayModels(input: ComposeInput): ComposeResult {
 		for (let n = 1; n <= canonicalCount; n++) {
 			const idx = Math.min(n, tier.models.length) - 1;
 			const id = `${tierSlot}-${n}`;
-			models.push(makeEntry(id, picked.backend, tier.models[idx]));
+			const { entry, target } = makeEntry(id, picked.backend, tier.models[idx]);
+			models.push(entry);
 			routing[id] = picked.backend.name;
+			targets[id] = target;
 		}
 	}
 
-	return { models, warnings, routing };
+	return { models, warnings, routing, targets };
 }
 
 function makeEntry(
 	id: string,
 	backend: ResolvedBackend,
 	model: { realModelId: string; realModel: unknown },
-): GatewayModelEntry {
+): { entry: GatewayModelEntry; target: GatewayRouteTarget } {
 	const real = model.realModel as Record<string, unknown> | undefined;
+
+	// Prefer per-real-model baseUrl/api; fall back to backend-level.
+	const realBaseUrl = (real?.baseUrl as string | undefined) ?? backend.baseUrl ?? "";
+	const realApi = (real?.api as string | undefined) ?? backend.api ?? "";
 
 	const entry: GatewayModelEntry = {
 		id,
 		name: `${id} → ${backend.name}/${model.realModelId}`,
+		// The registered model routes through the gateway transport, NOT the real
+		// api: pi would otherwise send the alias id (`heavy-1`) as the wire model
+		// name and the backend would reject it. The transport swaps in the real
+		// model. baseUrl is still the real backend URL so pi's custom-model
+		// validation (which rejects an empty baseUrl) passes.
+		api: GATEWAY_API,
+		baseUrl: realBaseUrl,
 	};
-
-	// Prefer per-real-model baseUrl/api; fall back to backend-level.
-	entry.baseUrl = (real?.baseUrl as string | undefined) ?? backend.baseUrl;
-	entry.api = (real?.api as string | undefined) ?? backend.api;
 
 	for (const field of CAPABILITY_FIELDS) {
 		if (real && real[field] !== undefined) {
 			(entry as Record<string, unknown>)[field] = real[field];
 		}
 	}
-	return entry;
+
+	const target: GatewayRouteTarget = {
+		realApi,
+		realModelId: model.realModelId,
+		realBaseUrl,
+		realModel: model.realModel,
+	};
+	return { entry, target };
 }
 
 // Also export the default cap-status list so the composer package surface is complete.

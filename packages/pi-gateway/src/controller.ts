@@ -11,6 +11,7 @@
 import type { AliasesConfig } from "./config.js";
 import { applyCapOutcome, classifyCapEvent, type CapEventInput } from "./detect.js";
 import { registerGatewayProvider, type RegisterFn, type RegistryLike } from "./session.js";
+import type { GatewayRouteTarget } from "./compose.js";
 import { emptyState, readState, updateState, type GatewayState } from "./state.js";
 import { isBackendUnhealthy } from "./compose.js";
 import { TIER_SLOTS } from "./config.js";
@@ -21,6 +22,8 @@ export interface ControllerOptions {
 	registry: RegistryLike;
 	register: RegisterFn;
 	notify: (msg: string, type?: "info" | "warning" | "error") => void;
+	/** Publish the alias→target routing map to the gateway transport. */
+	setRoutes?: (targets: Record<string, GatewayRouteTarget>) => void;
 	/** Testable clock. */
 	now?: () => Date;
 	/** Testable microtask deferral. */
@@ -39,9 +42,10 @@ export class GatewayController {
 	/** alias id → backend name from the most recent compose. Cap attribution
 	 * for backend-agnostic indexed aliases relies on this. */
 	private routing: Record<string, string> = {};
-	private readonly opts: Required<Omit<ControllerOptions, "now" | "scheduleMicrotask">> & {
+	private readonly opts: Required<Omit<ControllerOptions, "now" | "scheduleMicrotask" | "setRoutes">> & {
 		now: () => Date;
 		scheduleMicrotask: (fn: () => void) => void;
+		setRoutes?: (targets: Record<string, GatewayRouteTarget>) => void;
 	};
 
 	constructor(opts: ControllerOptions) {
@@ -51,6 +55,7 @@ export class GatewayController {
 			registry: opts.registry,
 			register: opts.register,
 			notify: opts.notify,
+			setRoutes: opts.setRoutes,
 			now: opts.now ?? (() => new Date()),
 			scheduleMicrotask: opts.scheduleMicrotask ?? ((fn) => queueMicrotask(fn)),
 		};
@@ -137,6 +142,7 @@ export class GatewayController {
 				state: this.state,
 				registry: this.opts.registry,
 				register: this.opts.register,
+				setRoutes: this.opts.setRoutes,
 				now: this.opts.now,
 			});
 			this.routing = result.routing;

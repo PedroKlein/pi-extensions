@@ -46,6 +46,7 @@
     "node": ">=20.0.0"
   },
   "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*"
   },
@@ -53,6 +54,7 @@
     "@sinclair/typebox": "^0.34.0"
   },
   "devDependencies": {
+    "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*",
     "tsup": "^8.0.0",

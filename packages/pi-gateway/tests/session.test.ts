@@ -41,6 +41,7 @@ describe("registerGatewayProvider — happy path", () => {
 		);
 		const register = vi.fn();
 		const notify = vi.fn();
+		const setRoutes = vi.fn();
 
 		const result = await registerGatewayProvider({
 			aliases,
@@ -48,6 +49,7 @@ describe("registerGatewayProvider — happy path", () => {
 			registry,
 			register,
 			notify,
+			setRoutes,
 		});
 
 		expect(register).toHaveBeenCalledTimes(1);
@@ -57,10 +59,15 @@ describe("registerGatewayProvider — happy path", () => {
 		// Auth is provider-level now (pi >= 0.84): a single apiKey for the effective
 		// backend, not baked per-model headers.
 		expect(cfg.apiKey).toBe("resolved-or-token");
-		expect(cfg.baseUrl).toBe("https://openrouter.example");
 		for (const m of cfg.models) {
 			expect(m.headers).toBeUndefined();
+			expect(m.api).toBe("gateway"); // routes through the gateway transport
 		}
+		// Routing targets published to the transport, one per registered alias.
+		expect(setRoutes).toHaveBeenCalledTimes(1);
+		const publishedTargets = setRoutes.mock.calls[0][0] as Record<string, { realApi: string; realModelId: string }>;
+		expect(Object.keys(publishedTargets).sort()).toEqual(["heavy-1", "light-1"]);
+		expect(publishedTargets["heavy-1"].realModelId).toBe("or-heavy");
 		expect(result.modelsRegistered).toBe(2);
 	});
 });

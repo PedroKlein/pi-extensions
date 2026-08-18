@@ -15,6 +15,7 @@ import { GatewayController } from "./controller.js";
 import { installRefreshTimer, type RefreshTimerHandle } from "./refresh-timer.js";
 import { resolveBackends } from "./resolver.js";
 import { GatewayStateError } from "./state.js";
+import { registerGatewayTransport, setGatewayRoutes } from "./transport.js";
 
 export const EXTENSION_NAME = "pi-gateway";
 
@@ -38,6 +39,7 @@ export default function (pi: ExtensionAPI) {
 			statePath: STATE_PATH,
 			registry: ctx.modelRegistry as never,
 			register: (name, cfg) => pi.registerProvider(name, cfg as never),
+			setRoutes: setGatewayRoutes,
 			notify: (msg, type) => ctx.ui.notify(msg, type),
 		});
 		controller.requestReregister();
@@ -53,6 +55,9 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	pi.on("session_start", async (_event, ctx) => {
+		// Register the gateway api transport once, before any provider registration,
+		// so pi can resolve `api: "gateway"` when a gateway alias is selected.
+		registerGatewayTransport();
 		try {
 			await buildController(ctx);
 		} catch (err) {

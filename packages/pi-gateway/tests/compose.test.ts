@@ -159,9 +159,9 @@ describe("composeGatewayModels — output counts", () => {
 });
 
 describe("composeGatewayModels — output shape", () => {
-	it("each output has baseUrl, api and copies capability fields (no baked auth headers)", () => {
+	it("registered models route through the gateway api; targets carry the real backend", () => {
 		const backends = [backend("openrouter", { heavy: "or-heavy" })];
-		const { models } = composeGatewayModels({
+		const { models, targets } = composeGatewayModels({
 			fallbackChain: ["openrouter"],
 			backends,
 			state: emptyState(),
@@ -170,7 +170,10 @@ describe("composeGatewayModels — output shape", () => {
 		expect(models).toHaveLength(1);
 		for (const m of models) {
 			expect(m.baseUrl).toBe("https://openrouter.example.com");
-			expect(m.api).toBe("openai-completions");
+			// Registered under the gateway transport, NOT the real api: pi sends
+			// model.id verbatim as the wire name, so the alias must route through
+			// the gateway transport which swaps in the real model.
+			expect(m.api).toBe("gateway");
 			// Auth is provider-level now; entries carry no Authorization header.
 			expect(m.headers).toBeUndefined();
 			// Capability fields
@@ -182,6 +185,13 @@ describe("composeGatewayModels — output shape", () => {
 			expect(m.thinkingLevelMap).toBeDefined();
 			expect(m.compat).toBeDefined();
 		}
+		// The delegation target carries the REAL api + real wire model id.
+		const t = targets["heavy-1"];
+		expect(t).toBeDefined();
+		expect(t.realApi).toBe("openai-completions");
+		expect(t.realModelId).toBe("or-heavy");
+		expect(t.realBaseUrl).toBe("https://openrouter.example.com");
+		expect(t.realModel).toBeDefined();
 	});
 });
 

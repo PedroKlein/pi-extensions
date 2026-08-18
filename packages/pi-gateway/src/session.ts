@@ -11,7 +11,7 @@
 
 import type { AliasesConfig } from "./config.js";
 import type { GatewayState } from "./state.js";
-import { composeGatewayModels, type ComposeWarning, type GatewayModelEntry } from "./compose.js";
+import { composeGatewayModels, type ComposeWarning, type GatewayModelEntry, type GatewayRouteTarget } from "./compose.js";
 import { resolveBackends, type ResolverModelRegistry, type ResolverWarning } from "./resolver.js";
 
 export const GATEWAY_PROVIDER_NAME = "gateway";
@@ -59,6 +59,12 @@ export interface RegisterGatewayInput {
 	registry: RegistryLike;
 	register: RegisterFn;
 	notify?: NotifyFn;
+	/**
+	 * Publish the alias→target routing map to the gateway transport. Called with
+	 * only the aliases actually registered (the effective backend's). Omitted in
+	 * unit tests that assert on the register payload directly.
+	 */
+	setRoutes?: (targets: Record<string, GatewayRouteTarget>) => void;
 	/** Testable clock. */
 	now?: () => Date;
 }
@@ -96,7 +102,7 @@ export async function registerGatewayProvider(
 	}
 
 	// 3. Compose.
-	const { models, warnings: composeWarnings, routing } = composeGatewayModels({
+	const { models, warnings: composeWarnings, routing, targets } = composeGatewayModels({
 		fallbackChain: aliases.fallbackChain,
 		backends,
 		state,
@@ -112,7 +118,6 @@ export async function registerGatewayProvider(
 	// share one backend. Health is per-backend, so neutral aliases normally all
 	// route to the same backend. A disjoint-tier config can yield >1 backend; in
 	// that case we serve the primary backend's aliases and warn about the rest.
-	const byName = new Map(backends.map((b) => [b.name, b]));
 	const usedBackends = new Set(Object.values(routing));
 	let modelsToRegister = models;
 	let effective: string | undefined = [...usedBackends][0];
@@ -130,11 +135,19 @@ export async function registerGatewayProvider(
 	}
 
 	const token = effective ? tokenByBackend.get(effective) : undefined;
-	const eb = effective ? byName.get(effective) : undefined;
 	const config: GatewayProviderConfig = { models: modelsToRegister };
 	if (token) config.apiKey = escapeConfigValue(token);
-	if (eb?.api) config.api = eb.api;
-	if (eb?.baseUrl) config.baseUrl = eb.baseUrl;
+
+	// Publish routing targets for exactly the registered aliases so the gateway
+	// transport can map each alias to its real backend model at request time.
+	if (input.setRoutes) {
+		const registeredIds = new Set(modelsToRegister.map((m) => m.id));
+		const effectiveTargets: Record<string, GatewayRouteTarget> = {};
+		for (const [id, t] of Object.entries(targets)) {
+			if (registeredIds.has(id)) effectiveTargets[id] = t;
+		}
+		input.setRoutes(effectiveTargets);
+	}
 
 	register(GATEWAY_PROVIDER_NAME, config);
 
