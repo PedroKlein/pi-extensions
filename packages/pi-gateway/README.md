@@ -18,13 +18,44 @@ fallback chain — the alias set stays stable so pinned references never break.
 
 ## Install
 
+**pi:**
+
 ```bash
 pi install npm:@pedro_klein/pi-gateway
 ```
 
-Create `~/.pi/agent/aliases.json` with your backends (see below) and start
-using `gateway/heavy-1`, `gateway/medium-1`, etc. anywhere pi accepts a
+**oh-my-pi (omp):**
+
+```bash
+omp install @pedro_klein/pi-gateway
+```
+
+`omp install` accepts an npm spec (`@pedro_klein/pi-gateway[@version]`), a
+marketplace ref (`name@marketplace`), or a local path — a local path is
+*linked* (ideal for development):
+
+```bash
+# local dev: link the built package into omp
+omp install /path/to/pi-extensions/packages/pi-gateway
+```
+
+oh-my-pi reads the `omp` manifest key (`omp.extensions` → `./src/omp.ts`),
+falling back to `pi` if absent — so the same package serves both harnesses.
+At load time oh-my-pi remaps pi-family imports (`@oh-my-pi/*`,
+`@earendil-works/*`, `@mariozechner/*` for `pi-ai`/`pi-tui`/`pi-coding-agent`/…)
+to its own bundled runtime, so the extension shares oh-my-pi's single api
+registry — the routed alias delegates through the same `stream`/`streamSimple`
+oh-my-pi dispatches natively (and the pi-tui helpers resolve even without
+`@earendil-works/*` installed).
+
+Then create `~/.pi/agent/aliases.json` with your backends (see below) and start
+using `gateway/heavy-1`, `gateway/medium-1`, etc. anywhere the harness accepts a
 `provider/model` reference.
+
+> **oh-my-pi config path:** the config still defaults to
+> `~/.pi/agent/aliases.json` (and `~/.pi/agent/gateway-state.json`) on omp. Set
+> `PI_GATEWAY_ALIASES_PATH` / `PI_GATEWAY_STATE_PATH` to point at
+> `~/.omp/agent/…` if you prefer to keep omp config separate.
 
 ### Harness support (pi + oh-my-pi)
 
