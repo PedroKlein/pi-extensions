@@ -47,8 +47,17 @@ export interface TransportHost {
 }
 
 export interface GatewayTransport {
-	/** Register the `gateway` api once (idempotent). */
+	/** Register the `gateway` api once (idempotent). Used by the pi host, whose
+	 * api registry is reachable via a direct `registerApiProvider`. On oh-my-pi
+	 * this is a no-op: the custom api is registered through `registerProvider`
+	 * (see omp-platform) so it lands in the same bundled pi-ai instance the host
+	 * dispatches through, and {@link GatewayTransport.streamSimple} is handed to
+	 * that provider config. */
 	register(): void;
+	/** The routed stream delegate (alias→real swap + deliver). */
+	stream(model: UnknownModel, context: unknown, options: unknown): unknown;
+	/** The routed streamSimple delegate (alias→real swap + deliver). */
+	streamSimple(model: UnknownModel, context: unknown, options: unknown): unknown;
 	/** Replace the live alias→target routing map (called on every re-register). */
 	setRoutes(targets: Record<string, GatewayRouteTarget>): void;
 	/** Number of live routes (test seam). */
@@ -99,6 +108,8 @@ export function createGatewayTransport(host: TransportHost): GatewayTransport {
 			);
 			registered = true;
 		},
+		stream: delegate("stream"),
+		streamSimple: delegate("streamSimple"),
 		setRoutes(targets) {
 			routes = new Map(Object.entries(targets));
 		},

@@ -19,3 +19,12 @@ both harnesses.
   `getProvider`/`getRegisteredProviderConfig`). Added an `adaptOmpRegistry`
   shim, injected via a new optional `GatewayPlatform.adaptRegistry` seam, so the
   shared resolver/session work unchanged on both harnesses.
+
+- **"Unhandled API in mapOptionsForApi: gateway".** Registering the `gateway`
+  custom api directly (via the redirected `@oh-my-pi/pi-ai` root) lands in a
+  different bundled pi-ai instance than the one the host dispatches through, so
+  `getCustomApi("gateway")` was empty at request time. On oh-my-pi the gateway's
+  `streamSimple` delegate is now passed through `registerProvider`, which calls
+  oh-my-pi's *internal* `registerCustomApi` — the instance `getCustomApi` reads.
+  Verified end-to-end on the real oh-my-pi runtime: a `gateway/*` request routes
+  to the real backend model and hits the real transport.

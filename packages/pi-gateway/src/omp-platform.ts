@@ -19,12 +19,12 @@
  *    config-value $/! escaping).
  */
 
-import { registerCustomApi, stream as ompStream, streamSimple as ompStreamSimple } from "@oh-my-pi/pi-ai";
+import { stream as ompStream, streamSimple as ompStreamSimple } from "@oh-my-pi/pi-ai";
 
 import type { GatewayModelEntry } from "./compose.js";
 import { GATEWAY_API } from "./config.js";
 import type { RegisterFn, RegistryLike } from "./session.js";
-import { createGatewayTransport, type GatewayTransport } from "./transport-core.js";
+import { createGatewayTransport, type GatewayTransport, type UnknownModel } from "./transport-core.js";
 
 /** oh-my-pi provider config we hand to `registerProvider`. */
 export interface OmpProviderConfig {
@@ -32,6 +32,15 @@ export interface OmpProviderConfig {
 	baseUrl: string;
 	apiKey?: string;
 	models: OmpModelConfig[];
+	/**
+	 * The routed streamSimple delegate. oh-my-pi's `registerProvider` forwards
+	 * this to its *internal* `registerCustomApi`, so the `gateway` api lands in
+	 * the same bundled pi-ai instance the host dispatches through (a direct
+	 * `registerCustomApi` from the redirected root hits a separate instance and
+	 * `getCustomApi` never sees it — the "Unhandled API in mapOptionsForApi"
+	 * failure).
+	 */
+	streamSimple?: (model: UnknownModel, context: unknown, options: unknown) => unknown;
 }
 
 /** Structural oh-my-pi ProviderModelConfig (subset we populate). */
@@ -65,10 +74,17 @@ export function toOmpModels(models: GatewayModelEntry[]): OmpModelConfig[] {
 }
 
 /** oh-my-pi transport: register a custom api + delegate via top-level dispatch. */
+/**
+ * oh-my-pi transport: routes alias→real and delegates via the top-level
+ * `stream`/`streamSimple`. Registration of the `gateway` custom api does NOT
+ * happen here — it goes through `registerProvider` (see {@link ompRegisterProvider})
+ * so it reaches the host's bundled pi-ai instance. `register()` is therefore a
+ * no-op; the transport only owns the routing map + delegates.
+ */
 export function createOmpGatewayTransport(): GatewayTransport {
 	return createGatewayTransport({
-		registerApi(spec, sourceId) {
-			registerCustomApi(spec.api, spec.streamSimple as never, sourceId, spec.stream as never);
+		registerApi() {
+			/* no-op: registered via registerProvider(streamSimple) instead */
 		},
 		deliver(kind, realModel, context, options) {
 			return kind === "stream"
@@ -125,7 +141,12 @@ export function adaptOmpRegistry(reg: OmpModelRegistry): RegistryLike {
 }
 
 /** Build the oh-my-pi register adapter for the gateway provider. */
-export function ompRegisterProvider(pi: OmpRegisterApi): RegisterFn {
+/**
+ * Build the oh-my-pi register adapter for the gateway provider. The transport's
+ * `streamSimple` delegate is passed as `config.streamSimple` so oh-my-pi
+ * registers the `gateway` custom api internally (reachable by `getCustomApi`).
+ */
+export function ompRegisterProvider(pi: OmpRegisterApi, transport: GatewayTransport): RegisterFn {
 	return (name, config) => {
 		pi.registerProvider(name, {
 			api: GATEWAY_API,
@@ -133,6 +154,7 @@ export function ompRegisterProvider(pi: OmpRegisterApi): RegisterFn {
 			// Passed literally — oh-my-pi does not apply pi's config-value escaping.
 			...(config.apiKey !== undefined ? { apiKey: config.apiKey } : {}),
 			models: toOmpModels(config.models),
+			streamSimple: (model, context, options) => transport.streamSimple(model, context, options),
 		});
 	};
 }

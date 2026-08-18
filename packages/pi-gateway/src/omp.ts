@@ -36,9 +36,10 @@ export {
 } from "./runtime.js";
 
 export default function (pi: GatewayHostApi & OmpRegisterApi) {
+	const transport = createOmpGatewayTransport();
 	const platform: GatewayPlatform = {
-		transport: createOmpGatewayTransport(),
-		registerProvider: ompRegisterProvider(pi),
+		transport,
+		registerProvider: ompRegisterProvider(pi, transport),
 		adaptRegistry: (registry) => adaptOmpRegistry(registry as OmpModelRegistry),
 	};
 	activateGateway(pi, platform);
