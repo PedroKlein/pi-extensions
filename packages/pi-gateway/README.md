@@ -26,6 +26,35 @@ Create `~/.pi/agent/aliases.json` with your backends (see below) and start
 using `gateway/heavy-1`, `gateway/medium-1`, etc. anywhere pi accepts a
 `provider/model` reference.
 
+### Harness support (pi + oh-my-pi)
+
+pi-gateway runs on both **pi** (`@earendil-works/pi-coding-agent`) and
+**oh-my-pi** (`@oh-my-pi/pi-coding-agent`). The package manifest declares both
+entry points:
+
+```jsonc
+"pi":  { "extensions": ["./src/index.ts"] },  // pi
+"omp": { "extensions": ["./src/omp.ts"] }     // oh-my-pi
+```
+
+Both share the same runtime, config, editor, and routing logic — only the
+provider-registration and request-transport seams differ per harness:
+
+| | pi | oh-my-pi |
+|---|---|---|
+| Provider registration | `registerProvider(name, { models, apiKey })` (per-model `api`/`baseUrl`) | `registerProvider(name, { api, baseUrl, apiKey, models })` (provider-level `baseUrl`) |
+| Custom api transport | `@earendil-works/pi-ai/compat` `registerApiProvider` / `getApiProvider` | `@oh-my-pi/pi-ai` `registerCustomApi` + top-level `stream`/`streamSimple` |
+| Credential (`apiKey`) | escaped for pi's config-value `$`/`!` syntax | passed literally |
+
+oh-my-pi caveats:
+
+- **Single effective backend per registration.** oh-my-pi has no per-model
+  `baseUrl`, so the gateway provider carries the effective backend's
+  provider-level `baseUrl` + credential. This matches pi's existing
+  single-credential model; failover across backends happens on re-registration
+  (`/gateway reload`, a health toggle, or the periodic token refresh).
+- The credential is forwarded to `apiKey` verbatim (no `$`/`!` escaping).
+
 ## What it provides
 
 **Provider:**
@@ -269,7 +298,7 @@ providers (see `pi --list-models`).
 ## Development
 
 ```bash
-pnpm test           # run tests (186 tests, 19 files)
+pnpm test           # run tests (193 tests, 20 files)
 pnpm build          # build for publish
 pnpm typecheck      # type-check without emitting
 ```

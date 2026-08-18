@@ -1,129 +1,41 @@
 /**
- * pi-gateway: virtual provider that exposes tier aliases (heavy-1, medium-1,
- * light-1, plus family-pinned variants like heavy-hai-1) routing to already-
- * registered pi providers with automatic failover on cap hits.
+ * pi-gateway — pi (earendil-works) entry point.
+ *
+ * Virtual provider that exposes tier aliases (heavy-1, medium-1, light-1, plus
+ * family-pinned variants) routing to already-registered pi providers with
+ * automatic failover on cap hits.
+ *
+ * This file is the thin pi adapter: it builds the pi {@link GatewayPlatform}
+ * (pi's provider registration + the pi transport host) and hands off to the
+ * shared {@link activateGateway} runtime. The oh-my-pi entry point lives in
+ * ./omp.ts and reuses the same runtime.
  */
-
-import { homedir } from "node:os";
-import { join } from "node:path";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-import { registerGatewayCommand } from "./command.js";
-import { AliasesConfigError, loadAliasesConfig } from "./config.js";
-import { GatewayController } from "./controller.js";
-import { installRefreshTimer, type RefreshTimerHandle } from "./refresh-timer.js";
-import { resolveBackends } from "./resolver.js";
-import { GatewayStateError } from "./state.js";
-import { registerGatewayTransport, setGatewayRoutes } from "./transport.js";
+import { activateGateway, type GatewayPlatform } from "./runtime.js";
+import { escapeConfigValue } from "./session.js";
+import { createPiGatewayTransport } from "./transport.js";
 
-export const EXTENSION_NAME = "pi-gateway";
-
-/** Minimal registry surface for model/provider listing. */
-interface ModelListRegistry {
-	getAll(): Array<{ id: string; provider: string }>;
-}
-
-/** Real model ids registered for a backend (provider), sorted + de-duped. */
-export function listBackendModels(registry: unknown, backend: string): string[] {
-	const all = (registry as ModelListRegistry).getAll?.() ?? [];
-	const ids = new Set<string>();
-	for (const m of all) if (m.provider === backend) ids.add(m.id);
-	return [...ids].sort();
-}
-
-/** All provider names known to the registry, sorted. */
-export function listRegistryProviders(registry: unknown): string[] {
-	const all = (registry as ModelListRegistry).getAll?.() ?? [];
-	const names = new Set<string>();
-	for (const m of all) names.add(m.provider);
-	return [...names].sort();
-}
-
-export const ALIASES_PATH =
-	process.env.PI_GATEWAY_ALIASES_PATH ?? join(homedir(), ".pi", "agent", "aliases.json");
-export const STATE_PATH =
-	process.env.PI_GATEWAY_STATE_PATH ?? join(homedir(), ".pi", "agent", "gateway-state.json");
+// Re-exports kept stable for consumers/tests.
+export {
+	ALIASES_PATH,
+	EXTENSION_NAME,
+	listBackendModels,
+	listRegistryProviders,
+	STATE_PATH,
+} from "./runtime.js";
 
 export default function (pi: ExtensionAPI) {
-	let controller: GatewayController | undefined;
-	let refreshTimer: RefreshTimerHandle | undefined;
-
-	async function buildController(ctx: {
-		modelRegistry: unknown;
-		ui: { notify: (m: string, t?: "info" | "warning" | "error") => void };
-		isIdle?: () => boolean;
-	}): Promise<void> {
-		const aliases = loadAliasesConfig(ALIASES_PATH);
-		controller = new GatewayController({
-			aliases,
-			statePath: STATE_PATH,
-			registry: ctx.modelRegistry as never,
-			register: (name, cfg) => pi.registerProvider(name, cfg as never),
-			setRoutes: setGatewayRoutes,
-			notify: (msg, type) => ctx.ui.notify(msg, type),
-		});
-		controller.requestReregister();
-
-		// Install (or re-install) the periodic token-refresh timer.
-		refreshTimer?.stop();
-		const { backends } = resolveBackends(aliases, ctx.modelRegistry as never);
-		refreshTimer = installRefreshTimer({
-			backends,
-			isIdle: () => (ctx.isIdle ? ctx.isIdle() : true),
-			onTick: () => controller?.requestReregister(),
-		});
-	}
-
-	pi.on("session_start", async (_event, ctx) => {
-		// Register the gateway api transport once, before any provider registration,
-		// so pi can resolve `api: "gateway"` when a gateway alias is selected.
-		registerGatewayTransport();
-		try {
-			await buildController(ctx);
-		} catch (err) {
-			if (err instanceof AliasesConfigError && err.cause === "missing") {
-				ctx.ui.notify(
-					`${EXTENSION_NAME}: no ${ALIASES_PATH} found — extension inactive. Create one to enable gateway/*.`,
-					"info",
-				);
-				return;
-			}
-			if (err instanceof AliasesConfigError || err instanceof GatewayStateError) {
-				ctx.ui.notify(`${EXTENSION_NAME}: ${err.message}`, "error");
-				return;
-			}
-			ctx.ui.notify(
-				`${EXTENSION_NAME}: unexpected error on session_start: ${(err as Error).message}`,
-				"error",
-			);
-		}
-
-		registerGatewayCommand(pi, {
-			getController: () => controller,
-			statePath: STATE_PATH,
-			aliasesPath: ALIASES_PATH,
-			rebuildController: () => buildController(ctx),
-			listModels: (backend) => listBackendModels(ctx.modelRegistry, backend),
-			listProviders: () => listRegistryProviders(ctx.modelRegistry),
-		});
-	});
-
-	pi.on("message_end", async (event, ctx) => {
-		if (!controller) return;
-		const msg = event.message;
-		if (!msg || msg.role !== "assistant") return;
-		controller.handleMessageEnd({
-			errorMessage: msg.errorMessage,
-			stopReason: msg.stopReason,
-			provider: ctx.model?.provider,
-			modelId: ctx.model?.id,
-		});
-	});
-
-	pi.on("session_shutdown", async () => {
-		refreshTimer?.stop();
-		refreshTimer = undefined;
-		controller = undefined;
-	});
+	const platform: GatewayPlatform = {
+		transport: createPiGatewayTransport(),
+		registerProvider: (name, config) =>
+			pi.registerProvider(name, {
+				models: config.models,
+				// pi treats provider apiKey as a config value ($VAR/${VAR}/!command),
+				// so escape the opaque token/JSON service key to survive verbatim.
+				...(config.apiKey !== undefined ? { apiKey: escapeConfigValue(config.apiKey) } : {}),
+			} as never),
+	};
+	activateGateway(pi, platform);
 }

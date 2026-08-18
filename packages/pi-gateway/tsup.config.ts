@@ -1,7 +1,7 @@
 import { defineConfig } from "tsup";
 
 export default defineConfig({
-	entry: ["src/index.ts"],
+	entry: ["src/index.ts", "src/omp.ts"],
 	format: ["esm"],
 	dts: false,
 	sourcemap: true,
@@ -11,5 +11,7 @@ export default defineConfig({
 		"@earendil-works/pi-coding-agent",
 		"@earendil-works/pi-ai",
 		"@earendil-works/pi-tui",
+		"@oh-my-pi/pi-coding-agent",
+		"@oh-my-pi/pi-ai",
 	],
 });

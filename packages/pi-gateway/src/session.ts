@@ -136,7 +136,17 @@ export async function registerGatewayProvider(
 
 	const token = effective ? tokenByBackend.get(effective) : undefined;
 	const config: GatewayProviderConfig = { models: modelsToRegister };
-	if (token) config.apiKey = escapeConfigValue(token);
+	// Store the raw resolved credential. Any harness-specific config-value
+	// escaping (pi's $/! syntax) is applied by the register adapter, since
+	// oh-my-pi resolves apiKey literally and must not be escaped.
+	if (token) config.apiKey = token;
+	// Effective backend base URL. pi ignores this (gateway models carry per-model
+	// baseUrl + the transport pins realBaseUrl), but oh-my-pi has no per-model
+	// baseUrl and requires a provider-level one when defining models. All
+	// registered aliases share the single effective backend, so any registered
+	// target's realBaseUrl is correct.
+	const effectiveTarget = modelsToRegister.length > 0 ? targets[modelsToRegister[0].id] : undefined;
+	if (effectiveTarget) config.baseUrl = effectiveTarget.realBaseUrl;
 
 	// Publish routing targets for exactly the registered aliases so the gateway
 	// transport can map each alias to its real backend model at request time.

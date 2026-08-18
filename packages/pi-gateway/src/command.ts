@@ -19,7 +19,8 @@
  * `sendUserMessage` so the transcript still records the snapshot.
  */
 
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { GatewayHostApi } from "./host.js";
 
 import {
 	requestReload,
@@ -45,7 +46,7 @@ export interface GatewayCommandDeps {
 	listProviders: () => string[];
 }
 
-export function registerGatewayCommand(pi: ExtensionAPI, deps: GatewayCommandDeps): void {
+export function registerGatewayCommand(pi: GatewayHostApi, deps: GatewayCommandDeps): void {
 	const modalDeps: GatewayModalDeps = {
 		getController: deps.getController,
 		statePath: deps.statePath,
@@ -134,7 +135,7 @@ function canOpenModal(ctx: ExtensionCommandContext): boolean {
 }
 
 function printStatus(
-	pi: ExtensionAPI,
+	pi: GatewayHostApi,
 	controller: GatewayController,
 	_deps: GatewayCommandDeps,
 ): void {
@@ -154,7 +155,7 @@ function printStatus(
 	pi.sendUserMessage(text, { deliverAs: "followUp" });
 }
 
-function printModels(pi: ExtensionAPI, deps: GatewayCommandDeps): void {
+function printModels(pi: GatewayHostApi, deps: GatewayCommandDeps): void {
 	const controller = deps.getController();
 	if (!controller) return;
 	let aliases;
