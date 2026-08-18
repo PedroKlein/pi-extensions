@@ -19,6 +19,27 @@ import { registerGatewayTransport, setGatewayRoutes } from "./transport.js";
 
 export const EXTENSION_NAME = "pi-gateway";
 
+/** Minimal registry surface for model/provider listing. */
+interface ModelListRegistry {
+	getAll(): Array<{ id: string; provider: string }>;
+}
+
+/** Real model ids registered for a backend (provider), sorted + de-duped. */
+export function listBackendModels(registry: unknown, backend: string): string[] {
+	const all = (registry as ModelListRegistry).getAll?.() ?? [];
+	const ids = new Set<string>();
+	for (const m of all) if (m.provider === backend) ids.add(m.id);
+	return [...ids].sort();
+}
+
+/** All provider names known to the registry, sorted. */
+export function listRegistryProviders(registry: unknown): string[] {
+	const all = (registry as ModelListRegistry).getAll?.() ?? [];
+	const names = new Set<string>();
+	for (const m of all) names.add(m.provider);
+	return [...names].sort();
+}
+
 export const ALIASES_PATH =
 	process.env.PI_GATEWAY_ALIASES_PATH ?? join(homedir(), ".pi", "agent", "aliases.json");
 export const STATE_PATH =
@@ -83,6 +104,8 @@ export default function (pi: ExtensionAPI) {
 			statePath: STATE_PATH,
 			aliasesPath: ALIASES_PATH,
 			rebuildController: () => buildController(ctx),
+			listModels: (backend) => listBackendModels(ctx.modelRegistry, backend),
+			listProviders: () => listRegistryProviders(ctx.modelRegistry),
 		});
 	});
 

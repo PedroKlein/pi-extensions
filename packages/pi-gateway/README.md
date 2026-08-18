@@ -55,13 +55,37 @@ availability wins.
 
 | Command | Description |
 |---------|-------------|
-| `/gateway` (alias `/gateway status`) | Open the interactive board: header, backends (health + reset ETA + quota), aliases (routing map). Keys: `f` force backend · `c` clear overrides · `v` view models · `r` reorder chain · `m` toggle health · `R` reload · `q`/Esc quit. Falls back to a printed status snapshot when no interactive TUI is available (print/RPC). |
+| `/gateway` (alias `/gateway status`) | Open the interactive board: header, backends (health + reset ETA + quota), aliases (routing map). Keys: `f` force backend · `c` clear overrides · `v` view models · `e` **edit aliases.json** · `r` reorder chain · `m` toggle health · `R` reload · `?` help · `q`/Esc quit. Falls back to a printed status snapshot when no interactive TUI is available (print/RPC). |
 | `/gateway models` | Show the alias → provider → real model → status mapping — what each neutral alias (`heavy-1`, …) actually resolves to right now. Opens the board's models pane interactively, or prints a text table without a UI. |
 | `/gateway force <backend>` | Set `activeBackendOverride` — pin routing to one backend |
 | `/gateway force none` | Clear `activeBackendOverride` (bare `/gateway force` also clears) |
 | `/gateway clear` | Clear all overrides |
 | `/gateway toggle <backend>` | Manually flip a backend between healthy and unhealthy for its normal reset window |
 | `/gateway reload` | Re-read `aliases.json` + `gateway-state.json` and re-register |
+
+### Interactive config editor (`e` on the board)
+
+The board's `e` key opens a full **`aliases.json` editor** — no hand-editing
+required. Edits accumulate in an in-memory **draft**; nothing is written until
+you press **`s` to save** (which validates the whole config, writes atomically,
+then reloads + re-registers). Backing out with unsaved changes prompts to
+discard, so every edit is reversible until you save.
+
+What you can configure:
+
+- **Backends** — add (`+ Add backend`, choosing from providers pi knows),
+  rename (fallback-chain references update automatically), and delete.
+- **Per-backend settings** — `resetSchedule` and `quotaHint` via preset
+  pickers, and `capStatusCodes` via a text field.
+- **Tiers × models** — for each tier (`heavy`/`medium`/`light`/`xlight`/
+  `minimal`) multi-select and order models from that backend's live model
+  list (the ordered selection becomes `heavy-1`, `heavy-2`, …).
+- **Fallback chain** — toggle backend membership and reorder.
+
+Editor keys: `↑↓`/`jk` move · `Enter` open/commit · `Space` toggle selection
+(tiers/chain) · `Shift+J`/`Shift+K` reorder (chain) · type to filter pick-lists
+or edit text · `s` save · `Esc` back (prompts if unsaved) · `?` help. Long
+lists scroll to keep the cursor in view, and a breadcrumb shows where you are.
 
 **Environment variables:**
 
@@ -245,7 +269,7 @@ providers (see `pi --list-models`).
 ## Development
 
 ```bash
-pnpm test           # run tests (143 tests, 15 files)
+pnpm test           # run tests (186 tests, 19 files)
 pnpm build          # build for publish
 pnpm typecheck      # type-check without emitting
 ```

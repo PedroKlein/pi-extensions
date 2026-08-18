@@ -39,6 +39,10 @@ export interface GatewayCommandDeps {
 	aliasesPath: string;
 	/** Rebuild the controller after reload; called by the reload subcommand. */
 	rebuildController: () => Promise<void>;
+	/** Real model ids registered for a backend (provider), sorted + stable. */
+	listModels: (backend: string) => string[];
+	/** All provider names known to the registry, sorted. */
+	listProviders: () => string[];
 }
 
 export function registerGatewayCommand(pi: ExtensionAPI, deps: GatewayCommandDeps): void {
@@ -47,6 +51,8 @@ export function registerGatewayCommand(pi: ExtensionAPI, deps: GatewayCommandDep
 		statePath: deps.statePath,
 		aliasesPath: deps.aliasesPath,
 		rebuildController: deps.rebuildController,
+		listModels: deps.listModels,
+		listProviders: deps.listProviders,
 	};
 	pi.registerCommand("gateway", {
 		description:

@@ -154,6 +154,46 @@ export function loadAliasesConfig(filePath: string): AliasesConfig {
 }
 
 /**
+ * Read + validate an aliases.json file into its RAW (un-normalized) shape,
+ * preserving exactly what is in the file: single-string tiers stay strings,
+ * omitted optionals stay absent. This is the editable draft model for the TUI
+ * editor — editing raw avoids churning the file with normalization artifacts
+ * (e.g. rewriting a single string tier as a one-element array, or materializing
+ * default capStatusCodes). Schema-validated but NOT semantically checked, so a
+ * work-in-progress draft can be loaded; use {@link parseAliasesConfig} (via the
+ * writer's validate step) to enforce semantics before persisting.
+ *
+ * @throws AliasesConfigError on missing file, invalid JSON, or schema violation.
+ */
+export function loadAliasesConfigRaw(filePath: string): AliasesConfigRaw {
+	let raw: string;
+	try {
+		raw = readFileSync(filePath, "utf8");
+	} catch (err) {
+		const code = (err as NodeJS.ErrnoException).code;
+		if (code === "ENOENT") {
+			throw new AliasesConfigError(`aliases.json not found at ${filePath}`, "missing", filePath);
+		}
+		throw new AliasesConfigError(`failed to read ${filePath}: ${(err as Error).message}`, "parse", filePath);
+	}
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(raw);
+	} catch (err) {
+		throw new AliasesConfigError(`invalid JSON in ${filePath}: ${(err as Error).message}`, "parse", filePath);
+	}
+	if (!Value.Check(AliasesConfigRawSchema, parsed)) {
+		const firstError = [...Value.Errors(AliasesConfigRawSchema, parsed)][0];
+		throw new AliasesConfigError(
+			`schema error at ${filePath}${firstError?.path ?? ""}: ${firstError?.message ?? "unknown validation error"}`,
+			"schema",
+			`${filePath}${firstError?.path ?? ""}`,
+		);
+	}
+	return parsed as AliasesConfigRaw;
+}
+
+/**
  * Parse + validate + normalize an aliases.json body (already read).
  * Exported separately for tests that don't want to touch the filesystem.
  */

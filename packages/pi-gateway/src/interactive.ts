@@ -22,7 +22,9 @@ import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tu
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 
 import { setActiveOverride, setFallbackChainOverride, toggleBackendHealth } from "./actions.js";
-import { loadAliasesConfig, type AliasesConfig } from "./config.js";
+import { loadAliasesConfig, loadAliasesConfigRaw, type AliasesConfig } from "./config.js";
+import { writeAliasesConfig } from "./aliases-writer.js";
+import { EditorController } from "./editor.js";
 import { isBackendUnhealthy } from "./compose.js";
 import type { GatewayController } from "./controller.js";
 import { nextResetInstant } from "./reset-schedule.js";
@@ -39,6 +41,10 @@ export interface GatewayModalDeps {
 	aliasesPath: string;
 	/** Rebuild the controller after reload; called by the reload key. */
 	rebuildController: () => Promise<void>;
+	/** Real model ids registered for a backend (provider), sorted + stable. */
+	listModels: (backend: string) => string[];
+	/** All provider names known to the registry, sorted. For add-backend. */
+	listProviders: () => string[];
 }
 
 export interface GatewayModalOptions {
@@ -46,7 +52,10 @@ export interface GatewayModalOptions {
 	startMode?: "main" | "models";
 }
 
-type Mode = "main" | "force" | "toggle" | "reorder" | "models";
+type Mode = "main" | "force" | "toggle" | "reorder" | "models" | "editor";
+
+/** Rows of the scrolling viewport used for editor lists. */
+const EDITOR_VIEWPORT_ROWS = 14;
 
 const CLEAR_OVERRIDE_LABEL = "(none — clear active override)";
 
@@ -69,6 +78,8 @@ export async function showGatewayModal(
 			let chainDraft: string[] = [];
 			let notice: string | undefined;
 			let cachedLines: string[] | undefined;
+			let editor: EditorController | undefined;
+			let showHelp = false;
 
 			// Loaded once and refreshed on reload; state is always read live from
 			// the controller so mutations are reflected immediately.
@@ -143,10 +154,42 @@ export async function showGatewayModal(
 				mode = "reorder";
 			}
 
+			function enterEditor() {
+				try {
+					editor = new EditorController({
+						aliasesPath: deps.aliasesPath,
+						listModels: deps.listModels,
+						listProviders: deps.listProviders,
+						loadRaw: () => loadAliasesConfigRaw(deps.aliasesPath),
+						writeConfig: (p, raw) => writeAliasesConfig(p, raw),
+						reload: () => {
+							void deps
+								.rebuildController()
+								.then(() => {
+									aliases = tryLoadAliases();
+									rerender();
+								})
+								.catch(() => {
+									/* notice surfaced by controller */
+								});
+						},
+					});
+					mode = "editor";
+				} catch (err) {
+					notice = `editor unavailable: ${(err as Error).message}`;
+				}
+			}
+
 			// ── Input ─────────────────────────────────────────────────────────
 
 			function handleInput(data: string) {
 				notice = undefined;
+				// '?' toggles the help pane on any non-text-entry mode.
+				if (data === "?" && mode !== "editor") {
+					showHelp = !showHelp;
+					rerender();
+					return;
+				}
 				switch (mode) {
 					case "main":
 						handleMain(data);
@@ -163,6 +206,9 @@ export async function showGatewayModal(
 					case "models":
 						handleModels(data);
 						break;
+					case "editor":
+						handleEditor(data);
+						break;
 				}
 				rerender();
 			}
@@ -175,6 +221,7 @@ export async function showGatewayModal(
 				if (data === "f") return enterForce();
 				if (data === "m") return enterToggle();
 				if (data === "r") return enterReorder();
+				if (data === "e") return enterEditor();
 				if (data === "v") {
 					mode = "models";
 					return;
@@ -307,6 +354,59 @@ export async function showGatewayModal(
 				}
 			}
 
+			function handleEditor(data: string) {
+				const ed = editor;
+				if (!ed) {
+					mode = "main";
+					return;
+				}
+				// Discard confirmation intercepts everything.
+				if (ed.confirmingDiscard) {
+					if (data === "y") ed.confirmDiscard(true);
+					else if (data === "n" || matchesKey(data, "escape")) ed.confirmDiscard(false);
+					if (ed.exited) leaveEditor();
+					return;
+				}
+
+				if (matchesKey(data, "escape")) {
+					ed.back();
+					if (ed.exited) leaveEditor();
+					return;
+				}
+				if (matchesKey(data, "enter")) {
+					ed.activate();
+					return;
+				}
+				if (matchesKey(data, "up")) return ed.moveUp();
+				if (matchesKey(data, "down")) return ed.moveDown();
+
+				if (ed.isInput) {
+					if (matchesKey(data, "backspace") || data === "\x7f") return ed.backspace();
+					ed.handleChar(data);
+					return;
+				}
+
+				if (ed.filterable) {
+					if (data === " ") return ed.toggle();
+					if (data === "J") return ed.reorderDown();
+					if (data === "K") return ed.reorderUp();
+					if (matchesKey(data, "backspace") || data === "\x7f") return ed.backspace();
+					ed.handleChar(data);
+					return;
+				}
+
+				// Menu / preset screens: vim nav + save.
+				if (data === "k") return ed.moveUp();
+				if (data === "j") return ed.moveDown();
+				if (data === "s") return ed.save();
+			}
+
+			function leaveEditor() {
+				editor = undefined;
+				mode = "main";
+				aliases = tryLoadAliases();
+			}
+
 			/** Shared j/k + arrow cursor movement. Returns true if it consumed the key. */
 			function moveCursor(data: string, length: number): boolean {
 				if (length === 0) return false;
@@ -332,9 +432,11 @@ export async function showGatewayModal(
 				if (cachedLines) return cachedLines;
 				const contentW = Math.max(10, width - 4);
 
-				const title = titleFor(mode);
-				const body = bodyFor(mode, contentW);
-				const hint = hintFor(mode);
+				const inEditor = mode === "editor" && editor;
+				const title = inEditor ? editor!.breadcrumb().join(" ▸ ") : titleFor(mode);
+				const body = inEditor ? renderEditorBody(contentW) : bodyFor(mode, contentW);
+				const hint = inEditor ? editor!.hint() : hintFor(mode);
+				const activeNotice = inEditor ? (editor!.notice ?? notice) : notice;
 
 				const lines: string[] = [];
 				// Top border with title.
@@ -347,7 +449,8 @@ export async function showGatewayModal(
 						theme.fg("accent", "─".repeat(rightDash) + "╮"),
 				);
 
-				for (const raw of body) {
+				const rendered = showHelp ? helpLines() : body;
+				for (const raw of rendered) {
 					const fitted =
 						visibleWidth(raw) > contentW ? truncateToWidth(raw, contentW) : pad(raw, contentW);
 					lines.push(theme.fg("accent", "│") + " " + fitted + " " + theme.fg("accent", "│"));
@@ -355,15 +458,43 @@ export async function showGatewayModal(
 
 				// Notice + hint.
 				lines.push(rowLine("", contentW));
-				if (notice) {
-					lines.push(rowLine(theme.fg("warning", "  " + notice), contentW));
+				if (activeNotice) {
+					lines.push(rowLine(theme.fg("warning", "  " + activeNotice), contentW));
 				}
-				lines.push(rowLine(theme.fg("dim", "  " + hint), contentW));
+				const hintText = showHelp ? "? close help · Esc back" : `${hint}${mode === "editor" ? "" : " · ? help"}`;
+				lines.push(rowLine(theme.fg("dim", "  " + hintText), contentW));
 
 				lines.push(theme.fg("accent", "╰" + "─".repeat(width - 2) + "╯"));
 
 				cachedLines = lines;
 				return lines;
+			}
+
+			/** Help pane: full key list for the current mode. */
+			function helpLines(): string[] {
+				const common = [theme.fg("dim", "↑↓ / jk  move"), theme.fg("dim", "Esc      back / cancel")];
+				if (mode === "editor" && editor) {
+					return [
+						theme.bold("Editor keys"),
+						"",
+						"Enter    open / commit",
+						"Space    toggle selection (tiers / chain)",
+						"Shift+JK reorder (chain)",
+						"type     filter (pick lists) / edit text",
+						"s        save aliases.json",
+						"Esc      back (prompts if unsaved)",
+					];
+				}
+				return [
+					theme.bold("gateway keys"),
+					"",
+					"f  force backend       c  clear overrides",
+					"v  view models         r  reorder chain",
+					"m  toggle health       e  edit aliases.json",
+					"R  reload              q  quit",
+					"",
+					...common,
+				];
 			}
 
 			function rowLine(content: string, contentW: number): string {
@@ -376,6 +507,43 @@ export async function showGatewayModal(
 				const s = state();
 				if (!aliases || !s) return undefined;
 				return { aliases, state: s };
+			}
+
+			function renderEditorBody(_contentW: number): string[] {
+				const ed = editor!;
+				const lines: string[] = [];
+
+				if (ed.isInput) {
+					const t = ed.textInput;
+					const before = t.value.slice(0, t.caret);
+					const after = t.value.slice(t.caret);
+					lines.push("");
+					lines.push("  " + before + theme.fg("accent", "▏") + after);
+					return lines;
+				}
+
+				const lv = ed.listView;
+				if (ed.filterable) {
+					lines.push(theme.fg("dim", `filter: ${lv.filter || "—"}`));
+					lines.push("");
+				}
+				const win = lv.window(EDITOR_VIEWPORT_ROWS);
+				if (win.hasAbove) lines.push(theme.fg("dim", "  ↑ more…"));
+				if (win.items.length === 0) {
+					lines.push(theme.fg("dim", "  (nothing here)"));
+				}
+				win.items.forEach((item, i) => {
+					const isCursor = i === win.cursorRow;
+					const marker = isCursor ? theme.fg("accent", "▸ ") : "  ";
+					let text = item;
+					if (ed.isMultiSelect) {
+						const on = lv.isSelected(item);
+						text = (on ? theme.fg("success", "[×] ") : theme.fg("dim", "[ ] ")) + item;
+					}
+					lines.push(marker + (isCursor ? theme.fg("accent", theme.bold(text)) : text));
+				});
+				if (win.hasBelow) lines.push(theme.fg("dim", "  ↓ more…"));
+				return lines;
 			}
 
 			function bodyFor(m: Mode, _contentW: number): string[] {
@@ -414,6 +582,8 @@ export async function showGatewayModal(
 						);
 					case "models":
 						return renderModelsRows(input);
+					case "editor":
+						return []; // editor renders via renderEditorBody()
 				}
 			}
 
@@ -471,13 +641,15 @@ function titleFor(mode: Mode): string {
 			return "gateway · reorder fallback chain";
 		case "models":
 			return "gateway · models";
+		case "editor":
+			return "gateway · edit";
 	}
 }
 
 function hintFor(mode: Mode): string {
 	switch (mode) {
 		case "main":
-			return "f force · c clear · v models · r reorder · m toggle · R reload · q quit";
+			return "f force · c clear · v models · e edit · r reorder · m toggle · R reload · q quit";
 		case "force":
 			return "↑↓/jk move · Enter select · Esc back";
 		case "toggle":
@@ -486,5 +658,7 @@ function hintFor(mode: Mode): string {
 			return "↑↓/jk move · Shift+J/K reorder · Enter commit · x reset · Esc cancel";
 		case "models":
 			return "Esc back";
+		case "editor":
+			return "↑↓ move · Enter open · s save · Esc back";
 	}
 }
