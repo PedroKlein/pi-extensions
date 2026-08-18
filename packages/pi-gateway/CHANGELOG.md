@@ -1,5 +1,96 @@
 # @pedro_klein/pi-gateway
 
+## 0.5.0
+
+### Minor Changes
+
+- c003ebb: Add an interactive `/gateway` board and a `/gateway models` view.
+
+  `/gateway` (and `/gateway status`) now open a centered TUI overlay whose footer
+  keys are wired to real actions — `f` force a backend, `c` clear overrides, `r`
+  reorder the fallback chain (Shift+J/K to move entries), `m` toggle backend
+  health, `v` view the models mapping, `R` reload from disk, `q`/Esc to quit.
+  Without an interactive TUI (print/RPC) it falls back to the previous printed
+  status snapshot.
+
+  `/gateway models` reveals what each neutral alias hides: the alias → provider
+  (backend) → real model → live status mapping, so you can see that e.g.
+  `heavy-1` currently routes to `hai-proxy/anthropic--claude-4.8-opus`. Opens the
+  board's models pane interactively, or prints a text table without a UI.
+
+- 6d911ed: Add oh-my-pi (`@oh-my-pi/pi-coding-agent`) support alongside pi.
+
+  The extension now ships two entry points that share one runtime, config,
+  editor, and routing core:
+
+  - `pi.extensions` → `./src/index.ts` (pi / `@earendil-works`)
+  - `omp.extensions` → `./src/omp.ts` (oh-my-pi / `@oh-my-pi`)
+
+  Only the two harness seams differ, behind injectable adapters:
+
+  - **Transport** — a new harness-agnostic `transport-core` (`createGatewayTransport({ registerApi, deliver })`) maps a stable alias to its real backend model at request time. pi wires it to `@earendil-works/pi-ai/compat` (`registerApiProvider` + `getApiProvider`); oh-my-pi wires it to `@oh-my-pi/pi-ai` (`registerCustomApi` + top-level `stream`/`streamSimple`, which route both custom and builtin backend apis).
+  - **Provider registration** — pi keeps per-model `api`/`baseUrl`; oh-my-pi uses a provider-level `baseUrl` (it has no per-model `baseUrl`) drawn from the single effective backend, and receives the credential literally (no pi config-value `$`/`!` escaping).
+
+  No behavior change for pi users. The credential-escaping step moved from the
+  shared session pipeline into the pi register adapter (unchanged pi output).
+
+- cc837ad: Make gateway tier aliases actually selectable **and routable**. Two coupled
+  fixes:
+
+  **Provider-level auth (selectability).** pi (≥ 0.84) only treats a provider as
+  "configured" — selectable in `/model` and authenticated at request time — when
+  it carries a provider-level `apiKey`/`oauth`; per-model `Authorization` headers
+  are ignored once provider auth resolves. The gateway now resolves the effective
+  backend's credential and registers it at the provider level (escaped for pi's
+  config-value resolver so opaque tokens and JSON service keys survive). Per-model
+  bearer headers are no longer baked.
+
+  **Custom `gateway` transport (routing).** pi sends `model.id` verbatim as the
+  wire model name, so registering models under a builtin api made backends reject
+  the alias (`Model name 'heavy-1' is not supported`). The gateway now registers
+  its own `gateway` api in pi's global api registry and its models with
+  `api: "gateway"`. At request time the transport maps the alias to the real
+  backend model (real wire id/api/baseUrl, captured at compose time) and delegates
+  to that backend's real transport via `getApiProvider`. Native streaming is
+  preserved; the real transport consumes `options.apiKey` as usual (bearer for
+  hai-proxy, service-key JSON for SAP AI Core). The routing map is refreshed on
+  every re-register, so failover reroutes transparently.
+
+  Because one provider carries one credential, all emitted aliases must resolve to
+  a single backend at a time (health is per-backend, so they normally do). A
+  disjoint-tier config that would span two backends at once is degraded to the
+  primary backend with a warning. Custom-transport backends must register their
+  `api` globally to be routable through the gateway.
+
+- d861650: Add a full interactive `aliases.json` editor to the `/gateway` board (press
+  `e`), plus general TUI improvements.
+
+  You can now configure everything from the TUI instead of hand-editing the file:
+
+  - **Backends** — add (from providers pi knows), rename (fallback-chain
+    references update automatically), and delete.
+  - **Per-backend settings** — `resetSchedule` and `quotaHint` via preset
+    pickers, `capStatusCodes` via a text field.
+  - **Tiers × models** — for each tier, multi-select and order models from that
+    backend's live model list; the ordered selection maps to `heavy-1`,
+    `heavy-2`, ….
+  - **Fallback chain** — toggle membership and reorder.
+
+  Edits accumulate in an in-memory draft and are only persisted on an explicit
+  save (`s`), which validates the whole config, writes atomically (tmp + rename
+  under a lockfile, mirroring `gateway-state.json`), then reloads + re-registers.
+  Backing out with unsaved changes prompts to discard, so every edit is reversible
+  until saved.
+
+  TUI polish: breadcrumb navigation header for nested screens, a `?` help pane,
+  scrolling viewports that keep the cursor in view for long lists, type-to-filter
+  in pick-lists, and a visual pass (selection markers, healthy/unhealthy and
+  selected colors).
+
+  Internals: new `aliases-writer` (raw load + atomic write + pure edit helpers),
+  framework-agnostic `tui-widgets` (`ListView`, `TextInput`), and an
+  `EditorController` state machine — all unit-tested (186 tests total).
+
 ## 0.4.0
 
 ### Minor Changes
