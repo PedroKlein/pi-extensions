@@ -1,6 +1,6 @@
 {
   "name": "@pedro_klein/pi-gateway",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Gateway extension for Pi — virtual provider exposing tier aliases (heavy/medium/light) that route to registered backends with automatic failover on cap hits",
   "type": "module",
   "main": "./src/index.ts",
@@ -57,10 +57,18 @@
     "@oh-my-pi/pi-ai": "*"
   },
   "peerDependenciesMeta": {
-    "@earendil-works/pi-ai": { "optional": true },
-    "@earendil-works/pi-coding-agent": { "optional": true },
-    "@earendil-works/pi-tui": { "optional": true },
-    "@oh-my-pi/pi-ai": { "optional": true }
+    "@earendil-works/pi-ai": {
+      "optional": true
+    },
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "@earendil-works/pi-tui": {
+      "optional": true
+    },
+    "@oh-my-pi/pi-ai": {
+      "optional": true
+    }
   },
   "dependencies": {
     "@sinclair/typebox": "^0.34.0"
