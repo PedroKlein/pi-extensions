@@ -11,7 +11,12 @@ import {
 	requestReload,
 } from "../src/actions.js";
 import type { AliasesConfig } from "../src/config.js";
-import { renderStatusSections, renderStatusText } from "../src/status-view.js";
+import {
+	computeAliasRoutes,
+	renderModelsRows,
+	renderStatusSections,
+	renderStatusText,
+} from "../src/status-view.js";
 import { emptyState, readState, updateState, writeState, type GatewayState } from "../src/state.js";
 
 const CFG: AliasesConfig = {
@@ -100,7 +105,7 @@ describe("renderStatusSections — four sections present", () => {
 	it("footer lists all keybindings", () => {
 		const s = renderStatusSections({ aliases: CFG, state: emptyState(), now: NOW });
 		const footer = s.footer.join("\n");
-		for (const key of ["[c]", "[f]", "[r]", "[m]", "[R]", "[q]"]) {
+		for (const key of ["[c]", "[f]", "[r]", "[m]", "[R]", "[q]", "[v]"]) {
 			expect(footer).toContain(key);
 		}
 	});
@@ -128,10 +133,65 @@ describe("renderStatusText — combined view snapshot", () => {
 			light-1           openrouter/or-light
 
 			─── Keys ─────────────────────────────────────────────────────────────
-			[c] change active override    [f] force / clear override
-			[r] reorder fallback chain    [m] toggle backend health
-			[R] reload config from disk   [q] quit"
+			[f] force backend   [c] clear overrides   [v] view models
+			[r] reorder chain   [m] toggle health     [R] reload   [q] quit"
 		`);
+	});
+});
+
+// -- Alias routes + models view --------------------------------------------
+
+describe("computeAliasRoutes", () => {
+	it("maps each indexed alias to its backend + real model", () => {
+		const routes = computeAliasRoutes({ aliases: CFG, state: emptyState(), now: NOW });
+		const byId = Object.fromEntries(routes.map((r) => [r.id, r]));
+		expect(byId["heavy-1"]).toMatchObject({ backend: "openrouter", model: "or-opus" });
+		expect(byId["heavy-2"]).toMatchObject({ backend: "openrouter", model: "or-gpt" });
+		expect(byId["light-1"]).toMatchObject({ backend: "openrouter", model: "or-light" });
+	});
+
+	it("fails over to the next healthy backend when the primary is unhealthy", () => {
+		const state: GatewayState = {
+			...emptyState(),
+			unhealthyUntil: {
+				"openrouter": { until: "2025-01-16T00:00:00.000Z", reason: "cap" },
+			},
+		};
+		const byId = Object.fromEntries(
+			computeAliasRoutes({ aliases: CFG, state, now: NOW }).map((r) => [r.id, r]),
+		);
+		// heavy list count stays 2 (openrouter defines it), but routes to copilot,
+		// clamped to copilot's single model.
+		expect(byId["heavy-1"]).toMatchObject({ backend: "github-copilot", model: "copilot-heavy" });
+		expect(byId["heavy-2"]).toMatchObject({ backend: "github-copilot", model: "copilot-heavy" });
+		// No backend serves 'light' when openrouter is down.
+		expect(byId["light-1"].backend).toBeUndefined();
+	});
+});
+
+describe("renderModelsRows", () => {
+	it("exposes provider + real model per alias", () => {
+		const rows = renderModelsRows({ aliases: CFG, state: emptyState(), now: NOW });
+		const joined = rows.join("\n");
+		expect(joined).toContain("Alias");
+		expect(joined).toContain("Provider");
+		expect(joined).toContain("Model");
+		const heavy1 = rows.find((r) => r.startsWith("heavy-1"));
+		expect(heavy1).toContain("openrouter");
+		expect(heavy1).toContain("or-opus");
+		expect(heavy1).toContain("healthy");
+	});
+
+	it("marks aliases unavailable when no healthy backend serves the tier", () => {
+		const state: GatewayState = {
+			...emptyState(),
+			unhealthyUntil: {
+				"openrouter": { until: "2025-01-16T00:00:00.000Z", reason: "cap" },
+			},
+		};
+		const rows = renderModelsRows({ aliases: CFG, state, now: NOW });
+		const light1 = rows.find((r) => r.startsWith("light-1"));
+		expect(light1).toContain("unavailable");
 	});
 });
 

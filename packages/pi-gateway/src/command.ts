@@ -4,18 +4,19 @@
  * v1 exposes /gateway as a subcommand-driven interface rather than a full
  * interactive Component TUI. Subcommands:
  *
- *   /gateway              -> print status text
+ *   /gateway              -> interactive board (falls back to status text w/o UI)
  *   /gateway status       -> alias for the bare form
+ *   /gateway models       -> alias/model/provider mapping (modal, or text w/o UI)
  *   /gateway force <name> -> set activeBackendOverride
  *   /gateway force none   -> clear activeBackendOverride
  *   /gateway clear        -> clear all overrides
  *   /gateway toggle <name>-> flip a backend's health for its normal reset window
  *   /gateway reload       -> reload aliases.json + state.json from disk
  *
- * The command is deliberately text-oriented — the status view is emitted via
- * `sendUserMessage` as a followup so the transcript records the snapshot;
- * mutating subcommands print a one-line confirmation and trigger controller
- * re-registration.
+ * When an interactive TUI is available the bare/status/models forms open a
+ * `ctx.ui.custom()` overlay whose keys are wired to the same mutation actions
+ * as the text subcommands. Without a UI (print/RPC) they emit text via
+ * `sendUserMessage` so the transcript still records the snapshot.
  */
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
@@ -27,8 +28,9 @@ import {
 } from "./actions.js";
 import { AliasesConfigError, loadAliasesConfig } from "./config.js";
 import type { GatewayController } from "./controller.js";
+import { showGatewayModal, type GatewayModalDeps } from "./interactive.js";
 import { nextResetInstant } from "./reset-schedule.js";
-import { renderStatusText } from "./status-view.js";
+import { renderModelsText, renderStatusText } from "./status-view.js";
 import { readState, updateState, type GatewayState } from "./state.js";
 
 export interface GatewayCommandDeps {
@@ -40,9 +42,27 @@ export interface GatewayCommandDeps {
 }
 
 export function registerGatewayCommand(pi: ExtensionAPI, deps: GatewayCommandDeps): void {
+	const modalDeps: GatewayModalDeps = {
+		getController: deps.getController,
+		statePath: deps.statePath,
+		aliasesPath: deps.aliasesPath,
+		rebuildController: deps.rebuildController,
+	};
 	pi.registerCommand("gateway", {
 		description:
-			"Gateway routing status & controls. Usage: /gateway [status|force <backend>|force none|clear|toggle <backend>|reload]",
+			"Gateway routing status & controls. Usage: /gateway [status|models|force <backend>|force none|clear|toggle <backend>|reload]",
+		getArgumentCompletions: (prefix: string) => {
+			const subs = [
+				{ value: "status", label: "status — interactive board" },
+				{ value: "models", label: "models — alias/model/provider map" },
+				{ value: "force", label: "force <backend> — pin routing" },
+				{ value: "clear", label: "clear — drop all overrides" },
+				{ value: "toggle", label: "toggle <backend> — flip health" },
+				{ value: "reload", label: "reload — re-read config" },
+			];
+			const filtered = subs.filter((s) => s.value.startsWith(prefix));
+			return filtered.length > 0 ? filtered : null;
+		},
 		handler: async (args, ctx) => {
 			const controller = deps.getController();
 			if (!controller) {
@@ -61,7 +81,19 @@ export function registerGatewayCommand(pi: ExtensionAPI, deps: GatewayCommandDep
 				case undefined:
 				case "":
 				case "status":
-					printStatus(pi, controller, deps);
+					if (canOpenModal(ctx)) {
+						await showGatewayModal(ctx, modalDeps, { startMode: "main" });
+					} else {
+						printStatus(pi, controller, deps);
+					}
+					return;
+
+				case "models":
+					if (canOpenModal(ctx)) {
+						await showGatewayModal(ctx, modalDeps, { startMode: "models" });
+					} else {
+						printModels(pi, deps);
+					}
 					return;
 
 				case "force":
@@ -82,12 +114,17 @@ export function registerGatewayCommand(pi: ExtensionAPI, deps: GatewayCommandDep
 
 				default:
 					ctx.ui.notify(
-						`gateway: unknown subcommand '${sub}'. Try: /gateway [status|force <backend>|clear|toggle <backend>|reload]`,
+						`gateway: unknown subcommand '${sub}'. Try: /gateway [status|models|force <backend>|clear|toggle <backend>|reload]`,
 						"error",
 					);
 			}
 		},
 	});
+}
+
+/** Whether an interactive overlay can be shown (guards print/RPC + test ctx). */
+function canOpenModal(ctx: ExtensionCommandContext): boolean {
+	return ctx.hasUI && typeof ctx.ui.custom === "function";
 }
 
 function printStatus(
@@ -108,6 +145,22 @@ function printStatus(
 		return;
 	}
 	const text = renderStatusText({ aliases, state });
+	pi.sendUserMessage(text, { deliverAs: "followUp" });
+}
+
+function printModels(pi: ExtensionAPI, deps: GatewayCommandDeps): void {
+	const controller = deps.getController();
+	if (!controller) return;
+	let aliases;
+	try {
+		aliases = loadAliasesConfig(deps.aliasesPath);
+	} catch {
+		pi.sendUserMessage("gateway: could not read aliases.json for models view", {
+			deliverAs: "followUp",
+		});
+		return;
+	}
+	const text = renderModelsText({ aliases, state: controller.getState() });
 	pi.sendUserMessage(text, { deliverAs: "followUp" });
 }
 

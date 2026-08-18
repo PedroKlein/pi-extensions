@@ -201,6 +201,18 @@ describe("/gateway status (default)", () => {
 	});
 });
 
+describe("/gateway models", () => {
+	it("sends the models mapping text when no interactive UI is available", async () => {
+		await handler!("models", ctx);
+		expect(pi.sendUserMessage).toHaveBeenCalledTimes(1);
+		const text = pi.sendUserMessage.mock.calls[0][0];
+		expect(text).toContain("gateway models");
+		expect(text).toContain("Provider");
+		expect(text).toContain("openrouter");
+		expect(text).toContain("or-heavy");
+	});
+});
+
 describe("/gateway toggle <backend>", () => {
 	it("flips a backend's health", async () => {
 		await handler!("toggle openrouter", ctx);

@@ -55,7 +55,8 @@ availability wins.
 
 | Command | Description |
 |---------|-------------|
-| `/gateway` (alias `/gateway status`) | Print current status: header, backends (health + reset ETA + quota), aliases (routing map), keybindings |
+| `/gateway` (alias `/gateway status`) | Open the interactive board: header, backends (health + reset ETA + quota), aliases (routing map). Keys: `f` force backend · `c` clear overrides · `v` view models · `r` reorder chain · `m` toggle health · `R` reload · `q`/Esc quit. Falls back to a printed status snapshot when no interactive TUI is available (print/RPC). |
+| `/gateway models` | Show the alias → provider → real model → status mapping — what each neutral alias (`heavy-1`, …) actually resolves to right now. Opens the board's models pane interactively, or prints a text table without a UI. |
 | `/gateway force <backend>` | Set `activeBackendOverride` — pin routing to one backend |
 | `/gateway force none` | Clear `activeBackendOverride` (bare `/gateway force` also clears) |
 | `/gateway clear` | Clear all overrides |
@@ -211,8 +212,6 @@ pnpm typecheck      # type-check without emitting
 
 ## Limitations (v1)
 
-- `/gateway` is subcommand-driven text UI. A full interactive Component
-  keybinding board is planned as a follow-up.
 - One `quotaHint` enricher shipped (`daily-eur-cap`). Add more entries to
   `src/enrichers.ts` as backend error formats are verified.
 - Fallback chain ordering is static per config; no learned/adaptive ordering.

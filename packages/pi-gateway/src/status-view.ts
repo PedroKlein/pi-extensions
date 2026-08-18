@@ -32,6 +32,18 @@ export interface StatusSections {
 	footer: string[];
 }
 
+/**
+ * One resolved gateway alias: the neutral id (e.g. `heavy-2`) and the backend
+ * + real model it currently routes to. `backend`/`model` are undefined when no
+ * healthy backend declares the tier (the alias is emitted but unavailable).
+ */
+export interface AliasRoute {
+	id: string;
+	slot: (typeof TIER_SLOTS)[number];
+	backend?: string;
+	model?: string;
+}
+
 export function renderStatusSections(input: StatusRenderInput): StatusSections {
 	const now = input.now ?? new Date();
 	return {
@@ -97,11 +109,19 @@ function renderBackends(input: StatusRenderInput, now: Date): string[] {
 	return rows;
 }
 
-function renderAliases(input: StatusRenderInput, now: Date): string[] {
-	const rows: string[] = [
-		"Alias             Routes-to",
-		"───────────────── ─────────────────────────────────────────",
-	];
+/**
+ * Resolve every emitted gateway alias to the backend + real model it currently
+ * routes to. Shared by the status view, the models view, and (conceptually)
+ * the composer's routing logic — kept pure so both text and interactive UIs
+ * agree on what an alias points at.
+ *
+ * The alias count K per tier is fixed by the first backend in the effective
+ * order that declares the tier (health-agnostic) so the alias set is stable
+ * across cap transitions; routing targets the first HEALTHY backend, clamping
+ * the index to that backend's list length.
+ */
+export function computeAliasRoutes(input: StatusRenderInput): AliasRoute[] {
+	const now = input.now ?? new Date();
 	const chain = input.state.fallbackChainOverride ?? input.aliases.fallbackChain;
 	const active = input.state.activeBackendOverride;
 	const ordered: string[] = [];
@@ -109,10 +129,7 @@ function renderAliases(input: StatusRenderInput, now: Date): string[] {
 	for (const n of chain) if (!ordered.includes(n)) ordered.push(n);
 	for (const n of Object.keys(input.aliases.backends)) if (!ordered.includes(n)) ordered.push(n);
 
-	// Indexed neutral aliases: <tier>-<N>. The alias count K is set by the first
-	// backend in the effective chain that declares the tier (health-agnostic),
-	// keeping the alias set stable. Routing targets the first HEALTHY backend,
-	// with the index clamped to that backend's list length.
+	const routes: AliasRoute[] = [];
 	for (const slot of TIER_SLOTS) {
 		// Canonical count from the first backend (any health) declaring the tier.
 		let canonicalCount = 0;
@@ -138,22 +155,74 @@ function renderAliases(input: StatusRenderInput, now: Date): string[] {
 		for (let n = 1; n <= canonicalCount; n++) {
 			const id = `${slot}-${n}`;
 			if (!picked) {
-				rows.push(`${id.padEnd(17)} (no healthy backend)`);
+				routes.push({ id, slot });
 				continue;
 			}
 			const list = input.aliases.backends[picked].tiers[slot]!;
 			const model = list[Math.min(n, list.length) - 1];
-			rows.push(`${id.padEnd(17)} ${picked}/${model}`);
+			routes.push({ id, slot, backend: picked, model });
 		}
+	}
+	return routes;
+}
+
+function renderAliases(input: StatusRenderInput, _now: Date): string[] {
+	const rows: string[] = [
+		"Alias             Routes-to",
+		"───────────────── ─────────────────────────────────────────",
+	];
+	for (const route of computeAliasRoutes(input)) {
+		if (!route.backend) {
+			rows.push(`${route.id.padEnd(17)} (no healthy backend)`);
+			continue;
+		}
+		rows.push(`${route.id.padEnd(17)} ${route.backend}/${route.model}`);
 	}
 	return rows;
 }
 
+/**
+ * Models view rows — one line per gateway alias exposing exactly what the
+ * neutral name hides: the real model id and the provider (backend) serving it,
+ * plus a live status column. Consumed by both `/gateway models` (text) and the
+ * interactive board's models pane.
+ */
+export function renderModelsRows(input: StatusRenderInput): string[] {
+	const rows: string[] = [
+		"Alias             Provider            Model                          Status",
+		"───────────────── ─────────────────── ────────────────────────────── ──────────",
+	];
+	const routes = computeAliasRoutes(input);
+	if (routes.length === 0) {
+		rows.push("(no aliases — check aliases.json backends/tiers)");
+		return rows;
+	}
+	for (const route of routes) {
+		if (!route.backend) {
+			rows.push(
+				`${route.id.padEnd(17)} ${"—".padEnd(19)} ${"—".padEnd(30)} unavailable`,
+			);
+			continue;
+		}
+		rows.push(
+			`${route.id.padEnd(17)} ${route.backend.padEnd(19)} ${(route.model ?? "").padEnd(30)} healthy`,
+		);
+	}
+	return rows;
+}
+
+/** Full text form of the models view for non-interactive (print/RPC) mode. */
+export function renderModelsText(input: StatusRenderInput): string {
+	return [
+		"═══ gateway models ═══════════════════════════════════════════════════─",
+		...renderModelsRows(input),
+	].join("\n");
+}
+
 function renderFooter(): string[] {
 	return [
-		"[c] change active override    [f] force / clear override",
-		"[r] reorder fallback chain    [m] toggle backend health",
-		"[R] reload config from disk   [q] quit",
+		"[f] force backend   [c] clear overrides   [v] view models",
+		"[r] reorder chain   [m] toggle health     [R] reload   [q] quit",
 	];
 }
 
