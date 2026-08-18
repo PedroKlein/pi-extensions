@@ -9,10 +9,15 @@
  * This file is the thin oh-my-pi adapter: it builds the oh-my-pi
  * {@link GatewayPlatform} (see ./omp-platform.ts) and hands off to the same
  * shared {@link activateGateway} runtime the pi entry uses.
+ *
+ * The incoming `pi` is typed structurally ({@link GatewayHostApi} +
+ * {@link OmpRegisterApi}) rather than against `@oh-my-pi/pi-coding-agent`, so
+ * this package needs only the lightweight `@oh-my-pi/pi-ai` at build time — the
+ * full coding-agent (which drags in @huggingface/transformers, onnxruntime,
+ * sharp) is not required just to typecheck the entry.
  */
 
-import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
-
+import type { GatewayHostApi } from "./host.js";
 import { createOmpGatewayTransport, ompRegisterProvider, type OmpRegisterApi } from "./omp-platform.js";
 import { activateGateway, type GatewayPlatform } from "./runtime.js";
 
@@ -24,10 +29,10 @@ export {
 	STATE_PATH,
 } from "./runtime.js";
 
-export default function (pi: ExtensionAPI) {
+export default function (pi: GatewayHostApi & OmpRegisterApi) {
 	const platform: GatewayPlatform = {
 		transport: createOmpGatewayTransport(),
-		registerProvider: ompRegisterProvider(pi as unknown as OmpRegisterApi),
+		registerProvider: ompRegisterProvider(pi),
 	};
-	activateGateway(pi as unknown as Parameters<typeof activateGateway>[0], platform);
+	activateGateway(pi, platform);
 }

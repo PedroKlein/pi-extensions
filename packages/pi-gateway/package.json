@@ -54,15 +54,13 @@
     "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*",
-    "@oh-my-pi/pi-ai": "*",
-    "@oh-my-pi/pi-coding-agent": "*"
+    "@oh-my-pi/pi-ai": "*"
   },
   "peerDependenciesMeta": {
     "@earendil-works/pi-ai": { "optional": true },
     "@earendil-works/pi-coding-agent": { "optional": true },
     "@earendil-works/pi-tui": { "optional": true },
-    "@oh-my-pi/pi-ai": { "optional": true },
-    "@oh-my-pi/pi-coding-agent": { "optional": true }
+    "@oh-my-pi/pi-ai": { "optional": true }
   },
   "dependencies": {
     "@sinclair/typebox": "^0.34.0"
@@ -72,7 +70,6 @@
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*",
     "@oh-my-pi/pi-ai": "^17.3.5",
-    "@oh-my-pi/pi-coding-agent": "^17.3.5",
     "tsup": "^8.0.0",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"
