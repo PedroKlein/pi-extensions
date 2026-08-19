@@ -107,6 +107,11 @@ export class GatewayController {
 		return true;
 	}
 
+	/** Register the initial resolved provider before session_start completes. */
+	async initialize(): Promise<void> {
+		await this.reregisterNow();
+	}
+
 	/**
 	 * Force a re-registration (e.g. after user edits state via /gateway TUI).
 	 */

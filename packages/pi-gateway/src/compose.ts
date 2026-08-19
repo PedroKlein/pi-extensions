@@ -24,7 +24,13 @@
  * session_start handler decide when to invoke it.
  */
 
-import { DEFAULT_CAP_STATUS_CODES, GATEWAY_API, TIER_SLOTS, type TierSlot } from "./config.js";
+import {
+	DEFAULT_CAP_STATUS_CODES,
+	GATEWAY_API,
+	TIER_SLOTS,
+	type AliasesConfig,
+	type TierSlot,
+} from "./config.js";
 import type { ResolvedBackend } from "./resolver.js";
 import type { GatewayState } from "./state.js";
 
@@ -112,6 +118,47 @@ export interface ComposeResult {
 	 * time. Keyed identically to `routing`.
 	 */
 	targets: Record<string, GatewayRouteTarget>;
+}
+
+/**
+ * Build a provider-agnostic alias catalogue for extension-load time, before a
+ * session context (and therefore the live model registry) exists. The full
+ * backend metadata and credential replace these placeholders in session_start.
+ */
+export function composeBootstrapModels(aliases: AliasesConfig): GatewayModelEntry[] {
+	const orderedNames = [
+		...aliases.fallbackChain,
+		...Object.keys(aliases.backends).filter((name) => !aliases.fallbackChain.includes(name)),
+	];
+	const models: GatewayModelEntry[] = [];
+
+	for (const tier of TIER_SLOTS) {
+		let count = 0;
+		for (const name of orderedNames) {
+			const declared = aliases.backends[name]?.tiers[tier];
+			if (declared && declared.length > 0) {
+				count = declared.length;
+				break;
+			}
+		}
+		for (let index = 1; index <= count; index++) {
+			const id = `${tier}-${index}`;
+			models.push({
+				id,
+				name: `${id} (gateway bootstrap)`,
+				api: GATEWAY_API,
+				baseUrl: "https://pi-gateway.invalid",
+				reasoning: true,
+				thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+				input: ["text", "image"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 1_000_000,
+				maxTokens: 128_000,
+			});
+		}
+	}
+
+	return models;
 }
 
 /**

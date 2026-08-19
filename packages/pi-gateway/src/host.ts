@@ -21,6 +21,7 @@ export interface GatewayHostContext {
 /** Structural harness API — the subset the gateway uses. */
 export interface GatewayHostApi {
 	on(event: string, handler: (event: any, ctx: any) => any): void;
+	setModel?(model: unknown): Promise<boolean>;
 	registerCommand(
 		name: string,
 		options: {

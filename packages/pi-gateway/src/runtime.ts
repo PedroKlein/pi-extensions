@@ -12,12 +12,13 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { registerGatewayCommand } from "./command.js";
+import { composeBootstrapModels } from "./compose.js";
 import { AliasesConfigError, loadAliasesConfig } from "./config.js";
 import { GatewayController } from "./controller.js";
 import type { GatewayHostApi, GatewayHostContext } from "./host.js";
 import { installRefreshTimer, type RefreshTimerHandle } from "./refresh-timer.js";
 import { resolveBackends } from "./resolver.js";
-import type { RegisterFn, RegistryLike } from "./session.js";
+import { GATEWAY_PROVIDER_NAME, type RegisterFn, type RegistryLike } from "./session.js";
 import { GatewayStateError } from "./state.js";
 import type { GatewayTransport } from "./transport-core.js";
 
@@ -27,6 +28,9 @@ export const ALIASES_PATH =
 	process.env.PI_GATEWAY_ALIASES_PATH ?? join(homedir(), ".pi", "agent", "aliases.json");
 export const STATE_PATH =
 	process.env.PI_GATEWAY_STATE_PATH ?? join(homedir(), ".pi", "agent", "gateway-state.json");
+
+const BOOTSTRAP_API_KEY = "gateway-bootstrap";
+const BOOTSTRAP_BASE_URL = "https://pi-gateway.invalid";
 
 /** Minimal registry surface for model/provider listing. */
 interface ModelListRegistry {
@@ -71,6 +75,24 @@ export function activateGateway(pi: GatewayHostApi, platform: GatewayPlatform): 
 	let controller: GatewayController | undefined;
 	let refreshTimer: RefreshTimerHandle | undefined;
 
+	// Startup model selection happens before session_start. Queue a lightweight
+	// alias catalogue during extension load so configured gateway/* defaults can
+	// resolve; session_start replaces it with fully resolved backend metadata.
+	platform.transport.register();
+	try {
+		const aliases = loadAliasesConfig(ALIASES_PATH);
+		const models = composeBootstrapModels(aliases);
+		if (models.length > 0) {
+			platform.registerProvider(GATEWAY_PROVIDER_NAME, {
+				models,
+				apiKey: BOOTSTRAP_API_KEY,
+				baseUrl: BOOTSTRAP_BASE_URL,
+			});
+		}
+	} catch {
+		// session_start reports missing/invalid config through the harness UI.
+	}
+
 	async function buildController(ctx: GatewayHostContext): Promise<void> {
 		const aliases = loadAliasesConfig(ALIASES_PATH);
 		const registry: RegistryLike = platform.adaptRegistry
@@ -84,7 +106,18 @@ export function activateGateway(pi: GatewayHostApi, platform: GatewayPlatform): 
 			setRoutes: (targets) => platform.transport.setRoutes(targets),
 			notify: (msg, type) => ctx.ui.notify(msg, type),
 		});
-		controller.requestReregister();
+		await controller.initialize();
+
+		// Startup may have selected the lightweight bootstrap entry. Re-select the
+		// same alias from the refreshed registry so the session uses the real model's
+		// context window, thinking map, input support, and cost metadata.
+		if (ctx.model?.provider === GATEWAY_PROVIDER_NAME && ctx.model.id && pi.setModel) {
+			const refreshed = (ctx.modelRegistry as { find(provider: string, id: string): unknown }).find(
+				GATEWAY_PROVIDER_NAME,
+				ctx.model.id,
+			);
+			if (refreshed) await pi.setModel(refreshed);
+		}
 
 		// Install (or re-install) the periodic token-refresh timer.
 		refreshTimer?.stop();

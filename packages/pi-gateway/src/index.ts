@@ -13,6 +13,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
+import { GATEWAY_API } from "./config.js";
 import { activateGateway, type GatewayPlatform } from "./runtime.js";
 import { escapeConfigValue } from "./session.js";
 import { createPiGatewayTransport } from "./transport.js";
@@ -27,11 +28,16 @@ export {
 } from "./runtime.js";
 
 export default function (pi: ExtensionAPI) {
+	const transport = createPiGatewayTransport();
 	const platform: GatewayPlatform = {
-		transport: createPiGatewayTransport(),
+		transport,
 		registerProvider: (name, config) =>
 			pi.registerProvider(name, {
+				api: GATEWAY_API,
+				baseUrl: config.baseUrl,
 				models: config.models,
+				streamSimple: (model: unknown, context: unknown, options: unknown) =>
+					transport.streamSimple(model as never, context, options),
 				// pi treats provider apiKey as a config value ($VAR/${VAR}/!command),
 				// so escape the opaque token/JSON service key to survive verbatim.
 				...(config.apiKey !== undefined ? { apiKey: escapeConfigValue(config.apiKey) } : {}),
