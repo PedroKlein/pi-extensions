@@ -1,5 +1,12 @@
 # @pedro_klein/pi-gateway
 
+## 0.5.3
+
+### Patch Changes
+
+- 6e9409e: Route OMP gateway aliases through extension-defined custom API transports announced over the shared event bus, avoiding OMP's isolated extension-side API registry. Re-select the active gateway alias after every successful re-registration so the status bar immediately reflects backend and model changes.
+- 6e9409e: Register `/gateway` during extension load so oh-my-pi includes the command and its interactive TUI. Previously it was registered after `session_start`, which is too late for oh-my-pi's extension registration snapshot.
+
 ## 0.5.2
 
 ### Patch Changes

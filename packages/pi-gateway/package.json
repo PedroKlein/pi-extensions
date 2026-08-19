@@ -1,6 +1,6 @@
 {
 	"name": "@pedro_klein/pi-gateway",
-	"version": "0.5.2",
+	"version": "0.5.3",
 	"description": "Gateway extension for Pi — virtual provider exposing tier aliases (heavy/medium/light) that route to registered backends with automatic failover on cap hits",
 	"type": "module",
 	"main": "./src/index.ts",
