@@ -1,5 +1,11 @@
 # @pedro_klein/pi-status
 
+## 0.2.1
+
+### Patch Changes
+
+- ab290b5: Preserve the parenthesized backend suffix in gateway model names so the status bar shows the active routed backend, such as `Example Model (backend-a)`.
+
 ## 0.2.0
 
 ### Minor Changes
