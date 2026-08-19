@@ -78,6 +78,30 @@ describe("createOmpGatewayTransport", () => {
 		expect(calls.stream[0].model.id).toBe("anthropic--claude-sonnet-4");
 	});
 
+	it("dispatches extension-registered custom APIs without using OMP's isolated top-level registry", () => {
+		const customStream = vi.fn(() => "CUSTOM_STREAM_RESULT");
+		const customStreamSimple = vi.fn(() => "CUSTOM_STREAM_SIMPLE_RESULT");
+		const t = createOmpGatewayTransport((api) =>
+			api === "custom-api"
+				? { stream: customStream, streamSimple: customStreamSimple }
+				: undefined,
+		);
+		t.setRoutes(route);
+
+		expect(t.stream({ id: "heavy-1", api: "gateway" }, { ctx: 1 }, { apiKey: "key" })).toBe(
+			"CUSTOM_STREAM_RESULT",
+		);
+		expect(
+			t.streamSimple({ id: "heavy-1", api: "gateway" }, { ctx: 2 }, { apiKey: "key" }),
+		).toBe("CUSTOM_STREAM_SIMPLE_RESULT");
+		expect(calls.stream).toHaveLength(0);
+		expect(calls.streamSimple).toHaveLength(0);
+		expect(customStream.mock.calls[0][0]).toMatchObject({
+			id: "anthropic--claude-sonnet-4",
+			api: "custom-api",
+		});
+	});
+
 	it("throws a clear error for a stale alias", () => {
 		const t = createOmpGatewayTransport();
 		t.setRoutes({}); // no routes

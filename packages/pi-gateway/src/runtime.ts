@@ -74,6 +74,21 @@ export interface GatewayPlatform {
 export function activateGateway(pi: GatewayHostApi, platform: GatewayPlatform): void {
 	let controller: GatewayController | undefined;
 	let refreshTimer: RefreshTimerHandle | undefined;
+	let sessionContext: GatewayHostContext | undefined;
+
+	registerGatewayCommand(pi, {
+		getController: () => controller,
+		statePath: STATE_PATH,
+		aliasesPath: ALIASES_PATH,
+		rebuildController: async () => {
+			if (!sessionContext) throw new Error("gateway session has not started");
+			await buildController(sessionContext);
+		},
+		listModels: (backend) =>
+			sessionContext ? listBackendModels(sessionContext.modelRegistry, backend) : [],
+		listProviders: () =>
+			sessionContext ? listRegistryProviders(sessionContext.modelRegistry) : [],
+	});
 
 	// Startup model selection happens before session_start. Queue a lightweight
 	// alias catalogue during extension load so configured gateway/* defaults can
@@ -93,6 +108,15 @@ export function activateGateway(pi: GatewayHostApi, platform: GatewayPlatform): 
 		// session_start reports missing/invalid config through the harness UI.
 	}
 
+	async function refreshSelectedGatewayModel(ctx: GatewayHostContext): Promise<void> {
+		if (ctx.model?.provider !== GATEWAY_PROVIDER_NAME || !ctx.model.id || !pi.setModel) return;
+		const refreshed = (ctx.modelRegistry as { find(provider: string, id: string): unknown }).find(
+			GATEWAY_PROVIDER_NAME,
+			ctx.model.id,
+		);
+		if (refreshed) await pi.setModel(refreshed);
+	}
+
 	async function buildController(ctx: GatewayHostContext): Promise<void> {
 		const aliases = loadAliasesConfig(ALIASES_PATH);
 		const registry: RegistryLike = platform.adaptRegistry
@@ -104,20 +128,10 @@ export function activateGateway(pi: GatewayHostApi, platform: GatewayPlatform): 
 			registry: registry as never,
 			register: platform.registerProvider,
 			setRoutes: (targets) => platform.transport.setRoutes(targets),
+			onRegistered: () => refreshSelectedGatewayModel(ctx),
 			notify: (msg, type) => ctx.ui.notify(msg, type),
 		});
 		await controller.initialize();
-
-		// Startup may have selected the lightweight bootstrap entry. Re-select the
-		// same alias from the refreshed registry so the session uses the real model's
-		// context window, thinking map, input support, and cost metadata.
-		if (ctx.model?.provider === GATEWAY_PROVIDER_NAME && ctx.model.id && pi.setModel) {
-			const refreshed = (ctx.modelRegistry as { find(provider: string, id: string): unknown }).find(
-				GATEWAY_PROVIDER_NAME,
-				ctx.model.id,
-			);
-			if (refreshed) await pi.setModel(refreshed);
-		}
 
 		// Install (or re-install) the periodic token-refresh timer.
 		refreshTimer?.stop();
@@ -130,6 +144,7 @@ export function activateGateway(pi: GatewayHostApi, platform: GatewayPlatform): 
 	}
 
 	pi.on("session_start", async (_event: unknown, ctx: GatewayHostContext) => {
+		sessionContext = ctx;
 		// Register the gateway api transport once, before any provider
 		// registration, so the harness can resolve `api: "gateway"` when a gateway
 		// alias is selected.
@@ -154,14 +169,6 @@ export function activateGateway(pi: GatewayHostApi, platform: GatewayPlatform): 
 			);
 		}
 
-		registerGatewayCommand(pi, {
-			getController: () => controller,
-			statePath: STATE_PATH,
-			aliasesPath: ALIASES_PATH,
-			rebuildController: () => buildController(ctx),
-			listModels: (backend) => listBackendModels(ctx.modelRegistry, backend),
-			listProviders: () => listRegistryProviders(ctx.modelRegistry),
-		});
 	});
 
 	pi.on("message_end", async (event: { message?: any }, ctx: GatewayHostContext) => {
@@ -180,5 +187,6 @@ export function activateGateway(pi: GatewayHostApi, platform: GatewayPlatform): 
 		refreshTimer?.stop();
 		refreshTimer = undefined;
 		controller = undefined;
+		sessionContext = undefined;
 	});
 }

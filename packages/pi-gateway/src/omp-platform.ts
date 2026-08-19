@@ -3,13 +3,12 @@
  *
  * Builds the {@link GatewayPlatform} for oh-my-pi:
  *
- *  - Transport: registers the `gateway` custom api via `registerCustomApi`, and
- *    delegates a routed request to the real backend by calling oh-my-pi's
- *    top-level `stream`/`streamSimple`, which route both custom apis (e.g.
- *    custom-api, registered via `registerProvider` → `registerCustomApi`) and
- *    builtin apis. Since the swapped-in real model carries the real `api`, this
- *    is exactly what oh-my-pi would dispatch natively — no recursion into the
- *    `gateway` api.
+ *  - Transport: delegates built-in APIs through oh-my-pi's top-level
+ *    `stream`/`streamSimple`. Extension-defined APIs announce their stream
+ *    handlers over the shared event bus because OMP loads extensions in an
+ *    isolated module graph whose custom-API registry is not the host registry.
+ *    Since the swapped-in real model carries the real `api`, neither path
+ *    recurses into the `gateway` api.
  *
  *  - Register: maps the neutral {@link GatewayProviderConfig} onto oh-my-pi's
  *    `registerProvider(name, { api, baseUrl, apiKey, models })`. oh-my-pi has no
@@ -25,6 +24,20 @@ import type { GatewayModelEntry } from "./compose.js";
 import { GATEWAY_API } from "./config.js";
 import type { RegisterFn, RegistryLike } from "./session.js";
 import { createGatewayTransport, type GatewayTransport, type UnknownModel } from "./transport-core.js";
+
+export interface OmpCustomTransport {
+	stream?: (model: UnknownModel, context: unknown, options: unknown) => unknown;
+	streamSimple: (model: UnknownModel, context: unknown, options: unknown) => unknown;
+}
+
+export type OmpCustomTransportLookup = (api: string) => OmpCustomTransport | undefined;
+
+export interface OmpCustomTransportRegistration extends OmpCustomTransport {
+	api: string;
+}
+
+export const OMP_GATEWAY_REGISTER_TRANSPORT_EVENT = "pi-gateway:register-transport";
+export const OMP_GATEWAY_REQUEST_TRANSPORTS_EVENT = "pi-gateway:request-transports";
 
 /** oh-my-pi provider config we hand to `registerProvider`. */
 export interface OmpProviderConfig {
@@ -73,20 +86,28 @@ export function toOmpModels(models: GatewayModelEntry[]): OmpModelConfig[] {
 	});
 }
 
-/** oh-my-pi transport: register a custom api + delegate via top-level dispatch. */
 /**
- * oh-my-pi transport: routes alias→real and delegates via the top-level
- * `stream`/`streamSimple`. Registration of the `gateway` custom api does NOT
+ * oh-my-pi transport: routes alias→real, using an announced extension transport
+ * when present and the top-level `stream`/`streamSimple` for built-in APIs.
+ * Registration of the `gateway` custom api does NOT
  * happen here — it goes through `registerProvider` (see {@link ompRegisterProvider})
  * so it reaches the host's bundled pi-ai instance. `register()` is therefore a
  * no-op; the transport only owns the routing map + delegates.
  */
-export function createOmpGatewayTransport(): GatewayTransport {
+export function createOmpGatewayTransport(
+	lookupCustomTransport: OmpCustomTransportLookup = () => undefined,
+): GatewayTransport {
 	return createGatewayTransport({
 		registerApi() {
 			/* no-op: registered via registerProvider(streamSimple) instead */
 		},
 		deliver(kind, realModel, context, options) {
+			const custom = lookupCustomTransport(String(realModel.api));
+			if (custom) {
+				return kind === "stream" && custom.stream
+					? custom.stream(realModel, context, options)
+					: custom.streamSimple(realModel, context, options);
+			}
 			return kind === "stream"
 				? (ompStream(realModel as never, context as never, options as never) as unknown)
 				: (ompStreamSimple(realModel as never, context as never, options as never) as unknown);

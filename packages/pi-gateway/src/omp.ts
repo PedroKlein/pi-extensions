@@ -21,7 +21,10 @@ import type { GatewayHostApi } from "./host.js";
 import {
 	adaptOmpRegistry,
 	createOmpGatewayTransport,
+	OMP_GATEWAY_REGISTER_TRANSPORT_EVENT,
+	OMP_GATEWAY_REQUEST_TRANSPORTS_EVENT,
 	ompRegisterProvider,
+	type OmpCustomTransportRegistration,
 	type OmpModelRegistry,
 	type OmpRegisterApi,
 } from "./omp-platform.js";
@@ -36,11 +39,26 @@ export {
 } from "./runtime.js";
 
 export default function (pi: GatewayHostApi & OmpRegisterApi) {
-	const transport = createOmpGatewayTransport();
+	const customTransports = new Map<string, OmpCustomTransportRegistration>();
+	pi.events?.on(OMP_GATEWAY_REGISTER_TRANSPORT_EVENT, (data) => {
+		if (!isCustomTransportRegistration(data)) return;
+		customTransports.set(data.api, data);
+	});
+	pi.on("session_start", () => {
+		pi.events?.emit(OMP_GATEWAY_REQUEST_TRANSPORTS_EVENT);
+	});
+
+	const transport = createOmpGatewayTransport((api) => customTransports.get(api));
 	const platform: GatewayPlatform = {
 		transport,
 		registerProvider: ompRegisterProvider(pi, transport),
 		adaptRegistry: (registry) => adaptOmpRegistry(registry as OmpModelRegistry),
 	};
 	activateGateway(pi, platform);
+}
+
+function isCustomTransportRegistration(data: unknown): data is OmpCustomTransportRegistration {
+	if (!data || typeof data !== "object") return false;
+	const registration = data as Partial<OmpCustomTransportRegistration>;
+	return typeof registration.api === "string" && typeof registration.streamSimple === "function";
 }

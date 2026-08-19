@@ -118,6 +118,30 @@ describe("GatewayController — debounce", () => {
 });
 
 describe("GatewayController — re-registration reflects transitions", () => {
+	it("refreshes the active gateway model after every successful registration", async () => {
+		const register = vi.fn();
+		const onRegistered = vi.fn();
+		const microtasks: Array<() => void> = [];
+		const controller = new GatewayController({
+			aliases: CFG,
+			statePath,
+			registry: fakeRegistry(),
+			register,
+			notify: vi.fn(),
+			onRegistered,
+			now: () => new Date("2025-01-15T12:00:00.000Z"),
+			scheduleMicrotask: (fn) => microtasks.push(fn),
+		});
+
+		await controller.initialize();
+		expect(onRegistered).toHaveBeenCalledTimes(1);
+
+		controller.reloadStateFromDisk();
+		microtasks.shift()!();
+		await drainMicrotasks();
+		expect(onRegistered).toHaveBeenCalledTimes(2);
+	});
+
 	it("after cap hit, subsequent registered models exclude the unhealthy backend for neutral aliases", async () => {
 		const register = vi.fn();
 		const notify = vi.fn();

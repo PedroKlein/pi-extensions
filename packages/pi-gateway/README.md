@@ -89,6 +89,23 @@ oh-my-pi caveats:
   single-credential model; failover across backends happens on re-registration
   (`/gateway reload`, a health toggle, or the periodic token refresh).
 - The credential is forwarded to `apiKey` verbatim (no `$`/`!` escaping).
+- **Extension-defined backend APIs must announce their transport.** OMP isolates
+  extension imports from the host's custom-API registry, so a custom provider
+  should answer the gateway's event-bus handshake after calling
+  `registerProvider`:
+
+  ```ts
+  const announce = () => pi.events.emit("pi-gateway:register-transport", {
+    api: "custom-api",
+    stream,
+    streamSimple,
+  });
+  pi.events.on("pi-gateway:request-transports", announce);
+  announce();
+  ```
+
+  Built-in OMP APIs need no announcement. Emitting immediately plus answering
+  requests makes the handshake independent of extension load order.
 
 ## What it provides
 

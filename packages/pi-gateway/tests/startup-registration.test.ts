@@ -43,17 +43,21 @@ describe("startup registration", () => {
 
 		const { default: activate } = await import("../src/index.js");
 		const handlers = new Map<string, (...args: any[]) => any>();
+		const registerCommand = vi.fn();
 		const registerProvider = vi.fn();
 		activate({
 			on: (event: string, handler: (...args: any[]) => any) => handlers.set(event, handler),
-			registerCommand: vi.fn(),
+			registerCommand,
 			registerProvider,
 			sendUserMessage: vi.fn(),
 		} as any);
 
-		// No session_start handler has run. The provider must already be queued so
-		// --model gateway/... and configured defaults can resolve during startup.
+		// No session_start handler has run. Providers and commands must both be
+		// registered during extension load because OMP snapshots registrations
+		// before it emits session_start.
 		expect(handlers.has("session_start")).toBe(true);
+		expect(registerCommand).toHaveBeenCalledTimes(1);
+		expect(registerCommand.mock.calls[0][0]).toBe("gateway");
 		expect(registerProvider).toHaveBeenCalledTimes(1);
 		const [name, config] = registerProvider.mock.calls[0];
 		expect(name).toBe("gateway");
@@ -79,8 +83,11 @@ describe("startup registration", () => {
 		writeFileSync(
 			aliasesPath,
 			JSON.stringify({
-				fallbackChain: ["backend"],
-				backends: { backend: { tiers: { medium: ["real-medium"] } } },
+				fallbackChain: ["primary", "fallback"],
+				backends: {
+					primary: { tiers: { medium: ["real-medium"] } },
+					fallback: { tiers: { medium: ["fallback-medium"] } },
+				},
 			}),
 		);
 		vi.stubEnv("PI_GATEWAY_ALIASES_PATH", aliasesPath);
@@ -88,29 +95,43 @@ describe("startup registration", () => {
 
 		const { activateGateway } = await import("../src/runtime.js");
 		const handlers = new Map<string, (...args: any[]) => any>();
-		const backendModel = {
-			id: "real-medium",
-			provider: "backend",
-			api: "openai-responses",
-			baseUrl: "https://backend.example/v1",
-			reasoning: true,
-			contextWindow: 272_000,
-			maxTokens: 32_000,
-		};
+		const backendModels = [
+			{
+				id: "real-medium",
+				name: "Primary Medium",
+				provider: "primary",
+				api: "openai-responses",
+				baseUrl: "https://primary.example/v1",
+				reasoning: true,
+				contextWindow: 272_000,
+				maxTokens: 32_000,
+			},
+			{
+				id: "fallback-medium",
+				name: "Fallback Medium",
+				provider: "fallback",
+				api: "openai-responses",
+				baseUrl: "https://fallback.example/v1",
+				reasoning: true,
+				contextWindow: 128_000,
+				maxTokens: 16_000,
+			},
+		];
 		let gatewayModels: any[] = [];
 		const registry = {
 			find: (provider: string, id: string) =>
-				provider === "backend"
-					? (id === backendModel.id ? backendModel : undefined)
-					: gatewayModels.find((model) => model.id === id),
-			getProvider: (name: string) => (name === "backend" ? { id: name } : undefined),
-			getRegisteredProviderConfig: (name: string) =>
-				name === "backend"
-					? { api: "openai-responses", baseUrl: "https://backend.example/v1" }
-					: undefined,
-			getAll: () => [backendModel, ...gatewayModels],
+				provider === "gateway"
+					? gatewayModels.find((model) => model.id === id)
+					: backendModels.find((model) => model.provider === provider && model.id === id),
+			getProvider: (name: string) =>
+				backendModels.some((model) => model.provider === name) ? { id: name } : undefined,
+			getRegisteredProviderConfig: (name: string) => {
+				const model = backendModels.find((candidate) => candidate.provider === name);
+				return model ? { api: model.api, baseUrl: model.baseUrl } : undefined;
+			},
+			getAll: () => [...backendModels, ...gatewayModels],
 			getApiKeyForProvider: async (name: string) =>
-				name === "backend" ? "resolved-backend-token" : undefined,
+				backendModels.some((model) => model.provider === name) ? `resolved-${name}-token` : undefined,
 		};
 		const registerProvider = vi.fn((name: string, config: { models: any[] }) => {
 			if (name === "gateway") {
@@ -118,9 +139,10 @@ describe("startup registration", () => {
 			}
 		});
 		const setModel = vi.fn(async () => true);
+		const registerCommand = vi.fn();
 		const host = {
 			on: (event: string, handler: (...args: any[]) => any) => handlers.set(event, handler),
-			registerCommand: vi.fn(),
+			registerCommand,
 			sendUserMessage: vi.fn(),
 			setModel,
 		};
@@ -145,8 +167,21 @@ describe("startup registration", () => {
 		expect(setModel.mock.calls[0][0]).toMatchObject({
 			provider: "gateway",
 			id: "medium-1",
+			name: "Primary Medium (primary)",
 			contextWindow: 272_000,
 			maxTokens: 32_000,
+		});
+
+		const command = registerCommand.mock.calls[0][1].handler;
+		await command("force fallback", { hasUI: false, ui: { notify: vi.fn() } });
+		for (let i = 0; i < 10; i++) await new Promise((resolve) => setImmediate(resolve));
+		expect(setModel).toHaveBeenCalledTimes(2);
+		expect(setModel.mock.calls[1][0]).toMatchObject({
+			provider: "gateway",
+			id: "medium-1",
+			name: "Fallback Medium (fallback)",
+			contextWindow: 128_000,
+			maxTokens: 16_000,
 		});
 		await handlers.get("session_shutdown")?.({}, {});
 	});

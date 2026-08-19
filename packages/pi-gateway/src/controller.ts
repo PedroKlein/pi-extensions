@@ -24,6 +24,8 @@ export interface ControllerOptions {
 	notify: (msg: string, type?: "info" | "warning" | "error") => void;
 	/** Publish the alias→target routing map to the gateway transport. */
 	setRoutes?: (targets: Record<string, GatewayRouteTarget>) => void;
+	/** Refresh the host's active model after the registry entry is replaced. */
+	onRegistered?: () => Promise<void> | void;
 	/** Testable clock. */
 	now?: () => Date;
 	/** Testable microtask deferral. */
@@ -42,10 +44,13 @@ export class GatewayController {
 	/** alias id → backend name from the most recent compose. Cap attribution
 	 * for backend-agnostic indexed aliases relies on this. */
 	private routing: Record<string, string> = {};
-	private readonly opts: Required<Omit<ControllerOptions, "now" | "scheduleMicrotask" | "setRoutes">> & {
+	private readonly opts: Required<
+		Omit<ControllerOptions, "now" | "scheduleMicrotask" | "setRoutes" | "onRegistered">
+	> & {
 		now: () => Date;
 		scheduleMicrotask: (fn: () => void) => void;
 		setRoutes?: (targets: Record<string, GatewayRouteTarget>) => void;
+		onRegistered?: () => Promise<void> | void;
 	};
 
 	constructor(opts: ControllerOptions) {
@@ -56,6 +61,7 @@ export class GatewayController {
 			register: opts.register,
 			notify: opts.notify,
 			setRoutes: opts.setRoutes,
+			onRegistered: opts.onRegistered,
 			now: opts.now ?? (() => new Date()),
 			scheduleMicrotask: opts.scheduleMicrotask ?? ((fn) => queueMicrotask(fn)),
 		};
@@ -154,6 +160,12 @@ export class GatewayController {
 		} catch (err) {
 			this.opts.notify(`gateway re-registration failed: ${(err as Error).message}`, "error");
 			return;
+		}
+
+		try {
+			await this.opts.onRegistered?.();
+		} catch (err) {
+			this.opts.notify(`gateway model refresh failed: ${(err as Error).message}`, "warning");
 		}
 
 		// Emit user-visible notices for each transition.
