@@ -46,6 +46,15 @@ export interface TransportHost {
 	deliver(kind: StreamKind, realModel: UnknownModel, context: unknown, options: unknown): unknown;
 }
 
+export interface GatewayFailure {
+	aliasId: string;
+	backendName: string;
+	errorStatus?: number;
+	errorMessage?: string;
+}
+
+export type GatewayFailureHandler = (failure: GatewayFailure) => Promise<boolean>;
+
 export interface GatewayTransport {
 	/** Register the `gateway` api once (idempotent). Used by the pi host, whose
 	 * api registry is reachable via a direct `registerApiProvider`. On oh-my-pi
@@ -60,6 +69,8 @@ export interface GatewayTransport {
 	streamSimple(model: UnknownModel, context: unknown, options: unknown): unknown;
 	/** Replace the live alias→target routing map (called on every re-register). */
 	setRoutes(targets: Record<string, GatewayRouteTarget>): void;
+	/** Install the controller callback that marks a failed backend unhealthy and rebuilds routes. */
+	setFailureHandler(handler: GatewayFailureHandler | undefined): void;
 	/** Number of live routes (test seam). */
 	routeCount(): number;
 	/** Reset routes + registration flag (test seam). */
@@ -77,6 +88,50 @@ const SOURCE_ID = "pi-gateway";
 export function createGatewayTransport(host: TransportHost): GatewayTransport {
 	let routes = new Map<string, GatewayRouteTarget>();
 	let registered = false;
+	let failureHandler: GatewayFailureHandler | undefined;
+
+	function backendName(target: GatewayRouteTarget): string {
+		const model = target.realModel as Record<string, unknown> | undefined;
+		return target.backendName ?? String(model?.provider ?? target.realApi);
+	}
+
+	function backendOptions(target: GatewayRouteTarget, options: unknown): unknown {
+		if (!target.realAuth) return options;
+		const incoming = (options ?? {}) as Record<string, unknown>;
+		const headers = {
+			...(target.realAuth.auth.headers ?? {}),
+			...((incoming.headers as Record<string, string> | undefined) ?? {}),
+		};
+		const env = {
+			...(target.realAuth.env ?? {}),
+			...((incoming.env as Record<string, string> | undefined) ?? {}),
+		};
+		return {
+			...incoming,
+			apiKey: target.realAuth.auth.apiKey,
+			headers: Object.keys(headers).length > 0 ? headers : undefined,
+			env: Object.keys(env).length > 0 ? env : undefined,
+		};
+	}
+
+	function deliverTarget(
+		kind: StreamKind,
+		target: GatewayRouteTarget,
+		context: unknown,
+		options: unknown,
+	): unknown {
+		const realModel: UnknownModel = {
+			...(target.realModel as Record<string, unknown>),
+			id: target.realModelId,
+			api: target.realApi,
+			baseUrl: target.realAuth?.auth.baseUrl ?? target.realBaseUrl,
+		};
+		const resolvedOptions = backendOptions(target, options);
+		if (target.realProvider) {
+			return target.realProvider[kind](realModel, context, resolvedOptions);
+		}
+		return host.deliver(kind, realModel, context, resolvedOptions);
+	}
 
 	function delegate(kind: StreamKind) {
 		return (model: UnknownModel, context: unknown, options: unknown): unknown => {
@@ -86,34 +141,17 @@ export function createGatewayTransport(host: TransportHost): GatewayTransport {
 					`gateway: no route for '${model.id}' — the alias set is stale; run /gateway reload`,
 				);
 			}
-			// Forward the real Model verbatim, pinning the wire id/api/baseUrl. The
-			// real model already carries these, but we set them explicitly so a
-			// stale or partially-copied capture can never send the alias id.
-			const realModel: UnknownModel = {
-				...(target.realModel as Record<string, unknown>),
-				id: target.realModelId,
-				api: target.realApi,
-				baseUrl: target.realAuth?.auth.baseUrl ?? target.realBaseUrl,
-			};
-			if (target.realProvider && target.realAuth) {
-				const incoming = (options ?? {}) as Record<string, unknown>;
-				const headers = {
-					...(target.realAuth.auth.headers ?? {}),
-					...((incoming.headers as Record<string, string> | undefined) ?? {}),
-				};
-				const env = {
-					...(target.realAuth.env ?? {}),
-					...((incoming.env as Record<string, string> | undefined) ?? {}),
-				};
-				const backendOptions = {
-					...incoming,
-					apiKey: target.realAuth.auth.apiKey,
-					headers: Object.keys(headers).length > 0 ? headers : undefined,
-					env: Object.keys(env).length > 0 ? env : undefined,
-				};
-				return target.realProvider[kind](realModel, context, backendOptions);
-			}
-			return host.deliver(kind, realModel, context, options);
+			const first = deliverTarget(kind, target, context, options);
+			if (!failureHandler || !isAsyncIterable(first)) return first;
+			return retryingStream({
+				aliasId: model.id,
+				first,
+				firstTarget: target,
+				getTarget: () => routes.get(model.id),
+				deliver: (next) => deliverTarget(kind, next, context, options),
+				onFailure: failureHandler,
+				backendName,
+			});
 		};
 	}
 
@@ -131,12 +169,189 @@ export function createGatewayTransport(host: TransportHost): GatewayTransport {
 		setRoutes(targets) {
 			routes = new Map(Object.entries(targets));
 		},
+		setFailureHandler(handler) {
+			failureHandler = handler;
+		},
 		routeCount() {
 			return routes.size;
 		},
 		reset() {
 			routes = new Map();
+			failureHandler = undefined;
 			registered = false;
 		},
 	};
+}
+
+interface GatewayEvent {
+	type: string;
+	error?: Record<string, unknown>;
+	message?: Record<string, unknown>;
+	[key: string]: unknown;
+}
+
+interface RetryingStreamInput {
+	aliasId: string;
+	first: AsyncIterable<GatewayEvent>;
+	firstTarget: GatewayRouteTarget;
+	getTarget: () => GatewayRouteTarget | undefined;
+	deliver: (target: GatewayRouteTarget) => unknown;
+	onFailure: GatewayFailureHandler;
+	backendName: (target: GatewayRouteTarget) => string;
+}
+
+function retryingStream(input: RetryingStreamInput): AsyncIterable<GatewayEvent> & { result(): Promise<unknown> } {
+	const output = new GatewayEventStream();
+	const attempted = new Set<string>();
+
+	async function pump(source: AsyncIterable<GatewayEvent>, target: GatewayRouteTarget): Promise<void> {
+		const currentBackend = input.backendName(target);
+		attempted.add(currentBackend);
+		const buffered: GatewayEvent[] = [];
+		let committed = false;
+		try {
+			for await (const event of source) {
+				if (event.type === "error") {
+					if (committed) {
+						output.push(event);
+						return;
+					}
+					const error = event.error ?? {};
+					const retry = await input.onFailure({
+						aliasId: input.aliasId,
+						backendName: currentBackend,
+						errorStatus: numericStatus(error.errorStatus),
+						errorMessage: typeof error.errorMessage === "string" ? error.errorMessage : undefined,
+					});
+					const next = retry ? input.getTarget() : undefined;
+					const nextBackend = next ? input.backendName(next) : undefined;
+					if (next && nextBackend && !attempted.has(nextBackend)) {
+						const nextSource = input.deliver(next);
+						if (isAsyncIterable(nextSource)) {
+							await pump(nextSource, next);
+							return;
+						}
+					}
+					for (const pending of buffered) output.push(pending);
+					output.push(event);
+					return;
+				}
+
+				if (event.type === "done") {
+					for (const pending of buffered) output.push(pending);
+					output.push(event);
+					return;
+				}
+
+				if (!committed && isSemanticEvent(event)) {
+					committed = true;
+					for (const pending of buffered) output.push(pending);
+					buffered.length = 0;
+				}
+				if (committed) output.push(event);
+				else buffered.push(event);
+			}
+			output.end();
+		} catch (err) {
+			output.fail(err);
+		}
+	}
+
+	void pump(input.first, input.firstTarget);
+	return output;
+}
+
+function isAsyncIterable(value: unknown): value is AsyncIterable<GatewayEvent> {
+	return Boolean(value && typeof (value as AsyncIterable<GatewayEvent>)[Symbol.asyncIterator] === "function");
+}
+
+function isSemanticEvent(event: GatewayEvent): boolean {
+	return event.type !== "start" && event.type !== "usage";
+}
+
+function numericStatus(value: unknown): number | undefined {
+	return typeof value === "number" && Number.isInteger(value) ? value : undefined;
+}
+
+class GatewayEventStream implements AsyncIterable<GatewayEvent> {
+	private readonly queue: GatewayEvent[] = [];
+	private readonly waiting: Array<{
+		resolve: (value: IteratorResult<GatewayEvent>) => void;
+		reject: (error: unknown) => void;
+	}> = [];
+	private done = false;
+	private failed: unknown;
+	private settled = false;
+	private readonly resultPromise: Promise<unknown>;
+	private resolveResult!: (value: unknown) => void;
+	private rejectResult!: (error: unknown) => void;
+
+	constructor() {
+		this.resultPromise = new Promise((resolve, reject) => {
+			this.resolveResult = resolve;
+			this.rejectResult = reject;
+		});
+		this.resultPromise.catch(() => {});
+	}
+
+	push(event: GatewayEvent): void {
+		if (this.done) return;
+		if (event.type === "done" || event.type === "error") {
+			this.done = true;
+			this.settled = true;
+			this.resolveResult(event.type === "done" ? event.message : event.error);
+		}
+		const waiter = this.waiting.shift();
+		if (waiter) waiter.resolve({ value: event, done: false });
+		else this.queue.push(event);
+		if (this.done) this.finishWaiting();
+	}
+
+	end(): void {
+		if (this.done) return;
+		this.done = true;
+		if (!this.settled) this.rejectResult(new Error("gateway: backend stream ended without a result"));
+		this.finishWaiting();
+	}
+
+	fail(error: unknown): void {
+		if (this.done) return;
+		this.done = true;
+		this.failed = error;
+		this.rejectResult(error);
+		while (this.waiting.length > 0) this.waiting.shift()!.reject(error);
+	}
+
+	result(): Promise<unknown> {
+		return this.resultPromise;
+	}
+
+	get hasPendingLocalWork(): boolean {
+		return false;
+	}
+
+	async trackLocalWork<T>(work: Promise<T>): Promise<T> {
+		return work;
+	}
+
+	async *[Symbol.asyncIterator](): AsyncIterator<GatewayEvent> {
+		while (true) {
+			if (this.queue.length > 0) yield this.queue.shift()!;
+			else if (this.failed !== undefined) throw this.failed;
+			else if (this.done) return;
+			else {
+				const next = await new Promise<IteratorResult<GatewayEvent>>((resolve, reject) => {
+					this.waiting.push({ resolve, reject });
+				});
+				if (next.done) return;
+				yield next.value;
+			}
+		}
+	}
+
+	private finishWaiting(): void {
+		while (this.waiting.length > 0) {
+			this.waiting.shift()!.resolve({ value: undefined as never, done: true });
+		}
+	}
 }

@@ -118,6 +118,33 @@ describe("GatewayController — debounce", () => {
 });
 
 describe("GatewayController — re-registration reflects transitions", () => {
+	it("marks a transport failure unhealthy and rebuilds the route before retrying", async () => {
+		const register = vi.fn();
+		const routes: Array<Record<string, { backendName?: string }>> = [];
+		const controller = new GatewayController({
+			aliases: CFG,
+			statePath,
+			registry: fakeRegistry(),
+			register,
+			notify: vi.fn(),
+			setRoutes: (next) => routes.push(next),
+			now: () => new Date("2025-01-15T12:00:00.000Z"),
+		});
+		await controller.initialize();
+		expect(routes.at(-1)?.["heavy-1"].backendName).toBe("openrouter");
+
+		const retry = await controller.handleTransportFailure({
+			aliasId: "heavy-1",
+			backendName: "openrouter",
+			errorStatus: 503,
+			errorMessage: "service unavailable",
+		});
+
+		expect(retry).toBe(true);
+		expect(readState(statePath).unhealthyUntil.openrouter).toBeDefined();
+		expect(routes.at(-1)?.["heavy-1"].backendName).toBe("github-copilot");
+	});
+
 	it("refreshes the active gateway model after every successful registration", async () => {
 		const register = vi.fn();
 		const onRegistered = vi.fn();

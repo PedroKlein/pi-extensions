@@ -1,11 +1,7 @@
 /**
- * Cap detection: turn a `message_end` event with `stopReason: "error"` into
- * a health-state transition.
- *
- * Per P0-T4 finding: pi does NOT fire `after_provider_response` on non-2xx
- * responses. On a 402/429 the failure surfaces via `message_end` as an
- * assistant message whose `errorMessage` is formatted `"<status>: <body>"`.
- * This module parses that shape.
+ * Failover detection: turn a failed provider response into a backend health
+ * transition. Capacity errors use the backend's reset schedule; transient HTTP
+ * and network failures use a short cooldown.
  *
  * Pure functions only — no state I/O. The caller decides how to persist
  * and re-register.
@@ -18,7 +14,9 @@ import type { GatewayState, UnhealthyEntry } from "./state.js";
 
 /** The minimal shape we need from a pi assistant message-end event. */
 export interface CapEventInput {
-	/** Assistant errorMessage in "<status>: <body>" shape. */
+	/** Structured HTTP status exposed by modern Pi and OMP providers. */
+	errorStatus?: number;
+	/** Assistant error text. Older providers may prefix this with the status. */
 	errorMessage: string | undefined;
 	/** stopReason from the assistant message. */
 	stopReason: string | undefined;
@@ -29,8 +27,9 @@ export interface CapEventInput {
 }
 
 export interface CapEventOutcome {
-	/** Was this event recognized as a cap hit? */
+	/** Was this event recognized as a failover-worthy backend failure? */
 	capHit: boolean;
+	kind?: "capacity" | "transient";
 	/** Which backend, if any. Undefined when we didn't recognize the event. */
 	backendName?: string;
 	/** Parsed HTTP status (e.g. 402). */
@@ -46,6 +45,10 @@ export interface CapEventOutcome {
  * `{ capHit: false }` when the event isn't a cap hit or can't be attributed
  * to a known backend.
  */
+const TRANSIENT_STATUS_CODES = new Set([408, 425, 429, 500, 502, 503, 504]);
+const TRANSIENT_COOLDOWN_MS = 5 * 60 * 1000;
+const TRANSIENT_ERROR = /fetch failed|network error|ECONN(?:RESET|REFUSED)|ETIMEDOUT|EAI_AGAIN|socket hang up|connection reset|service unavailable/i;
+
 export function classifyCapEvent(
 	event: CapEventInput,
 	aliases: AliasesConfig,
@@ -53,7 +56,6 @@ export function classifyCapEvent(
 	routing?: Record<string, string>,
 ): CapEventOutcome {
 	if (event.stopReason !== "error") return { capHit: false };
-	if (!event.errorMessage) return { capHit: false };
 	if (!event.provider) return { capHit: false };
 
 	// Only fires for the gateway provider itself — if the message went out via
@@ -62,26 +64,34 @@ export function classifyCapEvent(
 	const backendName = resolveGatewayModelToBackend(event.provider, event.modelId, aliases, routing);
 	if (!backendName) return { capHit: false };
 
-	const parsed = parseStatusPrefix(event.errorMessage);
-	if (!parsed) return { capHit: false };
-
+	const prefixed = event.errorMessage ? parseStatusPrefix(event.errorMessage) : undefined;
+	const status = validStatus(event.errorStatus) ?? prefixed?.status ?? parseHttpStatus(event.errorMessage);
+	const body = prefixed?.body ?? event.errorMessage ?? "";
 	const backend = aliases.backends[backendName];
-	const codes = backend.capStatusCodes;
-	if (!codes.includes(parsed.status)) return { capHit: false };
+	const capacity = status !== undefined && backend.capStatusCodes.includes(status);
+	const transient =
+		(status !== undefined && TRANSIENT_STATUS_CODES.has(status)) ||
+		(status === undefined && TRANSIENT_ERROR.test(body));
+	if (!capacity && !transient) return { capHit: false };
 
-	const untilInstant = nextResetInstant(backend.resetSchedule, now);
-	const quota = enrichQuota(backend.quotaHint, parsed.body);
+	const untilInstant = capacity
+		? nextResetInstant(backend.resetSchedule, now)
+		: new Date(now.getTime() + TRANSIENT_COOLDOWN_MS);
+	const quota = capacity ? enrichQuota(backend.quotaHint, body) : undefined;
+	const kind = capacity ? "capacity" : "transient";
+	const statusLabel = status === undefined ? "network error" : `HTTP ${status}`;
 	const entry: UnhealthyEntry = {
 		until: untilInstant.toISOString(),
-		reason: `HTTP ${parsed.status} on ${event.modelId ?? "?"} — cap hit`,
+		reason: `${statusLabel} on ${event.modelId ?? "?"} — ${kind} failure`,
 		...(quota ? { quota } : {}),
 	};
 
 	return {
 		capHit: true,
+		kind,
 		backendName,
-		status: parsed.status,
-		body: parsed.body,
+		status,
+		body,
 		entry,
 	};
 }
@@ -159,7 +169,18 @@ export function parseStatusPrefix(
 ): { status: number; body: string } | undefined {
 	const m = errorMessage.match(/^(\d+):\s*([\s\S]*)$/);
 	if (!m) return undefined;
-	const status = Number.parseInt(m[1], 10);
-	if (!Number.isInteger(status) || status < 100 || status > 599) return undefined;
-	return { status, body: m[2] };
+	const status = validStatus(Number.parseInt(m[1], 10));
+	return status === undefined ? undefined : { status, body: m[2] };
+}
+
+function parseHttpStatus(errorMessage: string | undefined): number | undefined {
+	if (!errorMessage) return undefined;
+	const prefixed = parseStatusPrefix(errorMessage);
+	if (prefixed) return prefixed.status;
+	const match = errorMessage.match(/^(\d{3})(?:\s|$)|\b(?:HTTP|failed)\s+(\d{3})\b/i);
+	return validStatus(Number.parseInt(match?.[1] ?? match?.[2] ?? "", 10));
+}
+
+function validStatus(status: number | undefined): number | undefined {
+	return Number.isInteger(status) && status! >= 100 && status! <= 599 ? status : undefined;
 }

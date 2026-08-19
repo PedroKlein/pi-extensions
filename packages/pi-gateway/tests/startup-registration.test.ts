@@ -147,7 +147,15 @@ describe("startup registration", () => {
 			setModel,
 		};
 		activateGateway(host as any, {
-			transport: { register: vi.fn(), setRoutes: vi.fn(), stream: vi.fn(), streamSimple: vi.fn() },
+			transport: {
+				register: vi.fn(),
+				setRoutes: vi.fn(),
+				setFailureHandler: vi.fn(),
+				stream: vi.fn(),
+				streamSimple: vi.fn(),
+				routeCount: vi.fn(),
+				reset: vi.fn(),
+			},
 			registerProvider,
 		});
 		expect(registerProvider).toHaveBeenCalledTimes(1); // bootstrap

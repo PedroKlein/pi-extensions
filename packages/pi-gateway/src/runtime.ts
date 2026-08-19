@@ -131,6 +131,9 @@ export function activateGateway(pi: GatewayHostApi, platform: GatewayPlatform): 
 			onRegistered: () => refreshSelectedGatewayModel(ctx),
 			notify: (msg, type) => ctx.ui.notify(msg, type),
 		});
+		platform.transport.setFailureHandler((failure) =>
+			controller ? controller.handleTransportFailure(failure) : Promise.resolve(false),
+		);
 		await controller.initialize();
 
 		// Install (or re-install) the periodic token-refresh timer.
@@ -176,6 +179,7 @@ export function activateGateway(pi: GatewayHostApi, platform: GatewayPlatform): 
 		const msg = event.message;
 		if (!msg || msg.role !== "assistant") return;
 		controller.handleMessageEnd({
+			errorStatus: msg.errorStatus,
 			errorMessage: msg.errorMessage,
 			stopReason: msg.stopReason,
 			provider: ctx.model?.provider,
@@ -187,6 +191,7 @@ export function activateGateway(pi: GatewayHostApi, platform: GatewayPlatform): 
 		refreshTimer?.stop();
 		refreshTimer = undefined;
 		controller = undefined;
+		platform.transport.setFailureHandler(undefined);
 		sessionContext = undefined;
 	});
 }

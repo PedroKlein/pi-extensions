@@ -106,6 +106,77 @@ describe("classifyCapEvent", () => {
 		expect(r.body).toContain("DAILY_CAP_EXCEEDED");
 	});
 
+	it("uses the structured HTTP status emitted by modern Pi and OMP", () => {
+		const r = classifyCapEvent(
+			{
+				errorStatus: 429,
+				errorMessage: "rate limit exceeded",
+				stopReason: "error",
+				provider: "gateway",
+				modelId: "heavy-1",
+			},
+			CFG,
+			NOW,
+			{ "heavy-1": "openrouter" },
+		);
+		expect(r.capHit).toBe(true);
+		expect(r.status).toBe(429);
+		expect(r.backendName).toBe("openrouter");
+	});
+
+	it("fails over temporarily on transient backend errors", () => {
+		const r = classifyCapEvent(
+			{
+				errorStatus: 503,
+				errorMessage: "service unavailable",
+				stopReason: "error",
+				provider: "gateway",
+				modelId: "heavy-1",
+			},
+			CFG,
+			NOW,
+			{ "heavy-1": "openrouter" },
+		);
+		expect(r.capHit).toBe(true);
+		expect(r.status).toBe(503);
+		expect(r.entry?.until).toBe("2025-01-15T12:35:00.000Z");
+		expect(r.entry?.reason).toContain("transient failure");
+	});
+
+	it("extracts a status from provider error text when no structured status is present", () => {
+		const r = classifyCapEvent(
+			{
+				errorMessage: "POST inference failed 503 Service Unavailable: overloaded",
+				stopReason: "error",
+				provider: "gateway",
+				modelId: "heavy-1",
+			},
+			CFG,
+			NOW,
+			{ "heavy-1": "openrouter" },
+		);
+		expect(r.capHit).toBe(true);
+		expect(r.status).toBe(503);
+		expect(r.kind).toBe("transient");
+	});
+
+	it("fails over temporarily on status-less network errors", () => {
+		const r = classifyCapEvent(
+			{
+				errorMessage: "fetch failed: ECONNRESET",
+				stopReason: "error",
+				provider: "gateway",
+				modelId: "heavy-1",
+			},
+			CFG,
+			NOW,
+			{ "heavy-1": "openrouter" },
+		);
+		expect(r.capHit).toBe(true);
+		expect(r.status).toBeUndefined();
+		expect(r.entry?.until).toBe("2025-01-15T12:35:00.000Z");
+	});
+
 	it("routing map wins over the tier-slot fallback (heavy-1 routed to secondary under failover)", () => {
 		// heavy-1 is normally openrouter, but under failover it routed to copilot.
 		// The routing map is authoritative, so the cap is attributed to copilot.
@@ -180,9 +251,15 @@ describe("classifyCapEvent", () => {
 		expect(r.capHit).toBe(false);
 	});
 
-	it("ignores 500 (not in capStatusCodes)", () => {
+	it("ignores deterministic request failures", () => {
 		const r = classifyCapEvent(
-			{ errorMessage: "500: internal error", stopReason: "error", provider: "gateway", modelId: "heavy-1" },
+			{
+				errorStatus: 400,
+				errorMessage: "invalid request",
+				stopReason: "error",
+				provider: "gateway",
+				modelId: "heavy-1",
+			},
 			CFG,
 			NOW,
 		);

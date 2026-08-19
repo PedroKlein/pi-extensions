@@ -121,17 +121,21 @@ export async function registerGatewayProvider(
 	const providerDispatchWarnings: string[] = [];
 	for (const [id, target] of Object.entries(targets)) {
 		const backend = routing[id];
-		const auth = authByBackend.get(backend);
-		if (!auth) continue;
+		const auth = authByBackend.get(backend) ?? {
+			auth: {
+				apiKey: tokenByBackend.get(backend),
+				baseUrl: target.realBaseUrl,
+			},
+		};
+		target.realAuth = auth;
 		try {
 			const getProvider = (registry as Partial<ResolverModelRegistry>).getProvider;
 			const provider = typeof getProvider === "function"
 				? getProvider.call(registry, backend) as GatewayRouteTarget["realProvider"]
 				: undefined;
-			if (provider) {
+			if (provider && typeof provider.stream === "function" && typeof provider.streamSimple === "function") {
 				target.realProvider = provider;
-				target.realAuth = auth;
-			} else {
+			} else if (!provider) {
 				providerDispatchWarnings.push(
 					`backend '${backend}' provider is unavailable for direct dispatch — using global api fallback`,
 				);

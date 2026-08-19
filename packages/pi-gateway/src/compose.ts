@@ -74,6 +74,8 @@ export interface GatewayModelEntry {
  * that api's real transport. Captured at compose time from the live registry.
  */
 export interface GatewayRouteTarget {
+	/** Backend/provider name used for failover attribution and retry-loop bounds. */
+	backendName?: string;
 	realApi: string;
 	realModelId: string;
 	realBaseUrl: string;
@@ -334,6 +336,7 @@ function makeEntry(
 	entry.name = `${typeof real?.name === "string" ? real.name : model.realModelId} (${backend.name})`;
 
 	const target: GatewayRouteTarget = {
+		backendName: backend.name,
 		realApi,
 		realModelId: model.realModelId,
 		realBaseUrl,

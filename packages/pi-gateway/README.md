@@ -2,8 +2,8 @@
 
 Virtual provider for [Pi](https://pi.dev) that exposes stable, **provider-agnostic
 tier aliases** — `heavy-1`, `heavy-2`, `medium-1`, `light-1`, `light-2`, … —
-routing to already-registered pi providers with automatic failover on cap hits
-(HTTP 402 / 429).
+routing to already-registered pi providers with automatic same-request failover
+on capacity limits, transient HTTP failures, and network errors.
 
 The number in `<tier>-<N>` is a **diversity index**: each tier declares an
 *ordered list* of models, and `heavy-1`, `heavy-2` route to the first, second,
@@ -86,8 +86,8 @@ oh-my-pi caveats:
 - **Single effective backend per registration.** oh-my-pi has no per-model
   `baseUrl`, so the gateway provider carries the effective backend's
   provider-level `baseUrl` + credential. This matches pi's existing
-  single-credential model; failover across backends happens on re-registration
-  (`/gateway reload`, a health toggle, or the periodic token refresh).
+  single-credential model; failover across backends re-registers the provider
+  before retrying through the next healthy route.
 - The credential is forwarded to `apiKey` verbatim (no `$`/`!` escaping).
 - **Extension-defined backend APIs must announce their transport.** OMP isolates
   extension imports from the host's custom-API registry, so a custom provider
@@ -242,7 +242,7 @@ too.
   "unhealthyUntil": {
     "openrouter": {
       "until": "2025-01-16T00:00:00.000Z",
-      "reason": "HTTP 402 on heavy-1 — cap hit",
+      "reason": "HTTP 402 on heavy-1 — capacity failure",
       "quota": { "spent": 50.27, "cap": 50.00, "currency": "EUR" }
     }
   },
@@ -257,14 +257,20 @@ them.
 
 ## How it works
 
-**Cap detection.** Pi surfaces non-2xx provider responses as an assistant
-`message_end` event with `stopReason: "error"` and `errorMessage` in the shape
-`"<status>: <body>"` — e.g. `"402: {\"error\":{\"code\":\"DAILY_CAP_EXCEEDED\", ...}}"`.
-The extension parses the status code, checks it against the backend's
-`capStatusCodes`, writes an unhealthy entry to `gateway-state.json` (atomically),
-debounces a re-registration of the `gateway` provider (multiple
-near-simultaneous transitions coalesce into one call), and emits a user-visible
-toast with the backend name and reset ETA.
+**Failure detection and retry.** Modern Pi and OMP expose provider failures via
+`errorStatus`; older providers may embed the status in `errorMessage`. The
+gateway treats each backend's `capStatusCodes` as capacity failures and also
+recognizes transient statuses (`408`, `425`, `429`, `500`, `502`, `503`, `504`) plus
+status-less network failures. Capacity failures stay unhealthy until their
+configured reset schedule; transient failures cool down for five minutes.
+
+When a qualifying failure occurs before any text, thinking, image, or tool-call
+output has streamed, the gateway suppresses that failed attempt, atomically
+persists the health transition, rebuilds the route with fresh backend auth, and
+replays the same request through the next healthy backend. It can continue down
+the fallback chain, but never retries a backend twice. Once semantic output has
+started, it does not replay—the failed turn remains visible and only the next
+request uses the new route, avoiding duplicated output or tool calls.
 
 **Indexed routing + failover.** For each tier the composer first fixes the
 alias count `K` from the first backend in the effective chain
@@ -276,10 +282,10 @@ emits `<tier>-1..K` routing into that backend's list, clamping the index to its
 length. Unhealthy backends drop out transparently; when the router has fewer
 models than `K`, high indices reuse its last model.
 
-**Cap attribution.** Because indexed aliases are backend-agnostic, a cap hit on
-`heavy-2` can't be attributed by name. The composer emits an `alias → backend`
+**Failure attribution.** Because indexed aliases are backend-agnostic, a failure
+on `heavy-2` can't be attributed by name. The composer emits an `alias → backend`
 routing map alongside the model list; the controller keeps the latest map and
-uses it to attribute 402/429s to the exact backend the alias routed to. If no
+uses it to attribute failures to the exact backend the alias routed to. If no
 map entry exists (e.g. a stale event), it falls back to the first chain backend
 declaring that tier slot.
 
@@ -327,7 +333,7 @@ objects.
 
 **Token freshness.** Two mechanisms keep the provider-level credential fresh:
 
-- Cap detection triggers re-registration on 402/429.
+- Capacity/transient failure detection triggers re-registration and bounded retry.
 - A periodic timer (`PI_GATEWAY_OAUTH_REFRESH_MS`, default 30 min)
   re-registers whenever at least one backend has a non-static auth mode
   (OAuth, `!command`, `$ENV_VAR`). The timer defers when the agent is

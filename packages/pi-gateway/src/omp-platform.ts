@@ -126,6 +126,7 @@ export interface OmpModelRegistry {
 	getAll(): Array<{ id: string; provider: string; api?: string }>;
 	hasProvider(provider: string): boolean;
 	getProviderBaseUrl(provider: string): string | undefined;
+	getProviderHeaders?(provider: string): Record<string, string> | undefined;
 	getApiKeyForProvider(provider: string): Promise<string | undefined>;
 }
 
@@ -158,6 +159,13 @@ export function adaptOmpRegistry(reg: OmpModelRegistry): RegistryLike {
 			return cfg;
 		},
 		getApiKeyForProvider: (provider) => reg.getApiKeyForProvider(provider),
+		getProviderAuth: async (provider) => {
+			const apiKey = await reg.getApiKeyForProvider(provider);
+			const headers = reg.getProviderHeaders?.(provider);
+			const baseUrl = reg.getProviderBaseUrl(provider);
+			if (!apiKey && !headers && !baseUrl) return undefined;
+			return { auth: { apiKey, headers, baseUrl } };
+		},
 	};
 }
 

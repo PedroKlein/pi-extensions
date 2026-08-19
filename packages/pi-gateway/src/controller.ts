@@ -15,6 +15,7 @@ import type { GatewayRouteTarget } from "./compose.js";
 import { emptyState, readState, updateState, type GatewayState } from "./state.js";
 import { isBackendUnhealthy } from "./compose.js";
 import { TIER_SLOTS } from "./config.js";
+import type { GatewayFailure } from "./transport-core.js";
 
 export interface ControllerOptions {
 	aliases: AliasesConfig;
@@ -87,6 +88,30 @@ export class GatewayController {
 		);
 		this.scheduleReregister();
 		return true;
+	}
+
+	/** Mark a pre-output transport failure unhealthy, rebuild routes, and report whether retry can continue. */
+	async handleTransportFailure(failure: GatewayFailure): Promise<boolean> {
+		const outcome = classifyCapEvent(
+			{
+				errorStatus: failure.errorStatus,
+				errorMessage: failure.errorMessage,
+				stopReason: "error",
+				provider: "gateway",
+				modelId: failure.aliasId,
+			},
+			this.opts.aliases,
+			this.opts.now(),
+			{ ...this.routing, [failure.aliasId]: failure.backendName },
+		);
+		if (!outcome.capHit || !outcome.backendName || !outcome.entry) return false;
+
+		this.state = updateState(this.opts.statePath, (cur) =>
+			applyCapOutcome(cur, outcome.backendName!, outcome.entry!),
+		);
+		await this.reregisterNow();
+		const nextBackend = this.routing[failure.aliasId];
+		return nextBackend !== undefined && nextBackend !== failure.backendName;
 	}
 
 	/**
