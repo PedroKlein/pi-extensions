@@ -67,10 +67,10 @@ export function fmt(n: number): string {
 	return `${n}`;
 }
 
-export function shortModel(model: { name?: string; id: string } | undefined): string {
+export function shortModel(model: { provider?: string; name?: string; id: string } | undefined): string {
 	if (!model) return "no-model";
-	return (model.name ?? model.id)
-		.replace(/\s*\([^)]*\)/g, "")
+	const name = model.name ?? model.id;
+	return (model.provider === "gateway" ? name : name.replace(/\s*\([^)]*\)/g, ""))
 		.replace(/^Claude\s+/i, "")
 		.replace(/^Anthropic:\s+/i, "")
 		.trim();
@@ -304,7 +304,7 @@ export default function piStatus(pi: ExtensionAPI): void {
 	});
 
 	// Listen for mode changes to update title
-	pi.events.on("pi-modes:changed", (data: { mode: string; previousMode: string }) => {
+	pi.events.on("pi-modes:changed", () => {
 		if (!latestCtx) return;
 		updateTitle(latestCtx);
 	});

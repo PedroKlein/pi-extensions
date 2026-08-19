@@ -78,7 +78,7 @@ provider-registration and request-transport seams differ per harness:
 | | pi | oh-my-pi |
 |---|---|---|
 | Provider registration | `registerProvider(name, { models, apiKey })` (per-model `api`/`baseUrl`) | `registerProvider(name, { api, baseUrl, apiKey, models })` (provider-level `baseUrl`) |
-| Custom api transport | `@earendil-works/pi-ai/compat` `registerApiProvider` / `getApiProvider` | `@oh-my-pi/pi-ai` `registerCustomApi` + top-level `stream`/`streamSimple` |
+| Request dispatch | Registered backend provider (preserves its transport + resolved auth); global api fallback | `@oh-my-pi/pi-ai` top-level `stream`/`streamSimple` |
 | Credential (`apiKey`) | escaped for pi's config-value `$`/`!` syntax | passed literally |
 
 oh-my-pi caveats:
@@ -102,7 +102,7 @@ oh-my-pi caveats:
 
 | Alias | Routes to |
 |-------|-----------|
-| `<tier>-<N>` (e.g. `heavy-1`, `heavy-2`, `light-1`) | The N-th model (1-based) in the tier's ordered list, served by the first healthy backend in the fallback chain that declares the tier. Provider-agnostic. |
+| `<tier>-<N>` (e.g. `heavy-1`, `heavy-2`, `light-1`) | The N-th model (1-based) in the tier's ordered list, served by the first healthy backend in the fallback chain that declares the tier. The display name shows the live target as `<real model name> (<backend>)`. |
 
 The alias **count** per tier (how many `<tier>-<N>` exist) is fixed by the
 first backend in the chain that declares the tier — this keeps the alias set
@@ -111,7 +111,7 @@ healthy backend's list, **clamped** to its length: if that backend has fewer
 models, the high indices reuse its last (best) model. Diversity is best-effort;
 availability wins.
 
-> **Note.** Family-pinned aliases (`heavy-hai-1` etc.) were **removed** — the
+> **Note.** Family-pinned aliases (`heavy-backend-a-1` etc.) were **removed** — the
 > alias names are intentionally backend-agnostic. Use `/gateway force <backend>`
 > to pin routing to a specific backend when you need it.
 
@@ -285,12 +285,13 @@ own api (`gateway`) in pi's **global** api registry and registers its models
 with `api: "gateway"`. At request time pi resolves the provider credential into
 `options.apiKey` and calls the gateway transport, which looks up the alias in a
 live routing map, swaps in the **real** backend model (real wire id, api, and
-baseUrl — captured at compose time), and delegates to that backend's real
-transport via `getApiProvider(realApi)`. Native streaming is fully preserved and
-the real transport consumes `options.apiKey`/headers exactly as for a direct
-request (bearer for hai-proxy, service-key JSON for SAP AI Core). The routing
-map is replaced on every re-register, so failover transparently reroutes
-in-flight aliases without re-registering the api.
+baseUrl — captured at compose time), and delegates through that backend's
+registered provider with the backend's own resolved API key, headers, base URL,
+and environment. This is the same provider path used by a direct request, so
+native streaming and provider-specific authentication or custom transport
+behavior are preserved. The routing map is
+replaced on every re-register, so failover transparently reroutes in-flight
+aliases without re-registering the api.
 
 **Single effective backend per registration.** Because one provider carries one
 credential, all emitted aliases must resolve to a single backend at any moment.
@@ -300,14 +301,12 @@ different tiers to different backends simultaneously is degraded: the gateway
 serves the **primary** backend's aliases and emits a warning naming the omitted
 backends. Force or reorder to switch which backend is served.
 
-**Custom-transport backends.** A backend that uses a custom `api` transport
-(not a pi built-in like `anthropic-messages`/`openai-completions`) only works
-through the gateway if that transport is registered in pi's **global** api
-registry (`registerApiProvider` from `@earendil-works/pi-ai/compat`) — the
-gateway transport delegates to it by `api` id. Providers that bind their
-transport only to their own instance (e.g. via `createProvider`) must also
-register it globally. Example: the SAP AI Core provider registers its
-`sap-ai-core` api globally so gateway aliases can route to it.
+**Custom-transport backends.** The gateway dispatches through the registered
+backend provider rather than looking up only its `api` id. Providers created
+with `createProvider` therefore work without separately exposing their custom
+transport in pi's global api registry. A global-api lookup remains as a
+compatibility fallback when an older registry cannot expose provider/auth
+objects.
 
 **Token freshness.** Two mechanisms keep the provider-level credential fresh:
 
@@ -333,7 +332,7 @@ providers (see `pi --list-models`).
 ## Development
 
 ```bash
-pnpm test           # run tests (193 tests, 20 files)
+pnpm test           # run tests (200 tests, 21 files)
 pnpm build          # build for publish
 pnpm typecheck      # type-check without emitting
 ```
@@ -346,8 +345,6 @@ pnpm typecheck      # type-check without emitting
 - A single gateway provider carries one credential, so aliases spanning two
   backends simultaneously are degraded to the primary backend (see
   [How it works](#how-it-works)). This is rare because health is per-backend.
-- Custom-transport backends must register their `api` in pi's global registry
-  (see [How it works](#how-it-works)).
 
 ## License
 

@@ -6,7 +6,7 @@
  *  - Transport: registers the `gateway` custom api via `registerCustomApi`, and
  *    delegates a routed request to the real backend by calling oh-my-pi's
  *    top-level `stream`/`streamSimple`, which route both custom apis (e.g.
- *    sap-ai-core, registered via `registerProvider` → `registerCustomApi`) and
+ *    custom-api, registered via `registerProvider` → `registerCustomApi`) and
  *    builtin apis. Since the swapped-in real model carries the real `api`, this
  *    is exactly what oh-my-pi would dispatch natively — no recursion into the
  *    `gateway` api.

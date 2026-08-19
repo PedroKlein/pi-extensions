@@ -77,8 +77,18 @@ export interface GatewayRouteTarget {
 	realApi: string;
 	realModelId: string;
 	realBaseUrl: string;
-	/** The full real Model<Api> object, forwarded verbatim to the real transport. */
+	/** The full real Model<Api> object, forwarded verbatim to the real provider. */
 	realModel: unknown;
+	/** The registered backend provider. Routing through it preserves provider-specific transports. */
+	realProvider?: {
+		stream(model: unknown, context: unknown, options: unknown): unknown;
+		streamSimple(model: unknown, context: unknown, options: unknown): unknown;
+	};
+	/** Backend auth resolved at registration time, including provider-specific headers and env. */
+	realAuth?: {
+		auth: { apiKey?: string; headers?: Record<string, string>; baseUrl?: string };
+		env?: Record<string, string>;
+	};
 }
 
 export interface ComposeInput {
@@ -321,6 +331,7 @@ function makeEntry(
 			(entry as Record<string, unknown>)[field] = real[field];
 		}
 	}
+	entry.name = `${typeof real?.name === "string" ? real.name : model.realModelId} (${backend.name})`;
 
 	const target: GatewayRouteTarget = {
 		realApi,

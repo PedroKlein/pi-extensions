@@ -110,7 +110,45 @@ describe("gateway transport", () => {
 		);
 	});
 
-	it("throws a clear error when the backend api is not registered globally", () => {
+	it("dispatches through the real provider with its own resolved auth", () => {
+		_resetGatewayTransportForTests();
+		registerGatewayTransport();
+		const providerStream = vi.fn(() => ({ kind: "provider-result" }));
+		setGatewayRoutes({
+			"heavy-1": {
+				realApi: "never-registered-api",
+				realModelId: "x",
+				realBaseUrl: "https://x",
+				realModel: { id: "x", provider: "custom-backend" },
+				realProvider: { stream: providerStream, streamSimple: providerStream },
+				realAuth: {
+					auth: { apiKey: "backend-secret", headers: { "x-backend": "yes" } },
+					env: { BACKEND_ENV: "1" },
+				},
+			},
+		});
+
+		const gw = getApiProvider("gateway" as never)!;
+		const result = gw.stream(
+			{ id: "heavy-1", api: "gateway" } as never,
+			{} as never,
+			{ apiKey: "gateway-secret", headers: { "x-gateway": "no" }, signal: "keep" } as never,
+		);
+
+		expect(result).toEqual({ kind: "provider-result" });
+		expect(providerStream).toHaveBeenCalledWith(
+			expect.objectContaining({ id: "x", provider: "custom-backend" }),
+			{},
+			{
+				apiKey: "backend-secret",
+				headers: { "x-backend": "yes", "x-gateway": "no" },
+				env: { BACKEND_ENV: "1" },
+				signal: "keep",
+			},
+		);
+	});
+
+	it("throws a clear error when neither the backend provider nor api is registered", () => {
 		_resetGatewayTransportForTests();
 		registerGatewayTransport();
 		setGatewayRoutes({

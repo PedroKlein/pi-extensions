@@ -26,7 +26,7 @@ Add a `baml` section to `~/.pi/agent/settings.json`:
     "models": {
       "light": "github-copilot/claude-haiku-4.5",
       "standard": "github-copilot/claude-sonnet-4.6",
-      "heavy": "hai-proxy/anthropic--claude-4.6-opus"
+      "heavy": "backend-a/example-large-model"
     }
   }
 }

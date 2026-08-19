@@ -11,10 +11,15 @@ function fakeRegistry(
 ): RegistryLike {
 	return {
 		find: (p, id) => models.find((m) => m.provider === p && m.id === id),
-		getProvider: (n) => (models.some((m) => m.provider === n) ? { id: n } : undefined),
+		getProvider: (n) => (models.some((m) => m.provider === n)
+			? { id: n, stream: vi.fn(), streamSimple: vi.fn() }
+			: undefined),
 		getRegisteredProviderConfig: (n) => configs[n],
 		getAll: () => models.map((m) => ({ id: m.id, provider: m.provider })),
 		getApiKeyForProvider: async (n) => tokens[n],
+		getProviderAuth: async (n) => tokens[n]
+			? { auth: { apiKey: tokens[n], headers: { "x-backend": n } } }
+			: undefined,
 	};
 }
 
@@ -65,10 +70,68 @@ describe("registerGatewayProvider — happy path", () => {
 		}
 		// Routing targets published to the transport, one per registered alias.
 		expect(setRoutes).toHaveBeenCalledTimes(1);
-		const publishedTargets = setRoutes.mock.calls[0][0] as Record<string, { realApi: string; realModelId: string }>;
+		const publishedTargets = setRoutes.mock.calls[0][0] as Record<string, {
+			realApi: string;
+			realModelId: string;
+			realProvider?: unknown;
+			realAuth?: { auth: { apiKey?: string; headers?: Record<string, string> } };
+		}>;
 		expect(Object.keys(publishedTargets).sort()).toEqual(["heavy-1", "light-1"]);
 		expect(publishedTargets["heavy-1"].realModelId).toBe("or-heavy");
+		expect(publishedTargets["heavy-1"].realProvider).toBeDefined();
+		expect(publishedTargets["heavy-1"].realAuth).toEqual({
+			auth: { apiKey: "resolved-or-token", headers: { "x-backend": "openrouter" } },
+		});
 		expect(result.modelsRegistered).toBe(2);
+	});
+});
+
+describe("registerGatewayProvider — provider dispatch fallback", () => {
+	it("still registers routes when the provider enrichment lookup throws", async () => {
+		const aliases: AliasesConfig = {
+			fallbackChain: ["openrouter"],
+			backends: {
+				openrouter: {
+					resetSchedule: undefined,
+					tiers: { heavy: ["or-heavy"] },
+					quotaHint: undefined,
+					capStatusCodes: [402],
+				},
+			},
+		};
+		const registry = fakeRegistry(
+			[{ id: "or-heavy", provider: "openrouter", api: "openai-completions" }],
+			{},
+			{ openrouter: "resolved-or-token" },
+		);
+		let lookups = 0;
+		registry.getProvider = (name) => {
+			lookups++;
+			if (lookups > 1) throw new Error("registry temporarily unavailable");
+			return { id: name };
+		};
+		const register = vi.fn();
+		const setRoutes = vi.fn();
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+		try {
+			await expect(registerGatewayProvider({
+				aliases,
+				state: emptyState(),
+				registry,
+				register,
+				setRoutes,
+			})).resolves.toMatchObject({ modelsRegistered: 1 });
+
+			expect(register).toHaveBeenCalledTimes(1);
+			const target = setRoutes.mock.calls[0][0]["heavy-1"];
+			expect(target.realProvider).toBeUndefined();
+			expect(warn).toHaveBeenCalledWith(
+				expect.stringContaining("provider lookup failed: registry temporarily unavailable"),
+			);
+		} finally {
+			warn.mockRestore();
+		}
 	});
 });
 

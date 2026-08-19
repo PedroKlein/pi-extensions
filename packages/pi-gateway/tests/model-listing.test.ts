@@ -8,7 +8,7 @@ const registry = {
 		{ id: "claude-opus", provider: "openrouter" },
 		{ id: "gpt-5", provider: "openrouter" }, // duplicate id
 		{ id: "cop-a", provider: "github-copilot" },
-		{ id: "anthropic--claude-4.8-opus", provider: "sap-ai-core" },
+		{ id: "anthropic--claude-4.8-opus", provider: "custom-api" },
 	],
 };
 
@@ -26,6 +26,6 @@ describe("listBackendModels", () => {
 
 describe("listRegistryProviders", () => {
 	it("returns unique provider names, sorted", () => {
-		expect(listRegistryProviders(registry)).toEqual(["github-copilot", "openrouter", "sap-ai-core"]);
+		expect(listRegistryProviders(registry)).toEqual(["custom-api", "github-copilot", "openrouter"]);
 	});
 });

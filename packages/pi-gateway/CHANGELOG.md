@@ -46,7 +46,7 @@
 
   `/gateway models` reveals what each neutral alias hides: the alias → provider
   (backend) → real model → live status mapping, so you can see that e.g.
-  `heavy-1` currently routes to `hai-proxy/anthropic--claude-4.8-opus`. Opens the
+  `heavy-1` currently routes to `backend-a/anthropic--claude-4.8-opus`. Opens the
   board's models pane interactively, or prints a text table without a UI.
 
 - 6d911ed: Add oh-my-pi (`@oh-my-pi/pi-coding-agent`) support alongside pi.
@@ -84,7 +84,7 @@
   backend model (real wire id/api/baseUrl, captured at compose time) and delegates
   to that backend's real transport via `getApiProvider`. Native streaming is
   preserved; the real transport consumes `options.apiKey` as usual (bearer for
-  hai-proxy, service-key JSON for SAP AI Core). The routing map is refreshed on
+  backend-a, service-key JSON for a custom provider). The routing map is refreshed on
   every re-register, so failover reroutes transparently.
 
   Because one provider carries one credential, all emitted aliases must resolve to
@@ -131,7 +131,7 @@
   - README, CHANGELOG, and all source doc-comments now use neutral example
     provider names (`openrouter`, `groq`) instead of internal ones.
   - **BREAKING (config):** the shipped `quotaHint` enricher is renamed
-    `hai-daily-eur` → `daily-eur-cap`. Update `aliases.json` accordingly. The
+    `provider-daily-eur` → `daily-eur-cap`. Update `aliases.json` accordingly. The
     enricher's behavior is unchanged (parses a `DAILY_CAP_EXCEEDED` body with
     `cap_eur`/`spent_eur` fields).
   - Removed the now-dead `backendFamilySuffix` export (family-pinned aliases

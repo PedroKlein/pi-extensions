@@ -131,7 +131,7 @@ required to get started — defaults work out of the box.
 {
   "pi-repos": {
     "storageDir": "~/Dev/pi-repos",
-    "summaryModel": "hai-proxy/anthropic--claude-sonnet-4-5",
+    "summaryModel": "backend-a/example-summary-model",
     "hooks": {
       "post-add": [
         { "command": "gitnexus", "args": ["analyze", "--skip-agents-md", "--skip-skills", "{path}"], "timeout": 180000 }

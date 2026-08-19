@@ -93,8 +93,26 @@ export function createGatewayTransport(host: TransportHost): GatewayTransport {
 				...(target.realModel as Record<string, unknown>),
 				id: target.realModelId,
 				api: target.realApi,
-				baseUrl: target.realBaseUrl,
+				baseUrl: target.realAuth?.auth.baseUrl ?? target.realBaseUrl,
 			};
+			if (target.realProvider && target.realAuth) {
+				const incoming = (options ?? {}) as Record<string, unknown>;
+				const headers = {
+					...(target.realAuth.auth.headers ?? {}),
+					...((incoming.headers as Record<string, string> | undefined) ?? {}),
+				};
+				const env = {
+					...(target.realAuth.env ?? {}),
+					...((incoming.env as Record<string, string> | undefined) ?? {}),
+				};
+				const backendOptions = {
+					...incoming,
+					apiKey: target.realAuth.auth.apiKey,
+					headers: Object.keys(headers).length > 0 ? headers : undefined,
+					env: Object.keys(env).length > 0 ? env : undefined,
+				};
+				return target.realProvider[kind](realModel, context, backendOptions);
+			}
 			return host.deliver(kind, realModel, context, options);
 		};
 	}

@@ -224,12 +224,12 @@ describe("render helpers", () => {
     it("shows model/tier in footer even without metadata", () => {
       const result = renderBamlResult(
         {
-          content: [{ type: "text", text: JSON.stringify({ result: "hello", model: "hai-proxy/claude-opus", tier: "heavy" }) }],
+          content: [{ type: "text", text: JSON.stringify({ result: "hello", model: "backend-a/example-model", tier: "heavy" }) }],
           details: undefined,
         },
         plainTheme,
       );
-      expect(result).toContain("hai-proxy/claude-opus");
+      expect(result).toContain("backend-a/example-model");
       expect(result).toContain("(heavy)");
     });
   });

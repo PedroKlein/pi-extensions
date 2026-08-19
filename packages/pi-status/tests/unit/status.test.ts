@@ -47,8 +47,12 @@ describe("shortModel", () => {
     expect(shortModel({ id: "x", name: "Anthropic: Claude 3.7" })).toBe("Claude 3.7");
   });
 
-  it("strips parenthetical suffixes", () => {
-    expect(shortModel({ id: "x", name: "Claude 3.5 Sonnet (20241022)" })).toBe("3.5 Sonnet");
+  it("strips parenthetical suffixes for regular providers", () => {
+    expect(shortModel({ provider: "anthropic", id: "x", name: "Claude 3.5 Sonnet (20241022)" })).toBe("3.5 Sonnet");
+  });
+
+  it("keeps the active backend suffix for gateway models", () => {
+    expect(shortModel({ provider: "gateway", id: "heavy-1", name: "Example Model (backend-a)" })).toBe("Example Model (backend-a)");
   });
 
   it("falls back to id when name is not set", () => {

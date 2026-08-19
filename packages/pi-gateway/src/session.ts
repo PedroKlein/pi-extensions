@@ -49,8 +49,14 @@ export interface NotifyFn {
 	(message: string, type?: "info" | "warning" | "error"): void;
 }
 
+type ResolvedBackendAuth = {
+	auth: { apiKey?: string; headers?: Record<string, string>; baseUrl?: string };
+	env?: Record<string, string>;
+};
+
 export interface RegistryLike extends ResolverModelRegistry {
 	getApiKeyForProvider(name: string): Promise<string | undefined>;
+	getProviderAuth?(name: string): Promise<ResolvedBackendAuth | undefined>;
 }
 
 export interface RegisterGatewayInput {
@@ -92,10 +98,13 @@ export async function registerGatewayProvider(
 
 	// 2. Pre-fetch a live Bearer token per backend so the composer is sync.
 	const tokenByBackend = new Map<string, string>();
+	const authByBackend = new Map<string, ResolvedBackendAuth>();
 	for (const b of backends) {
 		try {
-			const token = await registry.getApiKeyForProvider(b.name);
+			const auth = await registry.getProviderAuth?.(b.name);
+			const token = auth?.auth.apiKey ?? await registry.getApiKeyForProvider(b.name);
 			if (token) tokenByBackend.set(b.name, token);
+			if (auth) authByBackend.set(b.name, auth);
 		} catch {
 			// Composer will emit a warning per missing token.
 		}
@@ -109,6 +118,30 @@ export async function registerGatewayProvider(
 		resolveApiKey: (b) => tokenByBackend.get(b.name),
 		now: input.now,
 	});
+	const providerDispatchWarnings: string[] = [];
+	for (const [id, target] of Object.entries(targets)) {
+		const backend = routing[id];
+		const auth = authByBackend.get(backend);
+		if (!auth) continue;
+		try {
+			const getProvider = (registry as Partial<ResolverModelRegistry>).getProvider;
+			const provider = typeof getProvider === "function"
+				? getProvider.call(registry, backend) as GatewayRouteTarget["realProvider"]
+				: undefined;
+			if (provider) {
+				target.realProvider = provider;
+				target.realAuth = auth;
+			} else {
+				providerDispatchWarnings.push(
+					`backend '${backend}' provider is unavailable for direct dispatch — using global api fallback`,
+				);
+			}
+		} catch (err) {
+			providerDispatchWarnings.push(
+				`backend '${backend}' provider lookup failed: ${(err as Error).message} — using global api fallback`,
+			);
+		}
+	}
 
 	// 4. Determine the effective backend and register with PROVIDER-LEVEL auth.
 	//
@@ -166,12 +199,15 @@ export async function registerGatewayProvider(
 		for (const w of resolverWarnings) notify(`[gateway] ${w.message}`, "warning");
 		for (const w of composeWarnings) notify(`[gateway] ${w.message}`, "warning");
 		for (const m of multiBackendWarnings) notify(`[gateway] ${m}`, "warning");
+		for (const m of new Set(providerDispatchWarnings)) notify(`[gateway] ${m}`, "warning");
 		if (modelsToRegister.length > 0 && !token) {
 			notify(
 				`[gateway] no credential resolved for backend '${effective}' — gateway aliases will not be selectable until it is authenticated.`,
 				"warning",
 			);
 		}
+	} else {
+		for (const m of new Set(providerDispatchWarnings)) console.warn(`[gateway] ${m}`);
 	}
 
 	return {

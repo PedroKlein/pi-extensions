@@ -113,10 +113,10 @@ describe("composeGatewayModels — output counts", () => {
 		// Each alias carries its own underlying model's capabilities. The mock's
 		// realModel(id).name is `${id} name`, which proves index→model routing.
 		const byId = Object.fromEntries(models.map((m) => [m.id, m]));
-		expect(byId["heavy-1"].name).toBe("opus name");
-		expect(byId["heavy-2"].name).toBe("gpt name");
-		expect(byId["light-1"].name).toBe("haiku name");
-		expect(byId["light-2"].name).toBe("mini name");
+		expect(byId["heavy-1"].name).toBe("opus name (openrouter)");
+		expect(byId["heavy-2"].name).toBe("gpt name (openrouter)");
+		expect(byId["light-1"].name).toBe("haiku name (openrouter)");
+		expect(byId["light-2"].name).toBe("mini name (openrouter)");
 	});
 
 	it("disjoint tier slots: neutral aliases fill from whichever backend has each slot", () => {
@@ -218,8 +218,8 @@ describe("composeGatewayModels — indexed failover fallthrough", () => {
 		});
 		const byId = Object.fromEntries(models.map((m) => [m.id, m]));
 		// Both indexed aliases now served by the healthy secondary backend.
-		expect(byId["heavy-1"].name).toBe("gq-opus name");
-		expect(byId["heavy-2"].name).toBe("gq-gpt name");
+		expect(byId["heavy-1"].name).toBe("gq-opus name (groq)");
+		expect(byId["heavy-2"].name).toBe("gq-gpt name (groq)");
 		expect(byId["heavy-1"].baseUrl).toBe("https://groq.example.com");
 	});
 
@@ -251,8 +251,8 @@ describe("composeGatewayModels — indexed failover fallthrough", () => {
 		expect(ids).toEqual(["heavy-1", "heavy-2"]);
 		const byId = Object.fromEntries(models.map((m) => [m.id, m]));
 		// Both clamp to the secondary's only model.
-		expect(byId["heavy-1"].name).toBe("gq-only name");
-		expect(byId["heavy-2"].name).toBe("gq-only name");
+		expect(byId["heavy-1"].name).toBe("gq-only name (groq)");
+		expect(byId["heavy-2"].name).toBe("gq-only name (groq)");
 		expect(byId["heavy-2"].baseUrl).toBe("https://groq.example.com");
 	});
 });

@@ -36,13 +36,13 @@ beforeEach(() => {
 
 const route = {
 	"heavy-1": {
-		realApi: "sap-ai-core",
+		realApi: "custom-api",
 		realModelId: "anthropic--claude-sonnet-4",
-		realBaseUrl: "https://aicore.example/v2",
+		realBaseUrl: "https://custom.example/v2",
 		realModel: {
 			id: "anthropic--claude-sonnet-4",
-			api: "sap-ai-core",
-			baseUrl: "https://aicore.example/v2",
+			api: "custom-api",
+			baseUrl: "https://custom.example/v2",
 			contextWindow: 200000,
 		},
 	},
@@ -65,8 +65,8 @@ describe("createOmpGatewayTransport", () => {
 		expect(calls.streamSimple).toHaveLength(1);
 		const delivered = calls.streamSimple[0].model;
 		expect(delivered.id).toBe("anthropic--claude-sonnet-4"); // wire name, not "heavy-1"
-		expect(delivered.api).toBe("sap-ai-core");
-		expect(delivered.baseUrl).toBe("https://aicore.example/v2");
+		expect(delivered.api).toBe("custom-api");
+		expect(delivered.baseUrl).toBe("https://custom.example/v2");
 		expect(calls.streamSimple[0].options).toEqual({ apiKey: "svc-key" });
 	});
 
@@ -107,13 +107,13 @@ describe("ompRegisterProvider", () => {
 		reg("gateway", {
 			models: [{ id: "heavy-1", name: "heavy-1", api: "gateway", baseUrl: "https://x", contextWindow: 1 }],
 			apiKey: "$opaque!token", // must be passed literally, NOT escaped
-			baseUrl: "https://aicore.example/v2",
+			baseUrl: "https://custom.example/v2",
 		});
 		expect(captured).toHaveLength(1);
 		const { name, cfg } = captured[0];
 		expect(name).toBe("gateway");
 		expect(cfg.api).toBe("gateway");
-		expect(cfg.baseUrl).toBe("https://aicore.example/v2");
+		expect(cfg.baseUrl).toBe("https://custom.example/v2");
 		expect(cfg.apiKey).toBe("$opaque!token");
 		expect(cfg.models[0].api).toBe("gateway");
 		expect("baseUrl" in cfg.models[0]).toBe(false);
@@ -144,8 +144,8 @@ describe("adaptOmpRegistry", () => {
 	// missing method throws and this test fails.
 	function makeOmpRegistry() {
 		const models = [
-			{ provider: "sap-ai-core", id: "gpt-4o", api: "sap-ai-core" },
-			{ provider: "sap-ai-core", id: "claude-3-7-sonnet", api: "sap-ai-core" },
+			{ provider: "custom-api", id: "gpt-4o", api: "custom-api" },
+			{ provider: "custom-api", id: "claude-3-7-sonnet", api: "custom-api" },
 		];
 		return {
 			find: (provider: string, modelId: string) =>
@@ -153,39 +153,39 @@ describe("adaptOmpRegistry", () => {
 			getAll: () => models,
 			hasProvider: (p: string) => models.some((m) => m.provider === p),
 			getProviderBaseUrl: (p: string) =>
-				p === "sap-ai-core" ? "https://real.example/v2" : undefined,
+				p === "custom-api" ? "https://real.example/v2" : undefined,
 			getApiKeyForProvider: async (p: string) =>
-				p === "sap-ai-core" ? "tok-123" : undefined,
+				p === "custom-api" ? "tok-123" : undefined,
 		};
 	}
 
 	it("resolveBackends works through the adapter (no pi-only registry methods)", () => {
 		const reg = adaptOmpRegistry(makeOmpRegistry());
 		const config = {
-			fallbackChain: ["sap-ai-core"],
+			fallbackChain: ["custom-api"],
 			backends: {
-				"sap-ai-core": { tiers: { "heavy-1": ["gpt-4o"], "medium-1": ["claude-3-7-sonnet"] } },
+				"custom-api": { tiers: { "heavy-1": ["gpt-4o"], "medium-1": ["claude-3-7-sonnet"] } },
 			},
 		} as any;
 		const { backends, warnings } = resolveBackends(config, reg);
 		expect(warnings).toEqual([]);
 		expect(backends).toHaveLength(1);
-		expect(backends[0].name).toBe("sap-ai-core");
+		expect(backends[0].name).toBe("custom-api");
 		expect(backends[0].baseUrl).toBe("https://real.example/v2");
-		expect(backends[0].api).toBe("sap-ai-core");
+		expect(backends[0].api).toBe("custom-api");
 		// tiers resolved to real models
 		expect([...backends[0].tiers.keys()].sort()).toEqual(["heavy-1", "medium-1"]);
 	});
 
 	it("getProvider synthesized from hasProvider; unknown provider -> undefined", () => {
 		const reg = adaptOmpRegistry(makeOmpRegistry());
-		expect(reg.getProvider("sap-ai-core")).toEqual({ id: "sap-ai-core" });
+		expect(reg.getProvider("custom-api")).toEqual({ id: "custom-api" });
 		expect(reg.getProvider("nope")).toBeUndefined();
 		expect(reg.getRegisteredProviderConfig("nope")).toBeUndefined();
 	});
 
 	it("getApiKeyForProvider passes through to oh-my-pi", async () => {
 		const reg = adaptOmpRegistry(makeOmpRegistry());
-		await expect(reg.getApiKeyForProvider("sap-ai-core")).resolves.toBe("tok-123");
+		await expect(reg.getApiKeyForProvider("custom-api")).resolves.toBe("tok-123");
 	});
 });
