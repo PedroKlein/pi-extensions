@@ -1,6 +1,6 @@
 {
   "name": "@pedro_klein/pi-status",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Context bar compositor + LLM environment injection for Pi",
   "type": "module",
   "main": "./src/index.ts",
