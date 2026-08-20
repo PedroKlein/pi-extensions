@@ -4,7 +4,6 @@
  * Registers:
  * - `ask_user` tool: the agent calls this to ask the user structured questions
  * - `/answer` command: parses last assistant message into the same TUI
- * - `before_agent_start` prompt enforcement
  *
  * Supports action options (e.g., mode-switch) that emit events via pi.events.
  */
@@ -12,7 +11,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { BorderedLoader } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth } from "@earendil-works/pi-tui";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { parseAssistantMessage } from "./parser.js";
 import { createAskUserUI } from "./ui.js";
@@ -347,16 +346,5 @@ export default function (pi: ExtensionAPI) {
 				: text;
 			pi.sendUserMessage(fullText);
 		},
-	});
-
-	// ── Prompt enforcement ─────────────────────────────────────────────────
-
-	pi.on("before_agent_start", async (event, _ctx) => {
-		return {
-			systemPrompt:
-				event.systemPrompt +
-				"\n\nWhen you need to ask the user to choose between options or make decisions, ALWAYS use the ask_user tool. " +
-				"Do not present numbered lists of options in plain text.",
-		};
 	});
 }

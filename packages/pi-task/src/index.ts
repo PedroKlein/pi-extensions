@@ -213,86 +213,48 @@ export default function piTask(pi: ExtensionAPI): void {
 		});
 	}
 
-	function buildPlanContextSnippet(): string {
+	function buildPlanBootstrapMessage(): string {
 		if (!activePlan) return "";
-		const counts = getTaskCounts(activePlan);
 		const next = getNextTask(activePlan);
-		const readyTasks = getReadyTasks(activePlan);
-		const lines: string[] = [];
-		lines.push(`\n[ACTIVE PLAN: ${activePlan.name}]`);
-		lines.push(`Progress: ${counts.done}/${counts.total} done | Ready: ${counts.ready} | Blocked: ${counts.blocked}`);
-
-		if (activePlan.tasks.length > 1) {
-			const planNames = loadPlanSummaries().map((s) => s.name);
-			if (planNames.length > 1) {
-				lines.push(`\nMultiple plans exist: ${planNames.join(", ")}.`);
-				lines.push(`Currently active: "${activePlan.name}".`);
-			}
-		}
-
-		if (activePlan.sourceCheckpoint?.startsWith("spdd/")) {
-			lines.push(`\n[SOURCE CANVAS: ${activePlan.sourceCheckpoint}]`);
-			lines.push(`Read this file for Norms and Safeguards governing this implementation.`);
-		}
-
-		// Surface parallel groups: ready tasks in the same parallelGroup
-		const parallelGroups = new Map<string, typeof readyTasks>();
-		for (const task of readyTasks) {
-			if (task.parallelGroup) {
-				const group = parallelGroups.get(task.parallelGroup) ?? [];
-				group.push(task);
-				parallelGroups.set(task.parallelGroup, group);
-			}
-		}
-
-		// Show parallel groups with 2+ ready tasks
-		for (const [groupName, tasks] of parallelGroups) {
-			if (tasks.length >= 2) {
-				lines.push(`\n[PARALLEL GROUP: ${groupName}]`);
-				lines.push(`${tasks.length} tasks ready for concurrent execution:`);
-				for (const task of tasks) {
-					const files = task.files?.length ? ` (files: ${task.files.join(", ")})` : "";
-					lines.push(`  - ${task.id}: ${task.title}${files}`);
-				}
-				lines.push(`Delegate each to a worker subagent with its task context, TDD notes, and relevant skills.`);
-			}
-		}
-
-		if (next) {
-			// If next task is part of a parallel group already shown, note it
-			const inParallelGroup = next.parallelGroup && parallelGroups.has(next.parallelGroup) && (parallelGroups.get(next.parallelGroup)?.length ?? 0) >= 2;
-			if (inParallelGroup) {
-				lines.push(`\n[ACTIVE TASK: ${next.id} — ${next.title}] (part of parallel group "${next.parallelGroup}")`);
-			} else {
-				lines.push(`\n[ACTIVE TASK: ${next.id} — ${next.title}]`);
-			}
-			if (next.files?.length) lines.push(`Files: ${next.files.join(", ")}`);
-			if (next.tddNotes) lines.push(`TDD approach: ${next.tddNotes}`);
-			if (next.acceptanceCriteria?.length) {
-				lines.push(`Acceptance Criteria${next.frozen ? " (🧊frozen)" : ""}:`);
-				for (const ac of next.acceptanceCriteria) lines.push(`  • ${ac}`);
-			}
-			if (next.references) {
-				const refs = next.references;
-				if (refs.skills?.length) lines.push(`Load skills: ${refs.skills.join(", ")}`);
-				if (refs.files?.length) lines.push(`Read first: ${refs.files.join(", ")}`);
-				if (refs.docs?.length) lines.push(`Docs: ${refs.docs.join(", ")}`);
-				if (refs.memory?.length) lines.push(`Search memory: ${refs.memory.join(", ")}`);
-			}
-			if (next.constraints?.length) lines.push(`Constraints: ${next.constraints.join("; ")}`);
-			if (next.nonGoals?.length) lines.push(`Non-goals: ${next.nonGoals.join("; ")}`);
-			if (next.subtasks.length > 0) {
-				const pendingSubs = next.subtasks.filter((s) => s.status !== "done" && s.status !== "skipped");
-				if (pendingSubs.length > 0) {
-					lines.push("Remaining sub-tasks:");
-					for (const sub of pendingSubs) {
-						const tdd = sub.tddBehavior ? ` — test: ${sub.tddBehavior}` : "";
-						lines.push(`  - ${sub.id}: ${sub.title}${tdd}`);
-					}
-				}
-			}
+		const lines = [
+			`[ACTIVE PLAN: ${activePlan.name}]`,
+			"This is a session-start snapshot. Use plan_tasks status/get for live state.",
+		];
+		if (next) lines.push(`Next: ${next.id} — ${next.title}`);
+		if (activePlan.scratchDir) lines.push(`Scratch: ${activePlan.scratchDir}`);
+		if (activePlan.sourceCheckpoint) {
+			lines.push(`Source checkpoint: ${activePlan.sourceCheckpoint}`);
 		}
 		return lines.join("\n");
+	}
+
+	function hasPlanBootstrapMarker(ctx: ExtensionContext): boolean {
+		if (!activePlan) return false;
+		return ctx.sessionManager.getBranch().some((entry) => {
+			return (
+				entry.type === "custom" &&
+				entry.customType === "pi-task-plan-bootstrap-marker" &&
+				(entry.data as { planName?: string } | undefined)?.planName ===
+					activePlan?.name
+			);
+		});
+	}
+
+	function injectPlanBootstrap(ctx: ExtensionContext): void {
+		if (!activePlan || hasPlanBootstrapMarker(ctx)) return;
+		const content = buildPlanBootstrapMessage();
+		if (!content) return;
+		pi.sendMessage(
+			{
+				customType: "pi-task-plan-bootstrap",
+				content,
+				display: false,
+			},
+			{ deliverAs: "nextTurn" },
+		);
+		pi.appendEntry("pi-task-plan-bootstrap-marker", {
+			planName: activePlan.name,
+		});
 	}
 
 	// ─── Plan Tasks Tool ────────────────────────────────────────────
@@ -1337,13 +1299,6 @@ PI_TASK_EOF`], { timeout: 5000 });
 
 	// ─── Events ─────────────────────────────────────────────────────
 
-	pi.on("before_agent_start", async (event) => {
-		if (!activePlan) return {};
-		const snippet = buildPlanContextSnippet();
-		if (!snippet) return {};
-		return { systemPrompt: event.systemPrompt + "\n" + snippet };
-	});
-
 	pi.on("agent_end", async (_event, ctx) => {
 		latestCtx = ctx;
 		updateFooterStatus(ctx);
@@ -1460,5 +1415,6 @@ PI_TASK_EOF`], { timeout: 5000 });
 		await initPlanStorage(pi);
 		activePlan = await loadActivePlan(pi);
 		updateFooterStatus(ctx);
+		injectPlanBootstrap(ctx);
 	});
 }

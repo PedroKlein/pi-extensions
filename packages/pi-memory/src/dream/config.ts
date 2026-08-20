@@ -16,6 +16,9 @@ export interface DreamConfig {
   minHoursSinceDream: number;
   minSessionsSinceDream: number;
   maxSessionsPerRun: number | null;
+  maxSourceBytesPerRun: number;
+  maxRefinerPromptBytes: number;
+  maxAdvisorPromptBytes: number;
   minerModel: string;
   refinerModel: string;
   advisorModel: string;
@@ -31,10 +34,13 @@ export const DREAM_DEFAULTS: DreamConfig = {
   autoTrigger: true,
   minHoursSinceDream: 24,
   minSessionsSinceDream: 5,
-  maxSessionsPerRun: null,
-  minerModel: "github-copilot/gpt-5.4-mini",
-  refinerModel: "github-copilot/claude-sonnet-4.6",
-  advisorModel: "github-copilot/claude-sonnet-4.6",
+  maxSessionsPerRun: 10,
+  maxSourceBytesPerRun: 300 * 1024,
+  maxRefinerPromptBytes: 400 * 1024,
+  maxAdvisorPromptBytes: 400 * 1024,
+  minerModel: "",
+  refinerModel: "",
+  advisorModel: "",
   journalDir: join(homedir(), ".pi", "memory", "dream-journal"),
   sessionsDir: join(homedir(), ".pi", "agent", "sessions"),
   skillsDir: join(homedir(), ".agents", "skills"),
@@ -74,6 +80,9 @@ function applyFromFile(config: DreamConfig, filePath: string): void {
     if (typeof dream.minHoursSinceDream === "number") config.minHoursSinceDream = dream.minHoursSinceDream;
     if (typeof dream.minSessionsSinceDream === "number") config.minSessionsSinceDream = dream.minSessionsSinceDream;
     if (dream.maxSessionsPerRun === null || typeof dream.maxSessionsPerRun === "number") config.maxSessionsPerRun = dream.maxSessionsPerRun;
+    if (typeof dream.maxSourceBytesPerRun === "number") config.maxSourceBytesPerRun = dream.maxSourceBytesPerRun;
+    if (typeof dream.maxRefinerPromptBytes === "number") config.maxRefinerPromptBytes = dream.maxRefinerPromptBytes;
+    if (typeof dream.maxAdvisorPromptBytes === "number") config.maxAdvisorPromptBytes = dream.maxAdvisorPromptBytes;
     if (typeof dream.minerModel === "string" && dream.minerModel) config.minerModel = dream.minerModel;
     if (typeof dream.refinerModel === "string" && dream.refinerModel) config.refinerModel = dream.refinerModel;
     if (typeof dream.advisorModel === "string" && dream.advisorModel) config.advisorModel = dream.advisorModel;

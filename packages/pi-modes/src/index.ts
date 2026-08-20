@@ -2,16 +2,17 @@
  * pi-modes — Slim mode enforcement extension.
  *
  * 5 modes: ask, brainstorm, plan, build, none.
- * Denylist tool gating, write filtering, mode prompts, Ctrl+Alt+M cycle,
- * build scope negotiation, mode persistence, event emission.
+ * Denylist tool gating, write filtering, stable mode contracts,
+ * Ctrl+Alt+M cycle, mode persistence, event emission.
  *
  * NONE mode = raw Pi (zero injection, zero restrictions from this extension).
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Key } from "@earendil-works/pi-tui";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, resolve, relative, extname, isAbsolute } from "node:path";
+import { fileURLToPath } from "node:url";
 import { homedir, tmpdir } from "node:os";
 import type { Mode } from "./types.js";
 
@@ -47,7 +48,7 @@ function loadModePrompts(): Record<Mode, string | null> {
 	const prompts: Record<Mode, string | null> = {
 		ask: null, brainstorm: null, plan: null, build: null, none: null,
 	};
-	const promptsDir = join(homedir(), ".pi", "agent", "extensions", "pi-modes", "prompts");
+	const promptsDir = fileURLToPath(new URL("../prompts/", import.meta.url));
 	for (const mode of MODE_ORDER) {
 		if (mode === "none") continue; // none has no prompt
 		try {
@@ -81,6 +82,49 @@ export function isWriteAllowed(inputPath: string, cwd: string): boolean {
 	return false;
 }
 
+// ─── Skill Invocation Resolution ───────────────────────────────────────────
+
+function regexEscape(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function personalSkillNames(ctx: ExtensionContext): string[] {
+	const root = resolve(homedir(), ".agents", "skills");
+	const runtime = ctx as ExtensionContext & {
+		getSystemPromptOptions?: () => {
+			skills?: Array<{ name: string; filePath: string }>;
+		};
+	};
+	const skills = runtime.getSystemPromptOptions?.().skills ?? [];
+	const configured = skills.flatMap((skill) => {
+		const path = resolve(skill.filePath);
+		const rel = relative(root, path);
+		return rel && !rel.startsWith("..") && !isAbsolute(rel) ? [skill.name] : [];
+	});
+	if (configured.length > 0) return configured;
+	try {
+		return readdirSync(root, { withFileTypes: true })
+			.filter((entry) => entry.isDirectory() && existsSync(join(root, entry.name, "SKILL.md")))
+			.map((entry) => entry.name);
+	} catch {
+		return [];
+	}
+}
+
+function invocationPattern(name: string): RegExp {
+	return new RegExp(
+		`\\b(?:use|load|apply|run|invoke)\\b\\s+(?:the\\s+)?(?:personal\\s+)?(?:skill\\s+)?${regexEscape(name)}(?:\\s+skill)?\\b`,
+		"i",
+	);
+}
+
+function negatedInvocationPattern(name: string): RegExp {
+	return new RegExp(
+		`(?:\\b(?:do\\s+not|don['’]?t|never|cannot|can['’]?t)\\s+(?:use|load|apply|run|invoke)|\\bwithout\\s+(?:using|loading|applying|running|invoking))\\s+(?:the\\s+)?(?:personal\\s+)?(?:skill\\s+)?${regexEscape(name)}(?:\\s+skill)?\\b`,
+		"i",
+	);
+}
+
 // ─── Extension ─────────────────────────────────────────────────────────────
 
 export default function piModes(pi: ExtensionAPI): void {
@@ -89,17 +133,18 @@ export default function piModes(pi: ExtensionAPI): void {
 
 	let currentMode: Mode = "ask";
 	let modePrompts = loadModePrompts();
-	let buildEntryDone = false;
 	let latestCtx: ExtensionContext | null = null;
+	let pendingContinuationStartedAt: number | null = null;
 
 	// ─── Tool Gating ───────────────────────────────────────────────────
 
 	function applyToolGating(): void {
-		if (currentMode === "build" || currentMode === "none") {
-			// Unrestricted — bash_readonly redundant when full bash available
-			const allTools = pi.getAllTools().map((t) => t.name);
-			const active = allTools.filter((t) => t !== "bash_readonly");
-			pi.setActiveTools(active);
+		if (currentMode === "none") {
+			pi.setActiveTools(pi.getAllTools().map((tool) => tool.name));
+		} else if (currentMode === "build") {
+			// Full bash makes the read-only wrapper redundant in build mode.
+			const allTools = pi.getAllTools().map((tool) => tool.name);
+			pi.setActiveTools(allTools.filter((tool) => tool !== "bash_readonly"));
 		} else {
 			// Deny bash, replace with bash_readonly
 			const allTools = pi.getAllTools().map((t) => t.name);
@@ -115,10 +160,6 @@ export default function piModes(pi: ExtensionAPI): void {
 		currentMode = mode;
 
 		applyToolGating();
-
-		if (mode === "build") {
-			buildEntryDone = false;
-		}
 
 		if (options?.persist !== false) {
 			pi.appendEntry(MODE_ENTRY_TYPE, { mode });
@@ -167,6 +208,43 @@ export default function piModes(pi: ExtensionAPI): void {
 		handler: async (ctx) => cycleMode(ctx),
 	});
 
+	for (const mode of MODE_ORDER) {
+		pi.registerCommand(mode, {
+			description: `Switch to ${MODE_LABELS[mode].label.toLowerCase()} mode`,
+			handler: async (_args, ctx) => applyMode(mode, ctx),
+		});
+	}
+
+	// ─── Exact-Name Personal Skill Resolution ─────────────────────────
+
+	pi.on("input", (event, ctx) => {
+		if (event.source === "extension") return;
+		const mentioned = personalSkillNames(ctx).filter((name) =>
+			new RegExp(`(?<![a-z0-9-])${regexEscape(name)}(?![a-z0-9-])`, "i").test(event.text),
+		);
+		if (mentioned.length > 1) {
+			const requested = mentioned.some(
+				(name) =>
+					invocationPattern(name).test(event.text) &&
+					!negatedInvocationPattern(name).test(event.text),
+			);
+			if (!requested) return;
+			ctx.ui.notify(
+				"Name one personal skill per request so Pi can expand it deterministically.",
+				"warning",
+			);
+			return { action: "handled" };
+		}
+		if (mentioned.length !== 1) return;
+		const [name] = mentioned;
+		if (negatedInvocationPattern(name).test(event.text)) return;
+		if (!invocationPattern(name).test(event.text)) return;
+		return {
+			action: "transform",
+			text: `/skill:${name} ${event.text}`,
+		};
+	});
+
 	// ─── Tool Call Hook (write filtering + subagent gating) ────────────
 
 	pi.on("tool_call", async (event, ctx) => {
@@ -202,53 +280,12 @@ export default function piModes(pi: ExtensionAPI): void {
 
 	// ─── System Prompt Injection ───────────────────────────────────────
 
-	pi.on("before_agent_start", async (event, ctx) => {
-		// None mode: zero injection
+	pi.on("before_agent_start", async (event) => {
 		if (currentMode === "none") return;
 
-		let prompt = event.systemPrompt;
-
-		// Inject mode prompt
 		const modePrompt = modePrompts[currentMode];
-		if (modePrompt) {
-			prompt += "\n\n" + modePrompt;
-		}
-
-		// Build scope negotiation (first turn only)
-		if (currentMode === "build" && !buildEntryDone) {
-			buildEntryDone = true;
-
-			if (ctx.hasUI) {
-				try {
-					const scopeLines: string[] = [];
-
-					const scopeChoice = await ctx.ui.select(
-						"Build scope:",
-						["One task", "Multiple tasks", "Until I hit a problem"],
-					);
-					if (scopeChoice !== undefined) {
-						scopeLines.push(`Scope: ${scopeChoice}`);
-					}
-
-					const handoffChoice = await ctx.ui.select(
-						"Handoff format:",
-						["Markdown in chat", "HTML report", "None"],
-					);
-					if (handoffChoice !== undefined) {
-						scopeLines.push(`Handoff: ${handoffChoice}`);
-					}
-
-					if (scopeLines.length > 0) {
-						prompt += "\n\n[BUILD SCOPE — confirmed]\n" + scopeLines.join("\n");
-						prompt += "\nScope is already confirmed. Start working immediately — do NOT re-ask.";
-					}
-				} catch {
-					// UI dismissed — let agent negotiate naturally
-				}
-			}
-		}
-
-		return { systemPrompt: prompt };
+		if (!modePrompt) return;
+		return { systemPrompt: event.systemPrompt + "\n\n" + modePrompt };
 	});
 
 	// ─── Lifecycle Events ──────────────────────────────────────────────
@@ -256,7 +293,6 @@ export default function piModes(pi: ExtensionAPI): void {
 	pi.on("session_start", async (_event, ctx) => {
 		latestCtx = ctx;
 		modePrompts = loadModePrompts();
-		buildEntryDone = false;
 
 		const persisted = getPersistedMode(ctx);
 		currentMode = persisted ?? "ask";
@@ -267,9 +303,9 @@ export default function piModes(pi: ExtensionAPI): void {
 	// Listen for mode switch from pi-ask (ask_user action: mode-switch)
 	let modeSwitchTimer: ReturnType<typeof setTimeout> | null = null;
 
-	pi.events.on("pi-ask:mode-switch", (data: { mode: string }) => {
-		if (!latestCtx) return;
-		const target = data.mode as Mode;
+	pi.events.on("pi-ask:mode-switch", (data: unknown) => {
+		if (!latestCtx || !data || typeof data !== "object") return;
+		const target = (data as { mode?: string }).mode as Mode;
 		if (!MODE_ORDER.includes(target)) return;
 		if (target === currentMode) return;
 
@@ -279,11 +315,43 @@ export default function piModes(pi: ExtensionAPI): void {
 		if (modeSwitchTimer) clearTimeout(modeSwitchTimer);
 		modeSwitchTimer = setTimeout(() => {
 			modeSwitchTimer = null;
+			pendingContinuationStartedAt = Date.now();
 			pi.sendUserMessage(
 				`Continue working. Mode is now ${MODE_LABELS[target].label.toLowerCase()}.`,
 				{ deliverAs: "followUp" },
 			);
 		}, 150);
+	});
+
+	pi.on("agent_end", (event, ctx) => {
+		if (pendingContinuationStartedAt === null) return;
+		const totals = {
+			input: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			output: 0,
+			reasoning: 0,
+		};
+		for (const message of event.messages) {
+			if (message.role !== "assistant") continue;
+			totals.input += message.usage?.input ?? 0;
+			totals.cacheRead += message.usage?.cacheRead ?? 0;
+			totals.cacheWrite += message.usage?.cacheWrite ?? 0;
+			totals.output += message.usage?.output ?? 0;
+			totals.reasoning += message.usage?.reasoning ?? 0;
+		}
+		pi.events.emit("pi-audit:usage", {
+			source: "pi-modes",
+			operation: "mode-switch-continuation",
+			model: ctx.model
+				? `${ctx.model.provider}/${ctx.model.id}`
+				: "unknown",
+			...totals,
+			durationMs: Date.now() - pendingContinuationStartedAt,
+			trigger: "automatic",
+			status: "complete",
+		});
+		pendingContinuationStartedAt = null;
 	});
 
 	// Filter mode persistence entries from LLM context

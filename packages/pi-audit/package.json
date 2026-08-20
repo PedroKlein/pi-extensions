@@ -1,7 +1,7 @@
 {
-  "name": "@pedro_klein/pi-repos",
-  "version": "0.2.0",
-  "description": "Repo management + orchestration layer for Pi — clone, index, search, annotate, group, references",
+  "name": "@pedro_klein/pi-audit",
+  "version": "0.1.0",
+  "description": "Prompt, cache, context, and nested-usage observability for Pi",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./dist/index.d.ts",
@@ -13,7 +13,7 @@
   },
   "files": [
     "src",
-    "skills"
+    "README.md"
   ],
   "scripts": {
     "dev": "tsup --watch",
@@ -26,44 +26,35 @@
   "pi": {
     "extensions": [
       "./src/index.ts"
-    ],
-    "skills": [
-      "./skills"
     ]
   },
   "keywords": [
     "pi-package",
     "pi",
-    "repos",
-    "repository",
-    "management",
-    "search",
-    "annotate",
-    "coding-agent"
+    "audit",
+    "tokens",
+    "cache",
+    "observability"
   ],
   "license": "MIT",
   "author": "Pedro Klein",
   "repository": {
     "type": "git",
     "url": "https://github.com/PedroKlein/pi-extensions",
-    "directory": "packages/pi-repos"
+    "directory": "packages/pi-audit"
   },
-  "homepage": "https://github.com/PedroKlein/pi-extensions/tree/main/packages/pi-repos",
+  "homepage": "https://github.com/PedroKlein/pi-extensions/tree/main/packages/pi-audit",
   "engines": {
     "node": ">=20.0.0"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*",
-    "typebox": "*"
+    "@earendil-works/pi-coding-agent": "*"
   },
   "dependencies": {
     "gpt-tokenizer": "^3.4.0"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*",
-    "typebox": "^1.1.38",
     "tsup": "^8.0.0",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"

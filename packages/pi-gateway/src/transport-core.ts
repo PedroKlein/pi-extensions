@@ -55,6 +55,23 @@ export interface GatewayFailure {
 
 export type GatewayFailureHandler = (failure: GatewayFailure) => Promise<boolean>;
 
+export interface GatewayUsageEvent {
+	source: "pi-gateway";
+	operation: "retry-start" | "retry-complete" | "retry-error";
+	model: string;
+	input: number;
+	cacheRead: number;
+	cacheWrite: number;
+	output: number;
+	reasoning: number;
+	durationMs: number;
+	trigger: "automatic";
+	status: "start" | "complete" | "error";
+	retryLayer: "gateway";
+	attempt: number;
+	route: string;
+}
+
 export interface GatewayTransport {
 	/** Register the `gateway` api once (idempotent). Used by the pi host, whose
 	 * api registry is reachable via a direct `registerApiProvider`. On oh-my-pi
@@ -71,6 +88,8 @@ export interface GatewayTransport {
 	setRoutes(targets: Record<string, GatewayRouteTarget>): void;
 	/** Install the controller callback that marks a failed backend unhealthy and rebuilds routes. */
 	setFailureHandler(handler: GatewayFailureHandler | undefined): void;
+	/** Report transport failover attempts to an optional observability sink. */
+	setUsageReporter?(reporter: ((event: GatewayUsageEvent) => void) | undefined): void;
 	/** Number of live routes (test seam). */
 	routeCount(): number;
 	/** Reset routes + registration flag (test seam). */
@@ -89,6 +108,7 @@ export function createGatewayTransport(host: TransportHost): GatewayTransport {
 	let routes = new Map<string, GatewayRouteTarget>();
 	let registered = false;
 	let failureHandler: GatewayFailureHandler | undefined;
+	let usageReporter: ((event: GatewayUsageEvent) => void) | undefined;
 
 	function backendName(target: GatewayRouteTarget): string {
 		const model = target.realModel as Record<string, unknown> | undefined;
@@ -151,6 +171,7 @@ export function createGatewayTransport(host: TransportHost): GatewayTransport {
 				deliver: (next) => deliverTarget(kind, next, context, options),
 				onFailure: failureHandler,
 				backendName,
+				reportUsage: usageReporter,
 			});
 		};
 	}
@@ -172,12 +193,16 @@ export function createGatewayTransport(host: TransportHost): GatewayTransport {
 		setFailureHandler(handler) {
 			failureHandler = handler;
 		},
+		setUsageReporter(reporter) {
+			usageReporter = reporter;
+		},
 		routeCount() {
 			return routes.size;
 		},
 		reset() {
 			routes = new Map();
 			failureHandler = undefined;
+			usageReporter = undefined;
 			registered = false;
 		},
 	};
@@ -198,13 +223,14 @@ interface RetryingStreamInput {
 	deliver: (target: GatewayRouteTarget) => unknown;
 	onFailure: GatewayFailureHandler;
 	backendName: (target: GatewayRouteTarget) => string;
+	reportUsage?: (event: GatewayUsageEvent) => void;
 }
 
 function retryingStream(input: RetryingStreamInput): AsyncIterable<GatewayEvent> & { result(): Promise<unknown> } {
 	const output = new GatewayEventStream();
 	const attempted = new Set<string>();
 
-	async function pump(source: AsyncIterable<GatewayEvent>, target: GatewayRouteTarget): Promise<void> {
+	async function pump(source: AsyncIterable<GatewayEvent>, target: GatewayRouteTarget): Promise<"complete" | "error"> {
 		const currentBackend = input.backendName(target);
 		attempted.add(currentBackend);
 		const buffered: GatewayEvent[] = [];
@@ -214,7 +240,7 @@ function retryingStream(input: RetryingStreamInput): AsyncIterable<GatewayEvent>
 				if (event.type === "error") {
 					if (committed) {
 						output.push(event);
-						return;
+						return "error";
 					}
 					const error = event.error ?? {};
 					const retry = await input.onFailure({
@@ -226,21 +252,34 @@ function retryingStream(input: RetryingStreamInput): AsyncIterable<GatewayEvent>
 					const next = retry ? input.getTarget() : undefined;
 					const nextBackend = next ? input.backendName(next) : undefined;
 					if (next && nextBackend && !attempted.has(nextBackend)) {
-						const nextSource = input.deliver(next);
-						if (isAsyncIterable(nextSource)) {
-							await pump(nextSource, next);
-							return;
+						const attempt = attempted.size;
+						const route = `${currentBackend}->${nextBackend}`;
+						const startedAt = Date.now();
+						input.reportUsage?.(gatewayRetryUsage("start", input.aliasId, attempt, route, 0));
+						try {
+							const nextSource = input.deliver(next);
+							if (isAsyncIterable(nextSource)) {
+								const outcome = await pump(nextSource, next);
+								input.reportUsage?.(
+									gatewayRetryUsage(outcome, input.aliasId, attempt, route, Date.now() - startedAt),
+								);
+								return outcome;
+							}
+						} catch (retryError) {
+							input.reportUsage?.(gatewayRetryUsage("error", input.aliasId, attempt, route, Date.now() - startedAt));
+							throw retryError;
 						}
+						input.reportUsage?.(gatewayRetryUsage("error", input.aliasId, attempt, route, Date.now() - startedAt));
 					}
 					for (const pending of buffered) output.push(pending);
 					output.push(event);
-					return;
+					return "error";
 				}
 
 				if (event.type === "done") {
 					for (const pending of buffered) output.push(pending);
 					output.push(event);
-					return;
+					return "complete";
 				}
 
 				if (!committed && isSemanticEvent(event)) {
@@ -252,13 +291,40 @@ function retryingStream(input: RetryingStreamInput): AsyncIterable<GatewayEvent>
 				else buffered.push(event);
 			}
 			output.end();
+			return "error";
 		} catch (err) {
 			output.fail(err);
+			return "error";
 		}
 	}
 
 	void pump(input.first, input.firstTarget);
 	return output;
+}
+
+function gatewayRetryUsage(
+	status: "start" | "complete" | "error",
+	aliasId: string,
+	attempt: number,
+	route: string,
+	durationMs: number,
+): GatewayUsageEvent {
+	return {
+		source: "pi-gateway",
+		operation: `retry-${status}`,
+		model: `gateway/${aliasId}`,
+		input: 0,
+		cacheRead: 0,
+		cacheWrite: 0,
+		output: 0,
+		reasoning: 0,
+		durationMs,
+		trigger: "automatic",
+		status,
+		retryLayer: "gateway",
+		attempt,
+		route,
+	};
 }
 
 function isAsyncIterable(value: unknown): value is AsyncIterable<GatewayEvent> {

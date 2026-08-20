@@ -19,10 +19,17 @@
  * - tool_result:    Detect reads in managed paths → auto-inject TL;DR (once per repo per session)
  */
 import type { ExtensionAPI, AgentToolResult } from "@earendil-works/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadConfig, getPaths, expandTilde } from "./config.js";
+import {
+  buildRepoSummaryContext,
+  hasStartupContextMarker,
+  injectedRepoIdsFromBranch,
+  REPO_CONTEXT_MARKER,
+  STARTUP_CONTEXT_MARKER,
+} from "./context.js";
 import { ensureStorageDirs, loadIndex, saveIndex, resolveRepo, repoId, repoMetaDir, groupDir, appendAnnotation, readSummary, addReference, removeReference } from "./storage.js";
 import { cloneRepo, registerLocal, removeRepo, syncRepo, listRepos } from "./clone.js";
 import { searchRepos } from "./search.js";
@@ -50,8 +57,9 @@ function ok(text: string): ToolResult {
 
 export default function piRepos(pi: ExtensionAPI): void {
   let config: ReposConfig = loadConfig();
-  // Session-scoped: repos that already had TL;DR injected this session
+  // Active-branch scoped: repos that already had TL;DR injected.
   const injectedRepos = new Set<string>();
+  let cwdRepoId: string | null = null;
 
   // ─── Lifecycle ────────────────────────────────────────────────────────────
 
@@ -60,9 +68,13 @@ export default function piRepos(pi: ExtensionAPI): void {
       config = loadConfig();
       ensureStorageDirs(config);
       injectedRepos.clear();
+      for (const id of injectedRepoIdsFromBranch(ctx.sessionManager.getBranch())) {
+        injectedRepos.add(id);
+      }
+      cwdRepoId = null;
 
       // Detect if cwd is inside a managed repo → inject connections + references
-      const cwd = process.cwd();
+      const cwd = ctx.cwd;
       const index = loadIndex(config);
       const paths = getPaths(config);
 
@@ -78,6 +90,7 @@ export default function piRepos(pi: ExtensionAPI): void {
 
       if (cwdEntry) {
         const cwdId = repoId(cwdEntry);
+        cwdRepoId = cwdId;
         const contextLines: string[] = [];
 
         // Find all groups this repo belongs to
@@ -105,21 +118,16 @@ export default function piRepos(pi: ExtensionAPI): void {
                 const arrow = isOutbound ? "→" : "←";
                 const desc = conn.description ? ` — ${conn.description}` : "";
 
-                // Resolve path + TL;DR for connected repo
+                // Resolve the connected repo's default worktree path.
                 let repoPath = "";
-                let tldr = "";
                 try {
                   const otherEntry = resolveRepo(index, otherRepoId);
-                  // Default branch worktree path
                   const defaultWt = otherEntry.worktrees.find(w => w.branch === otherEntry.defaultBranch);
                   repoPath = defaultWt?.path ?? (otherEntry.type === "local" ? otherEntry.path : "");
-                  const summary = readSummary(repoMetaDir(config, otherEntry));
-                  if (summary?.tldr) tldr = summary.tldr;
                 } catch { /* repo not in index */ }
 
                 contextLines.push(`${arrow} **${conn.relationship}**: \`${otherRepoId}\`${desc}`);
                 if (repoPath) contextLines.push(`  Path: \`${repoPath}\``);
-                if (tldr) contextLines.push(`  > ${tldr.split("\n")[0]}`);
                 contextLines.push("");
               }
             }
@@ -164,8 +172,11 @@ export default function piRepos(pi: ExtensionAPI): void {
           contextLines.push("");
         }
 
-        // Inject if we have anything meaningful
-        if (contextLines.length > 0) {
+        // Inject if we have anything meaningful and this branch has not seen it.
+        if (
+          contextLines.length > 0 &&
+          !hasStartupContextMarker(ctx.sessionManager.getBranch(), cwdId)
+        ) {
           const header = [
             "# pi-repos: Related Repositories",
             "",
@@ -181,6 +192,7 @@ export default function piRepos(pi: ExtensionAPI): void {
             content: header + contextLines.join("\n"),
             display: false,
           }, { triggerTurn: false });
+          pi.appendEntry(STARTUP_CONTEXT_MARKER, { repoId: cwdId });
         }
       }
     } catch (err: any) {
@@ -204,7 +216,7 @@ export default function piRepos(pi: ExtensionAPI): void {
 
       for (const entry of index.repos) {
         const id = repoId(entry);
-        if (injectedRepos.has(id)) continue;
+        if (id === cwdRepoId || injectedRepos.has(id)) continue;
 
         const repoStoragePath = join(paths.repos, entry.host, entry.owner, entry.name);
         const matchPath = entry.type === "cloned" ? repoStoragePath : entry.path;
@@ -213,12 +225,14 @@ export default function piRepos(pi: ExtensionAPI): void {
           injectedRepos.add(id);
           const summary = readSummary(repoMetaDir(config, entry));
           if (summary?.tldr) {
+            const context = buildRepoSummaryContext(id, summary.tldr);
             pi.sendMessage({
               customType: "pi-repos-context",
-              content: `**pi-repos:** You are reading from \`${id}\`. Summary: ${summary.tldr.split("\n")[0]}`,
+              content: context.content,
               display: false,
             }, { triggerTurn: false });
           }
+          pi.appendEntry(REPO_CONTEXT_MARKER, { repoId: id });
           break;
         }
       }

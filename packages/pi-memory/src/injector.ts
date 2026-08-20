@@ -7,6 +7,7 @@
  *
  * Injected once at session_start and cached for the session.
  */
+import { encode } from "gpt-tokenizer/encoding/o200k_base";
 import type { MemoryStore, SemanticEntry } from "./store.js";
 
 // ─── Types ───────────────────────────────────────────────────────────
@@ -20,6 +21,14 @@ export interface ContextBlock {
   lessonCategories: string[];
   /** Compact one-line display string */
   displayLine: string;
+  estimatedTokens: number;
+  budgetExceeded: boolean;
+  omittedFacts: number;
+}
+
+export interface BlockOptions {
+  tokenBudget?: number;
+  onBudgetExceeded?: (message: string) => void;
 }
 
 // Re-export for backward compat (used by index.ts for category-map loading in dream)
@@ -64,46 +73,51 @@ export function buildDeterministicBlock(
   store: MemoryStore,
   cwd: string,
   _categoryMap: CategoryMap,
+  options: BlockOptions = {},
 ): ContextBlock {
   const slug = projectSlug(cwd);
-  const pinnedFacts = store.listPinned();
-  const stats = store.stats();
+  const tokenBudget = options.tokenBudget ?? 500;
+  const pinnedFacts = store
+    .listPinned()
+    .filter((entry) => matchesProjectScope(entry, slug));
+  const selected: SemanticEntry[] = [];
 
-  // Build the dynamic footer with stats so the agent knows what's available
-  const footer = buildMemoryFooter(slug, stats.semantic, stats.lessons);
-
-  if (pinnedFacts.length === 0) {
-    return {
-      text: `<memory>\n${footer}\n</memory>`,
-      stats: { facts: 0, lessons: 0 },
-      factKeys: [],
-      lessonCategories: [],
-      displayLine: buildDisplayLine(slug, stats.semantic, stats.lessons, pinnedFacts),
-    };
+  for (const entry of pinnedFacts) {
+    const candidate = renderPinnedBlock([...selected, entry]);
+    if (encode(candidate).length > tokenBudget) break;
+    selected.push(entry);
   }
 
-  // Track access time
-  store.touchAccessed(pinnedFacts.map(f => f.key));
+  const omittedFacts = pinnedFacts.length - selected.length;
+  const budgetExceeded = omittedFacts > 0;
+  const text = selected.length > 0 ? renderPinnedBlock(selected) : "";
+  const estimatedTokens = text ? encode(text).length : 0;
+  const stats = store.stats();
 
-  // Format pinned facts
-  const formatted = pinnedFacts.map(formatPinnedFact);
-  const factKeys = pinnedFacts.map(f => f.key);
-
-  const text = [
-    "<memory>",
-    "## Pinned Preferences",
-    ...formatted.map(f => `- ${f}`),
-    "",
-    footer,
-    "</memory>",
-  ].join("\n");
+  if (selected.length > 0) {
+    store.touchAccessed(selected.map((entry) => entry.key));
+  }
+  if (budgetExceeded) {
+    options.onBudgetExceeded?.(
+      `Pinned preferences exceed the ${tokenBudget}-token pinned-memory budget; ` +
+        `${omittedFacts} fact(s) were omitted in stable key order.`,
+    );
+  }
 
   return {
     text,
-    stats: { facts: pinnedFacts.length, lessons: 0 },
-    factKeys,
+    stats: { facts: selected.length, lessons: 0 },
+    factKeys: selected.map((entry) => entry.key),
     lessonCategories: [],
-    displayLine: buildDisplayLine(slug, stats.semantic, stats.lessons, pinnedFacts),
+    displayLine: buildDisplayLine(
+      slug,
+      stats.semantic,
+      stats.lessons,
+      selected,
+    ),
+    estimatedTokens,
+    budgetExceeded,
+    omittedFacts,
   };
 }
 
@@ -111,6 +125,20 @@ export function buildDeterministicBlock(
 
 function formatPinnedFact(entry: SemanticEntry): string {
   return `${entry.key}: ${entry.value}`;
+}
+
+function matchesProjectScope(entry: SemanticEntry, slug: string): boolean {
+  const [scope, project] = entry.key.toLowerCase().split(".");
+  return scope !== "project" || project === slug;
+}
+
+function renderPinnedBlock(entries: SemanticEntry[]): string {
+  return [
+    "<memory>",
+    "## Pinned Preferences",
+    ...entries.map((entry) => `- ${formatPinnedFact(entry)}`),
+    "</memory>",
+  ].join("\n");
 }
 
 function buildDisplayLine(
@@ -124,21 +152,6 @@ function buildDisplayLine(
   parts.push(`📌 ${pinnedFacts.length} pinned`);
   parts.push(`${totalFacts} facts, ${totalLessons} lessons searchable`);
   return `🧠 ${parts.join(" | ")}`;
-}
-
-function buildMemoryFooter(slug: string, totalFacts: number, totalLessons: number): string {
-  const available = `${totalFacts} facts and ${totalLessons} lessons available`;
-  const projectHint = slug ? `Project: ${slug}` : "";
-  return [
-    `## Memory (${available} — use memory_search)`,
-    projectHint,
-    "- BEFORE starting work: search for relevant project context and user preferences",
-    "- On errors or unexpected behavior: search for known issues in that domain",
-    "- Before ask_user on workflow questions: check if memory already has the answer",
-    "- After significant decisions: persist with memory_remember (pin critical ones)",
-    "- Use memory_lessons to check learned corrections for the current domain",
-    "- If a memory conflicts with current code, trust the code.",
-  ].filter(Boolean).join("\n");
 }
 
 export function projectSlug(cwd: string): string {

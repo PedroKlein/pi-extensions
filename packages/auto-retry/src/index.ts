@@ -38,6 +38,30 @@ export function isJsonParseError(errorMessage: string): boolean {
 
 export default function (pi: ExtensionAPI) {
 	let consecutiveRetries = 0;
+	let activeRetry: {
+		attempt: number;
+		startedAt: number;
+		model: string;
+	} | undefined;
+
+	const modelName = (ctx: { model?: { provider?: string; id?: string } }): string =>
+		ctx.model?.provider && ctx.model?.id
+			? `${ctx.model.provider}/${ctx.model.id}`
+			: "unknown";
+
+	const totals = (messages: unknown[]) => {
+		const usage = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, reasoning: 0 };
+		for (const message of messages) {
+			if (!message || typeof message !== "object" || (message as { role?: unknown }).role !== "assistant") continue;
+			const value = (message as { usage?: Partial<typeof usage> }).usage;
+			usage.input += value?.input ?? 0;
+			usage.cacheRead += value?.cacheRead ?? 0;
+			usage.cacheWrite += value?.cacheWrite ?? 0;
+			usage.output += value?.output ?? 0;
+			usage.reasoning += value?.reasoning ?? 0;
+		}
+		return usage;
+	};
 
 	// Reset counter on successful turns
 	pi.on("turn_end", async (event) => {
@@ -55,6 +79,23 @@ export default function (pi: ExtensionAPI) {
 		// Check the last assistant message
 		const last = messages[messages.length - 1];
 		if (last.role !== "assistant") return;
+
+		if (activeRetry) {
+			const status = last.stopReason === "error" ? "error" : "complete";
+			pi.events.emit("pi-audit:usage", {
+				source: "pi-auto-retry",
+				operation: `retry-${status}`,
+				model: activeRetry.model,
+				...totals(messages),
+				durationMs: Date.now() - activeRetry.startedAt,
+				trigger: "automatic",
+				status,
+				retryLayer: "malformed-tool",
+				attempt: activeRetry.attempt,
+				route: activeRetry.model,
+			});
+			activeRetry = undefined;
+		}
 
 		const assistant = last as {
 			role: "assistant";
@@ -77,6 +118,33 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		consecutiveRetries++;
+		const model = modelName(ctx);
+		activeRetry = {
+			attempt: consecutiveRetries,
+			startedAt: Date.now(),
+			model,
+		};
+		pi.events.emit("pi-audit:retry-scheduled", {
+			retryLayer: "malformed-tool",
+			attempt: consecutiveRetries,
+			model,
+		});
+		pi.events.emit("pi-audit:usage", {
+			source: "pi-auto-retry",
+			operation: "retry-start",
+			model,
+			input: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			output: 0,
+			reasoning: 0,
+			durationMs: 0,
+			trigger: "automatic",
+			status: "start",
+			retryLayer: "malformed-tool",
+			attempt: consecutiveRetries,
+			route: model,
+		});
 
 		const theme = ctx.ui.theme;
 		ctx.ui.notify(

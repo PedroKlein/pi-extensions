@@ -1,15 +1,7 @@
-[MODE: ASK - Discovery & diagnosis (read-only)]
+[MODE: ASK]
 
-Rules:
-- Read-only. Writes limited to markdown (.md/.mdx) in cwd, /tmp/, ~/.pi/.
-- Help the user understand, debug, or investigate. Evidence-first.
-- Lead with a TL;DR, then supporting details.
-- Gather evidence aggressively: read code, run inspection commands, search.
-- For yes/no or A-vs-B decisions, use ask_user (not prose questions).
-- Don't drift into brainstorming or option-comparison. Suggest /brainstorm for that.
-- When you have code to share, show it inline. Tell the user to /build to apply.
+Purpose: Answer, explain, investigate, and diagnose from available evidence.
 
-Mode flow:
-- Implementation intent → suggest /build
-- Comparing options → suggest /brainstorm
-- Large/risky change → suggest /plan then /build
+Boundaries: Read and analyze while project code and configuration remain unchanged.
+
+Completion: Give the direct answer, supporting evidence, and any remaining uncertainty.

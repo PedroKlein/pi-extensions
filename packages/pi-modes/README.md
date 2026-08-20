@@ -1,8 +1,6 @@
 # pi-modes
 
-A 5-mode workflow system for Pi. Each mode controls which tools the agent can use, what it can write, and how it reasons — enforced at the extension layer, not by prompting alone.
-
-I built this because I wanted distinct operating modes with hard guarantees: a read-only investigation mode that can't accidentally write files, a brainstorm mode that stays in thinking territory, a plan mode that won't execute, and a build mode that has full access when I'm ready for it.
+A five-mode workflow system for Pi. Each mode combines a short, stable behavioral contract with extension-level tool enforcement.
 
 ## Install
 
@@ -10,86 +8,53 @@ I built this because I wanted distinct operating modes with hard guarantees: a r
 pi install npm:@pedro_klein/pi-modes
 ```
 
-Also install [`@pedro_klein/pi-readonly-bash`](https://github.com/PedroKlein/pi-extensions/tree/main/packages/pi-readonly-bash) — the read-only modes swap `bash` for `bash_readonly`, which requires that extension to be present.
+Also install [`@pedro_klein/pi-readonly-bash`](https://github.com/PedroKlein/pi-extensions/tree/main/packages/pi-readonly-bash). Read-only modes replace `bash` with `bash_readonly`.
 
-## What it provides
+## Controls
 
-**Keybindings:**
-- `Ctrl+Alt+M` — cycle through modes in order: Ask → Brainstorm → Plan → Build → None → Ask
+- `/ask`, `/brainstorm`, `/plan`, `/build`, `/none` switch mode without starting a model turn.
+- `Ctrl+Alt+M` cycles Ask → Brainstorm → Plan → Build → None → Ask.
+- `pi-ask:mode-switch` switches mode from an in-run `ask_user` action, aborts the old run, and queues one attributed continuation.
 
-**Events emitted:**
-- `pi-modes:changed` — fired on every mode switch with `{ mode, previousMode }`
-- `pi-status:register` — updates the status bar segment (integrates with `@pedro_klein/pi-status`)
-
-**Events consumed:**
-- `pi-ask:mode-switch` — switches mode programmatically from an `ask_user` action (integrates with `@pedro_klein/pi-ask`)
-
-**Prompts:** ships mode-specific system prompt fragments in `prompts/`. Each prompt is injected into the system prompt when that mode is active.
+The extension emits `pi-modes:changed` with `{ mode, previousMode }` and publishes its status segment through `pi-status:register`.
 
 ## Modes
 
-| Mode | Icon | Access | Purpose |
-|------|------|--------|---------|
-| **Ask** | ❓ | Read-only | Investigation, diagnosis, evidence gathering |
-| **Brainstorm** | 💡 | Read-only | Active thinking partner — trade-offs, alternatives |
-| **Plan** | 📋 | Read-only + planning tools | Task graph structuring, TDD breakdown |
-| **Build** | 🔨 | Full access | Implementation, execution, reporting |
-| **None** | ⊘ | Full access, no injection | Raw Pi — zero constraints from this extension |
+| Mode | Access | Purpose |
+|---|---|---|
+| Ask | Read-only | Investigation, diagnosis, explanation |
+| Brainstorm | Read-only | Alternatives, trade-offs, decisions |
+| Plan | Read-only | Verifiable implementation planning |
+| Build | Full | Implementation and verification |
+| None | Unmodified | Raw Pi with no prompt or tool changes from pi-modes |
 
-## Tool gating
+## Enforcement
 
-In **Ask**, **Brainstorm**, and **Plan** modes:
-- `bash` is removed from the tool list; `bash_readonly` takes its place
-- Mutating subagents (`worker`, `oracle-executor`) are blocked
+In Ask, Brainstorm, and Plan:
 
-In **Ask** and **Brainstorm** modes additionally:
-- `write` and `edit` tool calls are filtered — only allowed for `.md`/`.mdx` files inside the project directory, anything under `/tmp/`, and anything under `~/.pi/`
+- `bash` is replaced by `bash_readonly`.
+- Mutating worker agents are blocked.
 
-In **Build** and **None** modes:
-- All tools available, no write filtering, no subagent restrictions
+Ask and Brainstorm additionally restrict file mutation to Markdown inside the project, temporary files, and `~/.pi/` state.
 
-## Build scope negotiation
+Build enables the full catalog except the redundant read-only Bash wrapper. None preserves the complete tool catalog exactly as registered.
 
-When switching into **Build** mode, Pi prompts you once to choose:
-- **Scope:** One task / Multiple tasks / Until I hit a problem
-- **Handoff format:** Markdown in chat / HTML report / None
+## Mode contracts
 
-The choice is injected into the system prompt for that build session. If you dismiss the prompt, the agent negotiates scope naturally.
+The four contracts under `prompts/` contain only purpose, boundaries, and completion behavior. They are loaded relative to the installed package and injected as stable system-prompt suffixes. They are package internals, not global Pi prompt templates. None injects nothing.
 
-## Mode persistence
+Mode switches do not open scope dialogs or add transient prompt text. The next ordinary turn receives the new stable contract.
 
-The current mode survives session reloads. On `session_start`, the extension replays the last persisted mode entry from session storage. New sessions default to **Ask**.
+## Persistence
 
-## Configuration
-
-No `settings.json` configuration needed.
-
-Mode prompts are loaded from `prompts/` inside the package. When installed via npm, these are the bundled defaults. To customize a mode's system prompt injection, place override files at:
-
-```
-~/.pi/agent/extensions/pi-modes/prompts/
-├── ask.md
-├── brainstorm.md
-├── plan.md
-└── build.md
-```
-
-Any file present overrides the bundled prompt for that mode. `none` mode has no prompt (it's raw pi with zero injection).
-
-## How it works
-
-The extension hooks `before_agent_start` to inject the mode prompt and handle build scope. It hooks `tool_call` for write filtering and subagent gating. Mode state is stored via `pi.appendEntry` with type `pi-mode`.
-
-Prompt files are loaded from `~/.pi/agent/extensions/pi-modes/prompts/` at session start — the same directory where pi installs this extension's `prompts/` directory.
-
-The extension skips all logic in subagent child processes (`PI_SUBAGENT_DEPTH > 0`) to avoid conflicting with parent session state.
+Mode state is stored as a non-model-visible `pi-mode` session entry and restored on reload. New sessions default to Ask.
 
 ## Development
 
 ```bash
-pnpm test           # run tests
-pnpm build          # build for publish
-pnpm typecheck      # type-check without emitting
+pnpm test
+pnpm typecheck
+pnpm build
 ```
 
 ## License

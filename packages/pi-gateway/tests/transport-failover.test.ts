@@ -70,6 +70,8 @@ describe("gateway transport failover", () => {
 			return true;
 		});
 		transport.setFailureHandler(onFailure);
+		const reportUsage = vi.fn();
+		transport.setUsageReporter(reportUsage);
 
 		const stream = transport.streamSimple({ id: "heavy-1" }, {}, {});
 		const events = await collect(stream);
@@ -86,6 +88,27 @@ describe("gateway transport failover", () => {
 		);
 		expect(events.map((event) => event.type)).toEqual(["start", "text_delta", "done"]);
 		expect(events.at(-1).message.provider).toBe("backend-b");
+		expect(reportUsage).toHaveBeenCalledWith(
+			expect.objectContaining({
+				source: "pi-gateway",
+				operation: "retry-start",
+				model: "gateway/heavy-1",
+				status: "start",
+				retryLayer: "gateway",
+				attempt: 1,
+				route: "backend-a->backend-b",
+			}),
+		);
+		expect(reportUsage).toHaveBeenCalledWith(
+			expect.objectContaining({
+				source: "pi-gateway",
+				operation: "retry-complete",
+				status: "complete",
+				retryLayer: "gateway",
+				attempt: 1,
+				route: "backend-a->backend-b",
+			}),
+		);
 	});
 
 	it("does not replay after semantic output has already streamed", async () => {

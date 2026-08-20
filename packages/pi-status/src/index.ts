@@ -1,12 +1,9 @@
 /**
- * pi-status — Context bar compositor + LLM environment injection.
+ * pi-status — Context bar compositor.
  *
  * Owns the context-bar widget. Renders built-in segments (model, tokens,
- * cost, thinking, branch) and accepts external segments from other extensions
- * via pi-status:register / pi-status:update events.
- *
- * Also injects a small environment block into the system prompt:
- * git branch, context usage %, worktree warning.
+ * cost, thinking, branch, worktrees) and accepts external segments from other
+ * extensions via pi-status:register / pi-status:update events.
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -203,6 +200,12 @@ export default function piStatus(pi: ExtensionAPI): void {
 			priority: 10,
 			render: (theme) => gitBranch ? theme.fg("dim", `⎇ ${gitBranch}`) : "",
 		});
+
+		segments.set("_worktree", {
+			id: "_worktree",
+			priority: 9,
+			render: (theme) => worktreeWarning ? theme.fg("warning", worktreeWarning) : "",
+		});
 	}
 
 	// ─── Rendering ─────────────────────────────────────────────────────
@@ -254,23 +257,6 @@ export default function piStatus(pi: ExtensionAPI): void {
 			};
 		});
 	}
-
-	// ─── LLM Environment Injection ─────────────────────────────────────
-
-	pi.on("before_agent_start", async (event, ctx) => {
-		const usage = ctx.getContextUsage();
-		const tokens = usage?.tokens ?? 0;
-		const ctxWindow = ctx.model?.contextWindow ?? 200_000;
-		const pct = ctxWindow > 0 ? Math.round((tokens / ctxWindow) * 100) : 0;
-
-		const envLines: string[] = [];
-		if (gitBranch) envLines.push(`Git branch: ${gitBranch}`);
-		envLines.push(`Context: ${pct}% used (${fmt(tokens)}/${fmt(ctxWindow)} tokens)`);
-		if (worktreeWarning) envLines.push(worktreeWarning);
-
-		const envBlock = envLines.join("\n");
-		return { systemPrompt: event.systemPrompt + "\n\n" + envBlock };
-	});
 
 	// ─── Lifecycle Events ──────────────────────────────────────────────
 

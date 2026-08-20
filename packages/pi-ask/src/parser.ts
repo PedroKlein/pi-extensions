@@ -3,7 +3,8 @@
  * Used by the /answer command.
  */
 
-import { complete, type Api, type Model } from "@earendil-works/pi-ai";
+import { type Api, type Model } from "@earendil-works/pi-ai";
+import { complete } from "@earendil-works/pi-ai/compat";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { Question } from "./types.js";
 

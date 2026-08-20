@@ -76,6 +76,10 @@ export function activateGateway(pi: GatewayHostApi, platform: GatewayPlatform): 
 	let refreshTimer: RefreshTimerHandle | undefined;
 	let sessionContext: GatewayHostContext | undefined;
 
+	platform.transport.setUsageReporter?.((event) =>
+		pi.events?.emit("pi-audit:usage", event),
+	);
+
 	registerGatewayCommand(pi, {
 		getController: () => controller,
 		statePath: STATE_PATH,
@@ -192,6 +196,7 @@ export function activateGateway(pi: GatewayHostApi, platform: GatewayPlatform): 
 		refreshTimer = undefined;
 		controller = undefined;
 		platform.transport.setFailureHandler(undefined);
+		platform.transport.setUsageReporter?.(undefined);
 		sessionContext = undefined;
 	});
 }

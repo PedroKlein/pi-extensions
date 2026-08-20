@@ -10,6 +10,7 @@
 import { mkdirSync, readFileSync, writeFileSync, readdirSync, existsSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir, homedir } from "node:os";
+import { encode } from "gpt-tokenizer/encoding/o200k_base";
 import type { MemoryStore } from "../store.js";
 import type { DreamConfig } from "./config.js";
 import { findAllSessionFiles, filterUnprocessed, parseSessionJSONL, type ExtractedSession } from "./session-reader.js";
@@ -26,6 +27,20 @@ interface DreamUI {
   notify(message: string, level: "info" | "warning" | "error"): void;
 }
 
+export interface DreamUsageEvent {
+  source: "pi-memory";
+  operation: string;
+  model: string;
+  input: number;
+  cacheRead: number;
+  cacheWrite: number;
+  output: number;
+  reasoning: number;
+  durationMs: number;
+  trigger: "automatic" | "user";
+  status: "start" | "complete" | "error";
+}
+
 export interface DreamResult {
   success: boolean;
   runId: string;
@@ -40,6 +55,73 @@ export interface DreamResult {
   };
   journalPath: string | null;
   error?: string;
+}
+
+export interface DreamSessionSelection {
+  sessions: ExtractedSession[];
+  deferred: ExtractedSession[];
+  sourceBytes: number;
+}
+
+export function selectDreamSessions(
+  sessions: ExtractedSession[],
+  options: { manual: boolean; maxSessions: number; maxSourceBytes: number },
+): DreamSessionSelection {
+  if (options.manual) {
+    return {
+      sessions: [...sessions],
+      deferred: [],
+      sourceBytes: sessions.reduce(
+        (total, session) => total + Buffer.byteLength(JSON.stringify(session)),
+        0,
+      ),
+    };
+  }
+
+  const selected: ExtractedSession[] = [];
+  let sourceBytes = 0;
+  for (const session of sessions) {
+    const bytes = Buffer.byteLength(JSON.stringify(session));
+    if (
+      selected.length >= options.maxSessions ||
+      sourceBytes + bytes > options.maxSourceBytes
+    ) {
+      break;
+    }
+    selected.push(session);
+    sourceBytes += bytes;
+  }
+  return {
+    sessions: selected,
+    deferred: sessions.slice(selected.length),
+    sourceBytes,
+  };
+}
+
+function sliceByUtf8Bytes(text: string, maxBytes: number, fromEnd: boolean): string {
+  let low = 0;
+  let high = text.length;
+  let best = "";
+  while (low <= high) {
+    const length = Math.floor((low + high) / 2);
+    const candidate = fromEnd ? text.slice(text.length - length) : text.slice(0, length);
+    if (Buffer.byteLength(candidate) <= maxBytes) {
+      best = candidate;
+      low = length + 1;
+    } else {
+      high = length - 1;
+    }
+  }
+  return best;
+}
+
+export function capPromptBytes(prompt: string, maxBytes: number): string {
+  if (Buffer.byteLength(prompt) <= maxBytes) return prompt;
+  const marker = "\n\n[... prompt context truncated ...]\n\n";
+  const remaining = Math.max(0, maxBytes - Buffer.byteLength(marker));
+  const head = sliceByUtf8Bytes(prompt, Math.floor(remaining * 0.7), false);
+  const tail = sliceByUtf8Bytes(prompt, remaining - Buffer.byteLength(head), true);
+  return `${head}${marker}${tail}`;
 }
 
 interface MemoryOperation {
@@ -117,20 +199,70 @@ export async function executeDream(
   config: DreamConfig,
   exec: ExecFn,
   ui: DreamUI,
-  options: { manual: boolean }
+  options: {
+    manual: boolean;
+    onUsageEvent?: (event: DreamUsageEvent) => void;
+  }
 ): Promise<DreamResult> {
   const runId = crypto.randomUUID();
   const pid = process.pid;
+  const startTime = Date.now();
+  const trigger = options.manual ? "user" : "automatic";
+  const emitLifecycle = (
+    operation: string,
+    model: string,
+    status: DreamUsageEvent["status"],
+  ): void => {
+    options.onUsageEvent?.({
+      source: "pi-memory",
+      operation,
+      model,
+      input: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      output: 0,
+      reasoning: 0,
+      durationMs: Date.now() - startTime,
+      trigger,
+      status,
+    });
+  };
+  const finish = (result: DreamResult): DreamResult => {
+    emitLifecycle(
+      result.success ? "dream-complete" : "dream-error",
+      result.success ? "pipeline" : config.minerModel || "unconfigured",
+      result.success ? "complete" : "error",
+    );
+    return result;
+  };
+  emitLifecycle("dream-start", config.minerModel || "unconfigured", "start");
+  const missingModels = [
+    ["minerModel", config.minerModel],
+    ["refinerModel", config.refinerModel],
+    ["advisorModel", config.advisorModel],
+  ]
+    .filter(([, model]) => !model)
+    .map(([name]) => name);
+  if (missingModels.length > 0) {
+    const error = `Dream requires explicit model configuration: ${missingModels.join(", ")}`;
+    ui.notify(error, "error");
+    return finish({
+      success: false,
+      runId,
+      sessionsProcessed: 0,
+      memoryChanges: emptyChanges(),
+      journalPath: null,
+      error,
+    });
+  }
 
   // Acquire lock
   if (!store.acquireDreamLock(pid)) {
     dreamLog(`DREAM BLOCKED run=${runId.slice(0, 8)} -- lock held by another process`);
-    return { success: false, runId, sessionsProcessed: 0, memoryChanges: emptyChanges(), journalPath: null, error: "Lock held by another process" };
+    return finish({ success: false, runId, sessionsProcessed: 0, memoryChanges: emptyChanges(), journalPath: null, error: "Lock held by another process" });
   }
 
   dreamLog(`DREAM START run=${runId.slice(0, 8)} manual=${options.manual} pid=${pid}`);
-  const startTime = Date.now();
-
   try {
     // Find unprocessed sessions
     ui.setStatus("pi-memory", "🌙 Dream: scanning sessions...");
@@ -144,33 +276,54 @@ export async function executeDream(
         ui.notify("No new sessions to process", "info");
       }
       store.releaseDreamLock(pid);
-      return { success: true, runId, sessionsProcessed: 0, memoryChanges: emptyChanges(), journalPath: null };
+      return finish({ success: true, runId, sessionsProcessed: 0, memoryChanges: emptyChanges(), journalPath: null });
     }
 
-    // Apply max sessions cap
-    if (config.maxSessionsPerRun && unprocessed.length > config.maxSessionsPerRun) {
-      dreamLog(`CAP applying maxSessionsPerRun=${config.maxSessionsPerRun} (${unprocessed.length} available)`);
-      unprocessed = unprocessed.slice(0, config.maxSessionsPerRun);
-    }
-
-    // Parse sessions
+    // Parse sessions, then apply automatic model-input bounds. Manual runs are explicit overrides.
     ui.setStatus("pi-memory", `🌙 Dream: parsing ${unprocessed.length} sessions...`);
-    const sessions: ExtractedSession[] = [];
+    const substantiveSessions: ExtractedSession[] = [];
+    const trivialPaths: string[] = [];
     for (const file of unprocessed) {
       const parsed = parseSessionJSONL(file);
-      if (parsed.userMessages.length >= 2) { // Skip trivial sessions
-        sessions.push(parsed);
+      if (parsed.userMessages.length >= 2) {
+        substantiveSessions.push(parsed);
+      } else {
+        trivialPaths.push(file);
       }
     }
-    dreamLog(`PARSE ${unprocessed.length} sessions -> ${sessions.length} with content, ${unprocessed.length - sessions.length} trivial (skipped)`);
+    const selection = selectDreamSessions(substantiveSessions, {
+      manual: options.manual,
+      maxSessions: Math.min(config.maxSessionsPerRun ?? 10, 10),
+      maxSourceBytes: Math.min(config.maxSourceBytesPerRun, 300 * 1024),
+    });
+    const sessions = selection.sessions;
+    dreamLog(
+      `PARSE ${unprocessed.length} sessions -> ${substantiveSessions.length} with content, ` +
+        `${trivialPaths.length} trivial, ${selection.deferred.length} deferred by automatic bounds; ` +
+        `${selection.sourceBytes} source bytes selected`,
+    );
 
-    if (sessions.length === 0) {
+    if (substantiveSessions.length === 0) {
       dreamLog(`DREAM COMPLETE (empty) -- all sessions were trivial`);
-      store.markSessionsProcessed(unprocessed, runId);
+      store.markSessionsProcessed(trivialPaths, runId);
       store.setDreamState("last_dream_at", new Date().toISOString());
       store.setDreamState("last_dream_result", "success_empty");
       store.releaseDreamLock(pid);
-      return { success: true, runId, sessionsProcessed: unprocessed.length, memoryChanges: emptyChanges(), journalPath: null };
+      return finish({ success: true, runId, sessionsProcessed: trivialPaths.length, memoryChanges: emptyChanges(), journalPath: null });
+    }
+
+    if (sessions.length === 0) {
+      dreamLog(`DREAM DEFER -- automatic source bounds selected no sessions`);
+      store.markSessionsProcessed(trivialPaths, runId);
+      store.releaseDreamLock(pid);
+      return finish({
+        success: false,
+        runId,
+        sessionsProcessed: trivialPaths.length,
+        memoryChanges: emptyChanges(),
+        journalPath: null,
+        error: "Automatic Dream source bounds selected no substantive sessions",
+      });
     }
 
     // Prepare chain directory
@@ -184,7 +337,13 @@ export async function executeDream(
     // Stage 1: Mine sessions
     ui.setStatus("pi-memory", `🌙 Dream: mining ${sessions.length} sessions...`);
     dreamLog(`MINE START ${sessions.length} sessions, model=${config.minerModel}`);
-    const { extracted, minedPaths } = await runMiningStage(chainDir, config, exec);
+    const { extracted, minedPaths } = await runMiningStage(
+      chainDir,
+      config,
+      exec,
+      options.onUsageEvent,
+      trigger,
+    );
     dreamLog(`MINE DONE extracted ${extracted.length} chars of raw results, ${minedPaths.length}/${sessions.length} sessions mined successfully`);
 
     // Post-MINE: deduplicate and count candidates across batches
@@ -193,7 +352,6 @@ export async function executeDream(
     // If mining produced nothing, skip refine/advise
     if (extracted.length === 0) {
       dreamLog(`MINE produced no output -- skipping refine/advise stages`);
-      const trivialPaths = unprocessed.filter(f => !sessions.some(s => s.path === f));
       if (trivialPaths.length > 0) {
         store.markSessionsProcessed(trivialPaths, runId);
         dreamLog(`MARK ${trivialPaths.length} trivial sessions as processed, ${unprocessed.length - trivialPaths.length} deferred`);
@@ -203,20 +361,33 @@ export async function executeDream(
       store.setDreamState("last_dream_at", new Date().toISOString());
       store.setDreamState("last_dream_result", "mining_failed");
       store.releaseDreamLock(pid);
-      return { success: false, runId, sessionsProcessed: 0, memoryChanges: emptyChanges(), journalPath: null, error: "All mining batches failed -- sessions deferred for retry" };
+      return finish({ success: false, runId, sessionsProcessed: 0, memoryChanges: emptyChanges(), journalPath: null, error: "All mining batches failed -- sessions deferred for retry" });
     }
 
     // Stage 2: Refine memory (with tools for iterative exploration)
     ui.setStatus("pi-memory", `🌙 Dream: refining memory...`);
     dreamLog(`REFINE START model=${config.refinerModel}`);
-    const refinement = await runRefinementStage(chainDir, config, exec, config.journalDir);
+    const refinement = await runRefinementStage(
+      chainDir,
+      config,
+      exec,
+      config.journalDir,
+      options.onUsageEvent,
+      trigger,
+    );
     const operations = refinement.operations;
     dreamLog(`REFINE DONE ${operations.length} operations produced`);
 
     // Stage 3: Workflow insights
     ui.setStatus("pi-memory", `🌙 Dream: analyzing workflow...`);
     dreamLog(`ADVISE START model=${config.advisorModel}`);
-    const workflowInsights = await runAdvisorStage(chainDir, config, exec);
+    const workflowInsights = await runAdvisorStage(
+      chainDir,
+      config,
+      exec,
+      options.onUsageEvent,
+      trigger,
+    );
     dreamLog(`ADVISE DONE ${typeof workflowInsights === "string" ? workflowInsights.length + " chars" : workflowInsights.length + " insights"}`);
 
     // Apply operations to store
@@ -232,7 +403,7 @@ export async function executeDream(
       store.setDreamState("last_dream_at", new Date().toISOString());
       store.setDreamState("last_dream_result", "safety_abort");
       store.releaseDreamLock(pid);
-      return { success: false, runId, sessionsProcessed: sessions.length, memoryChanges: changeStats, journalPath: null, error: "Safety abort: >50% memory reduction" };
+      return finish({ success: false, runId, sessionsProcessed: sessions.length, memoryChanges: changeStats, journalPath: null, error: "Safety abort: >50% memory reduction" });
     }
 
     // Write dream journal
@@ -258,7 +429,6 @@ export async function executeDream(
     dreamLog(`JOURNAL wrote ${journalPath}`);
 
     // Mark only successfully mined sessions + trivial sessions as processed
-    const trivialPaths = unprocessed.filter(f => !sessions.some(s => s.path === f));
     const minedPathSet = new Set(minedPaths);
     const processedPaths = [...trivialPaths, ...unprocessed.filter(f => minedPathSet.has(f))];
     const deferredCount = unprocessed.length - processedPaths.length;
@@ -272,13 +442,13 @@ export async function executeDream(
       "info"
     );
 
-    return {
+    return finish({
       success: true,
       runId,
       sessionsProcessed: sessions.length,
       memoryChanges: changeStats,
       journalPath,
-    };
+    });
   } catch (err: any) {
     dreamLogError("DREAM", err);
     dreamLog(`DREAM FAILED run=${runId.slice(0, 8)} after ${((Date.now() - startTime) / 1000).toFixed(1)}s`);
@@ -288,7 +458,7 @@ export async function executeDream(
 
     ui.notify(`Dream failed: ${err.message?.slice(0, 100) || "unknown error"}`, "error");
 
-    return { success: false, runId, sessionsProcessed: 0, memoryChanges: emptyChanges(), journalPath: null, error: err.message };
+    return finish({ success: false, runId, sessionsProcessed: 0, memoryChanges: emptyChanges(), journalPath: null, error: err.message });
   } finally {
     ui.setStatus("pi-memory", "");
   }
@@ -304,7 +474,9 @@ interface MiningResult {
 async function runMiningStage(
   chainDir: string,
   config: DreamConfig,
-  exec: ExecFn
+  exec: ExecFn,
+  onUsageEvent: ((event: DreamUsageEvent) => void) | undefined,
+  trigger: "automatic" | "user",
 ): Promise<MiningResult> {
   const sessionsDir = join(chainDir, "sessions");
   const batches = readdirSync(sessionsDir).filter((f: string) => f.startsWith("batch-"));
@@ -312,7 +484,13 @@ async function runMiningStage(
   dreamLog(`MINE launching ${batches.length} batches in parallel`);
 
   // Prepare all batch prompts
-  const batchMeta: Array<{ index: number; entries: { path: string }[]; promptFile: string; sizeKB: string }> = [];
+  const batchMeta: Array<{
+    index: number;
+    entries: { path: string }[];
+    promptFile: string;
+    sizeKB: string;
+    inputTokens: number;
+  }> = [];
   for (let i = 0; i < batches.length; i++) {
     const batchContent = readFileSync(join(sessionsDir, batches[i]), "utf-8");
     const batchEntries = JSON.parse(batchContent) as { path: string }[];
@@ -320,7 +498,13 @@ async function runMiningStage(
     const promptFile = join(chainDir, `miner-prompt-${i}.md`);
     writeFileSync(promptFile, prompt, "utf-8");
     const sizeKB = (batchContent.length / 1024).toFixed(0);
-    batchMeta.push({ index: i, entries: batchEntries, promptFile, sizeKB });
+    batchMeta.push({
+      index: i,
+      entries: batchEntries,
+      promptFile,
+      sizeKB,
+      inputTokens: encode(prompt).length,
+    });
     dreamLog(`MINE batch ${i + 1}/${batches.length} (${batchEntries.length} sessions, ${sizeKB}KB) -> queued`);
   }
 
@@ -337,7 +521,8 @@ async function runMiningStage(
       ], { timeout: 900_000 })
     )
   );
-  const totalElapsed = ((Date.now() - startMs) / 1000).toFixed(1);
+  const totalDurationMs = Date.now() - startMs;
+  const totalElapsed = (totalDurationMs / 1000).toFixed(1);
 
   // Collect results
   const results: string[] = [];
@@ -348,11 +533,37 @@ async function runMiningStage(
     const meta = batchMeta[i];
 
     if (settled.status === "rejected") {
+      onUsageEvent?.({
+        source: "pi-memory",
+        operation: "dream-mine-error",
+        model: config.minerModel,
+        input: meta.inputTokens,
+        cacheRead: 0,
+        cacheWrite: 0,
+        output: 0,
+        reasoning: 0,
+        durationMs: Math.round(totalDurationMs / Math.max(1, batches.length)),
+        trigger,
+        status: "error",
+      });
       dreamLog(`MINE batch ${i + 1}/${batches.length} REJECTED (${settled.reason}) -- ${meta.entries.length} sessions deferred`);
       continue;
     }
 
     const result = settled.value;
+    onUsageEvent?.({
+      source: "pi-memory",
+      operation: result.code === 0 ? "dream-mine" : "dream-mine-error",
+      model: config.minerModel,
+      input: meta.inputTokens,
+      cacheRead: 0,
+      cacheWrite: 0,
+      output: encode(result.stdout ?? "").length,
+      reasoning: 0,
+      durationMs: Math.round(totalDurationMs / Math.max(1, batches.length)),
+      trigger,
+      status: result.code === 0 ? "complete" : "error",
+    });
     if (result.code === 0 && result.stdout) {
       results.push(result.stdout);
       for (const entry of meta.entries) {
@@ -378,14 +589,19 @@ async function runRefinementStage(
   chainDir: string,
   config: DreamConfig,
   exec: ExecFn,
-  journalDir?: string
+  journalDir: string | undefined,
+  onUsageEvent: ((event: DreamUsageEvent) => void) | undefined,
+  trigger: "automatic" | "user",
 ): Promise<ParsedRefinement> {
   const extracted = safeReadFile(join(chainDir, "extracted.json"));
   const memory = safeReadFile(join(chainDir, "current-memory.json"));
   const skills = safeReadFile(join(chainDir, "skills.md"));
   const recentChanges = buildRecentChangesSummary(journalDir);
 
-  const prompt = buildRefinerPrompt(extracted, memory, skills, recentChanges);
+  const prompt = capPromptBytes(
+    buildRefinerPrompt(extracted, memory, skills, recentChanges),
+    config.maxRefinerPromptBytes,
+  );
   dreamLog(`REFINE prompt size: ${(prompt.length / 1024).toFixed(0)}KB`);
 
   // Write prompt to file to avoid E2BIG (ARG_MAX ~1MB on macOS)
@@ -404,7 +620,21 @@ async function runRefinementStage(
     `@${promptFile}`,
   ], { timeout: 900_000 });
 
-  const elapsedS = ((Date.now() - startMs) / 1000).toFixed(1);
+  const durationMs = Date.now() - startMs;
+  const elapsedS = (durationMs / 1000).toFixed(1);
+  onUsageEvent?.({
+    source: "pi-memory",
+    operation: result.code === 0 ? "dream-refine" : "dream-refine-error",
+    model: config.refinerModel,
+    input: encode(prompt).length,
+    cacheRead: 0,
+    cacheWrite: 0,
+    output: encode(result.stdout ?? "").length,
+    reasoning: 0,
+    durationMs,
+    trigger,
+    status: result.code === 0 ? "complete" : "error",
+  });
   if (result.code !== 0 || !result.stdout) {
     dreamLog(`REFINE FAILED (${elapsedS}s, code=${result.code}, stderr=${result.stderr?.slice(0, 300) || "none"})`);
     return { operations: [], pinSuggestions: [] };
@@ -426,7 +656,9 @@ async function runRefinementStage(
 async function runAdvisorStage(
   chainDir: string,
   config: DreamConfig,
-  exec: ExecFn
+  exec: ExecFn,
+  onUsageEvent: ((event: DreamUsageEvent) => void) | undefined,
+  trigger: "automatic" | "user",
 ): Promise<string | WorkflowInsight[]> {
   const memory = safeReadFile(join(chainDir, "current-memory.json"));
   const skills = safeReadFile(join(chainDir, "skills.md"));
@@ -448,7 +680,10 @@ async function runAdvisorStage(
     ? `${skills}\n\n${skillsListing}`
     : skills;
 
-  const prompt = buildAdvisorPrompt(summaries.join("\n"), memory, skillsContext);
+  const prompt = capPromptBytes(
+    buildAdvisorPrompt(summaries.join("\n"), memory, skillsContext),
+    config.maxAdvisorPromptBytes,
+  );
   dreamLog(`ADVISE prompt size: ${(prompt.length / 1024).toFixed(0)}KB`);
 
   // Write prompt to file to avoid E2BIG (ARG_MAX ~1MB on macOS)
@@ -464,7 +699,21 @@ async function runAdvisorStage(
     `@${promptFile}`,
   ], { timeout: 900_000 });
 
-  const elapsedS = ((Date.now() - startMs) / 1000).toFixed(1);
+  const durationMs = Date.now() - startMs;
+  const elapsedS = (durationMs / 1000).toFixed(1);
+  onUsageEvent?.({
+    source: "pi-memory",
+    operation: result.code === 0 ? "dream-advise" : "dream-advise-error",
+    model: config.advisorModel,
+    input: encode(prompt).length,
+    cacheRead: 0,
+    cacheWrite: 0,
+    output: encode(result.stdout ?? "").length,
+    reasoning: 0,
+    durationMs,
+    trigger,
+    status: result.code === 0 ? "complete" : "error",
+  });
   if (result.code !== 0) {
     dreamLog(`ADVISE FAILED (${elapsedS}s, code=${result.code}, stderr=${result.stderr?.slice(0, 200) || "none"})`);
     return "";

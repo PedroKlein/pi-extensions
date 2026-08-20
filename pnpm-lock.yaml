@@ -86,12 +86,37 @@ importers:
 
   packages/pi-ask:
     devDependencies:
+      '@earendil-works/pi-ai':
+        specifier: 0.80.3
+        version: 0.80.3(ws@8.21.0)(zod@4.4.3)
+      '@earendil-works/pi-coding-agent':
+        specifier: 0.80.3
+        version: 0.80.3(ws@8.21.0)(zod@4.4.3)
+      '@earendil-works/pi-tui':
+        specifier: 0.80.3
+        version: 0.80.3
+      tsup:
+        specifier: ^8.0.0
+        version: 8.5.1(jiti@2.7.0)(postcss@8.5.16)(typescript@5.9.3)(yaml@2.9.0)
+      typebox:
+        specifier: ^1.1.38
+        version: 1.1.38
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.6(@types/node@25.9.4)(jiti@2.7.0)(lightningcss@1.32.0)(yaml@2.9.0)
+
+  packages/pi-audit:
+    dependencies:
+      gpt-tokenizer:
+        specifier: ^3.4.0
+        version: 3.4.0
+    devDependencies:
       '@earendil-works/pi-coding-agent':
         specifier: '*'
         version: 0.80.3(ws@8.21.0)(zod@4.4.3)
-      '@earendil-works/pi-tui':
-        specifier: '*'
-        version: 0.78.1
       tsup:
         specifier: ^8.0.0
         version: 8.5.1(jiti@2.7.0)(postcss@8.5.16)(typescript@5.9.3)(yaml@2.9.0)
@@ -180,6 +205,10 @@ importers:
         version: 3.2.6(@types/node@25.9.4)(jiti@2.7.0)(lightningcss@1.32.0)(yaml@2.9.0)
 
   packages/pi-memory:
+    dependencies:
+      gpt-tokenizer:
+        specifier: ^3.4.0
+        version: 3.4.0
     devDependencies:
       '@earendil-works/pi-coding-agent':
         specifier: '*'
@@ -190,6 +219,9 @@ importers:
       tsup:
         specifier: ^8.0.0
         version: 8.5.1(jiti@2.7.0)(postcss@8.5.16)(typescript@5.9.3)(yaml@2.9.0)
+      typebox:
+        specifier: ^1.1.38
+        version: 1.1.38
       typescript:
         specifier: ^5.7.0
         version: 5.9.3
@@ -234,6 +266,10 @@ importers:
         version: 3.2.6(@types/node@25.9.4)(jiti@2.7.0)(lightningcss@1.32.0)(yaml@2.9.0)
 
   packages/pi-repos:
+    dependencies:
+      gpt-tokenizer:
+        specifier: ^3.4.0
+        version: 3.4.0
     devDependencies:
       '@earendil-works/pi-coding-agent':
         specifier: '*'
@@ -244,6 +280,9 @@ importers:
       tsup:
         specifier: ^8.0.0
         version: 8.5.1(jiti@2.7.0)(postcss@8.5.16)(typescript@5.9.3)(yaml@2.9.0)
+      typebox:
+        specifier: ^1.1.38
+        version: 1.1.38
       typescript:
         specifier: ^5.7.0
         version: 5.9.3
@@ -1836,6 +1875,9 @@ packages:
   google-logging-utils@1.1.3:
     resolution: {integrity: sha512-eAmLkjDjAFCVXg7A1unxHsLf961m6y17QFqXqAXGj/gVkKFrEICfStRfwUlGNfeCEjNRa32JEWOUTlYXPyyKvA==}
     engines: {node: '>=14'}
+
+  gpt-tokenizer@3.4.0:
+    resolution: {integrity: sha512-wxFLnhIXTDjYebd9A9pGl3e31ZpSypbpIJSOswbgop5jLte/AsZVDvjlbEuVFlsqZixVKqbcoNmRlFDf6pz/UQ==}
 
   graceful-fs@4.2.11:
     resolution: {integrity: sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==}
@@ -4224,6 +4266,8 @@ snapshots:
       - supports-color
 
   google-logging-utils@1.1.3: {}
+
+  gpt-tokenizer@3.4.0: {}
 
   graceful-fs@4.2.11: {}
 

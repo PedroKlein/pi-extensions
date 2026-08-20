@@ -19,7 +19,7 @@
  */
 import type { ExtensionAPI, AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { readFileSync } from "node:fs";
@@ -193,7 +193,14 @@ export default function (pi: ExtensionAPI) {
 
       // Build deterministic memory block (once, cached for session)
       const categoryMap = loadCategoryMap();
-      cachedMemoryBlock = buildDeterministicBlock(store, sessionCwd, categoryMap);
+      cachedMemoryBlock = buildDeterministicBlock(
+        store,
+        sessionCwd,
+        categoryMap,
+        {
+          onBudgetExceeded: (message) => ctx.ui.notify(message, "warning"),
+        },
+      );
 
       // Seed pending messages from existing session history so that
       // /memory-consolidate works even when resuming a session.
@@ -225,7 +232,10 @@ export default function (pi: ExtensionAPI) {
 
       // Show pinned memory snapshot at session init (visual only, filtered from LLM context)
       if (ctx.hasUI && cachedMemoryBlock && cachedMemoryBlock.factKeys.length > 0) {
-        const pinnedFacts = store.listPinned();
+        const visibleKeys = new Set(cachedMemoryBlock.factKeys);
+        const pinnedFacts = store
+          .listPinned()
+          .filter((fact) => visibleKeys.has(fact.key));
         const lines: string[] = [cachedMemoryBlock.displayLine];
         for (const fact of pinnedFacts) {
           lines.push(`  📌 ${fact.key}: ${fact.value}`);
@@ -241,12 +251,16 @@ export default function (pi: ExtensionAPI) {
         const dreamConfig = readDreamConfig(sessionCwd);
         if (dreamConfig.enabled && dreamConfig.autoTrigger) {
           if (checkGates(store, dreamConfig)) {
+            ctx.ui.notify("Automatic Dream started", "info");
             void executeDream(
               store,
               dreamConfig,
               (cmd, args, opts) => pi.exec(cmd, args, opts),
               ctx.ui,
-              { manual: false }
+              {
+                manual: false,
+                onUsageEvent: (event) => pi.events.emit("pi-audit:usage", event),
+              }
             ).catch((err) => {
               ctx.ui.notify(`Dream failed: ${err?.message?.slice(0, 100) || "unknown error"}`, "error");
             });
@@ -382,7 +396,7 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object({
       query: Type.String({ description: "Search query" }),
       limit: Type.Optional(Type.Number({ description: "Max results (default 10)" })),
-    }) as any,
+    }),
     async execute(_id, params, _signal, _update, _ctx) {
       if (!store) return ok("Memory store not initialized");
 
@@ -411,7 +425,7 @@ export default function (pi: ExtensionAPI) {
       category: Type.Optional(Type.String({ description: "Category for lessons (default: general)" })),
       negative: Type.Optional(Type.Boolean({ description: "True if this is something to AVOID" })),
       pinned: Type.Optional(Type.Boolean({ description: "Pin this fact so it's always injected into context (use sparingly — only for critical behavioral preferences)" })),
-    }) as any,
+    }),
     async execute(_id, params, _signal, _update, _ctx) {
       if (!store) return ok("Memory store not initialized");
 
@@ -463,7 +477,7 @@ export default function (pi: ExtensionAPI) {
       type: Type.String(),
       key: Type.Optional(Type.String({ description: "Key for facts" })),
       id: Type.Optional(Type.String({ description: "ID for lessons" })),
-    }) as any,
+    }),
     async execute(_id, params, _signal, _update, _ctx) {
       if (!store) return ok("Memory store not initialized");
 
@@ -502,7 +516,7 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object({
       category: Type.Optional(Type.String({ description: "Filter by category" })),
       limit: Type.Optional(Type.Number({ description: "Max results (default 50)" })),
-    }) as any,
+    }),
     async execute(_id, params, _signal, _update, _ctx) {
       if (!store) return ok("Memory store not initialized");
 
@@ -523,7 +537,7 @@ export default function (pi: ExtensionAPI) {
     name: "memory_stats",
     label: "Memory Stats",
     description: "Show memory statistics — how many facts, lessons, and events are stored.",
-    parameters: Type.Object({}) as any,
+    parameters: Type.Object({}),
     async execute(_id, _params, _signal, _update, _ctx) {
       if (!store) return ok("Memory store not initialized");
 
@@ -542,7 +556,7 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object({
       action: Type.String({ description: "'pin' to pin, 'unpin' to unpin, 'list' to show all pinned" }),
       key: Type.Optional(Type.String({ description: "Fact key to pin/unpin (required for pin/unpin)" })),
-    }) as any,
+    }),
     async execute(_id, params, _signal, _update, _ctx) {
       if (!store) return ok("Memory store not initialized");
 
@@ -597,7 +611,10 @@ export default function (pi: ExtensionAPI) {
           dreamConfig,
           (cmd, args, opts) => pi.exec(cmd, args, opts),
           ctx.ui,
-          { manual: true }
+          {
+            manual: true,
+            onUsageEvent: (event) => pi.events.emit("pi-audit:usage", event),
+          }
         );
 
         if (!result.success) {

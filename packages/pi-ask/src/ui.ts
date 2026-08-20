@@ -3,11 +3,12 @@
  * Split-panel layout with tabs, multi/single/text, annotations, and ephemeral LLM explain.
  */
 
-import { complete, type Api, type Model } from "@earendil-works/pi-ai";
+import { type Api, type Model } from "@earendil-works/pi-ai";
+import { complete } from "@earendil-works/pi-ai/compat";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { Input, Key, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { TUI } from "@earendil-works/pi-tui";
-import type { AskUserResult, NormalizedQuestion, Selection } from "./types.js";
+import type { AskUserResult, NormalizedQuestion, QuestionAnswer, Selection } from "./types.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 

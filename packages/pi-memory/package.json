@@ -49,11 +49,16 @@
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*"
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "dependencies": {
+    "gpt-tokenizer": "^3.4.0"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*",
+    "typebox": "^1.1.38",
     "tsup": "^8.0.0",
     "typescript": "^5.7.0",
     "vitest": "^3.2.6"
