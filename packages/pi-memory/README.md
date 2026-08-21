@@ -91,15 +91,16 @@ In `~/.pi/agent/settings.json`:
 {
   "memory": {
     "consolidationEnabled": false,
-    "consolidationModel": "github-copilot/claude-sonnet-4.6",
+    "consolidationModel": "custom-provider/refiner",
     "dream": {
       "enabled": true,
       "autoTrigger": true,
       "minHoursSinceDream": 24,
       "minSessionsSinceDream": 5,
-      "minerModel": "github-copilot/gpt-5.4-mini",
-      "refinerModel": "github-copilot/claude-sonnet-4.6",
-      "advisorModel": "github-copilot/claude-sonnet-4.6",
+      "minerModel": "custom-provider/miner",
+      "refinerModel": "custom-provider/refiner",
+      "advisorModel": "custom-provider/advisor",
+      "extensions": ["npm:custom-provider-extension"],
       "journalDir": "~/.pi/memory/dream-journal",
       "sessionsDir": "~/.pi/agent/sessions",
       "skillsDir": "~/.agents/skills"
@@ -116,6 +117,9 @@ In `~/.pi/agent/settings.json`:
 | `dream.autoTrigger` | `true` | Auto-run Dream on session start |
 | `dream.minHoursSinceDream` | `24` | Minimum hours between Dream runs |
 | `dream.minSessionsSinceDream` | `5` | Minimum unprocessed sessions to trigger Dream |
+| `dream.extensions` | `[]` | Extensions explicitly loaded by isolated Dream child processes |
+
+Dream disables extension discovery in child processes. Add a provider extension to `dream.extensions` when a configured Dream model is registered by an extension rather than built into Pi.
 
 **Local project override** — put `"pi-memory": { "localPath": "./.pi/memory" }` in `.pi/settings.json` to use a project-local database instead of the global one.
 

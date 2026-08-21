@@ -113,6 +113,8 @@ export function activateGateway(pi: GatewayHostApi, platform: GatewayPlatform): 
 	}
 
 	async function refreshSelectedGatewayModel(ctx: GatewayHostContext): Promise<void> {
+		// pi.setModel persists the global default; print-mode subprocesses must be read-only.
+		if (ctx.mode === "print") return;
 		if (ctx.model?.provider !== GATEWAY_PROVIDER_NAME || !ctx.model.id || !pi.setModel) return;
 		const refreshed = (ctx.modelRegistry as { find(provider: string, id: string): unknown }).find(
 			GATEWAY_PROVIDER_NAME,

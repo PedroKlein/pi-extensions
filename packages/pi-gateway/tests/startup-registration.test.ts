@@ -191,6 +191,18 @@ describe("startup registration", () => {
 			contextWindow: 128_000,
 			maxTokens: 16_000,
 		});
+
+		await handlers.get("session_start")?.(
+			{},
+			{
+				mode: "print",
+				modelRegistry: registry,
+				model: { provider: "gateway", id: "medium-1" },
+				ui: { notify: vi.fn() },
+				isIdle: () => true,
+			},
+		);
+		expect(setModel).toHaveBeenCalledTimes(2);
 		await handlers.get("session_shutdown")?.({}, {});
 	});
 });

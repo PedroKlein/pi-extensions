@@ -466,6 +466,10 @@ export async function executeDream(
 
 // ─── Stage 1: Mining (pi --print, parallel batches) ──────────────────
 
+function extensionArgs(config: DreamConfig): string[] {
+  return config.extensions.flatMap((extension) => ["--extension", extension]);
+}
+
 interface MiningResult {
   extracted: string;
   minedPaths: string[];
@@ -515,6 +519,7 @@ async function runMiningStage(
       exec("pi", [
         "--print",
         "--no-extensions",
+        ...extensionArgs(config),
         "--session-dir", DREAM_SESSIONS_DIR,
         "--model", config.minerModel,
         `@${promptFile}`,
@@ -615,6 +620,7 @@ async function runRefinementStage(
     "--print",
     "--tools", "read,ls,grep,find",
     "--no-extensions",
+    ...extensionArgs(config),
     "--session-dir", DREAM_SESSIONS_DIR,
     "--model", config.refinerModel,
     `@${promptFile}`,
@@ -694,6 +700,7 @@ async function runAdvisorStage(
   const result = await exec("pi", [
     "--print",
     "--no-extensions",
+    ...extensionArgs(config),
     "--session-dir", DREAM_SESSIONS_DIR,
     "--model", config.advisorModel,
     `@${promptFile}`,

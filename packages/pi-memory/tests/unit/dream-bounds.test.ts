@@ -173,6 +173,7 @@ describe("Dream usage events", () => {
           minerModel: "custom-provider/miner",
           refinerModel: "custom-provider/refiner",
           advisorModel: "custom-provider/advisor",
+          extensions: ["npm:custom-provider-extension"],
         },
         exec,
         { setStatus: vi.fn(), notify: vi.fn() },
@@ -183,6 +184,13 @@ describe("Dream usage events", () => {
       );
 
       expect(result.success).toBe(true);
+      for (const [, args] of exec.mock.calls) {
+        expect(args).toEqual(expect.arrayContaining([
+          "--no-extensions",
+          "--extension",
+          "npm:custom-provider-extension",
+        ]));
+      }
       for (const operation of ["dream-mine", "dream-refine", "dream-advise"]) {
         expect(events).toContainEqual(
           expect.objectContaining({
@@ -222,6 +230,7 @@ describe("Dream model configuration", () => {
             minerModel: "custom-provider/miner",
             refinerModel: "custom-provider/refiner",
             advisorModel: "custom-provider/advisor",
+            extensions: ["npm:custom-provider-extension"],
           },
         },
       }),
@@ -231,5 +240,6 @@ describe("Dream model configuration", () => {
     expect(config.minerModel).toBe("custom-provider/miner");
     expect(config.refinerModel).toBe("custom-provider/refiner");
     expect(config.advisorModel).toBe("custom-provider/advisor");
+    expect(config.extensions).toEqual(["npm:custom-provider-extension"]);
   });
 });

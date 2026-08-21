@@ -22,6 +22,7 @@ export interface DreamConfig {
   minerModel: string;
   refinerModel: string;
   advisorModel: string;
+  extensions: string[];
   journalDir: string;
   sessionsDir: string;
   skillsDir: string;
@@ -41,6 +42,7 @@ export const DREAM_DEFAULTS: DreamConfig = {
   minerModel: "",
   refinerModel: "",
   advisorModel: "",
+  extensions: [],
   journalDir: join(homedir(), ".pi", "memory", "dream-journal"),
   sessionsDir: join(homedir(), ".pi", "agent", "sessions"),
   skillsDir: join(homedir(), ".agents", "skills"),
@@ -86,6 +88,11 @@ function applyFromFile(config: DreamConfig, filePath: string): void {
     if (typeof dream.minerModel === "string" && dream.minerModel) config.minerModel = dream.minerModel;
     if (typeof dream.refinerModel === "string" && dream.refinerModel) config.refinerModel = dream.refinerModel;
     if (typeof dream.advisorModel === "string" && dream.advisorModel) config.advisorModel = dream.advisorModel;
+    if (Array.isArray(dream.extensions)) {
+      config.extensions = dream.extensions.filter((value: unknown): value is string =>
+        typeof value === "string" && value.length > 0,
+      );
+    }
     if (typeof dream.journalDir === "string" && dream.journalDir) config.journalDir = dream.journalDir;
     if (typeof dream.sessionsDir === "string" && dream.sessionsDir) config.sessionsDir = dream.sessionsDir;
     if (typeof dream.skillsDir === "string" && dream.skillsDir) config.skillsDir = dream.skillsDir;

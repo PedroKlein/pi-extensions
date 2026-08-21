@@ -15,6 +15,7 @@ export interface GatewayHostContext {
 	modelRegistry: unknown;
 	ui: { notify(message: string, type?: NotifyType): void };
 	isIdle?: () => boolean;
+	mode?: string;
 	model?: { provider?: string; id?: string };
 }
 
