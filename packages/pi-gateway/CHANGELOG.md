@@ -1,5 +1,11 @@
 # @pedro_klein/pi-gateway
 
+## 0.5.4
+
+### Patch Changes
+
+- a383a3d: Detect structured Pi and OMP provider failures and retry pre-output capacity, transient HTTP, and network failures through the next healthy backend in the fallback chain. Retries are bounded, preserve per-backend authentication, and stop once semantic output has begun.
+
 ## 0.5.3
 
 ### Patch Changes
