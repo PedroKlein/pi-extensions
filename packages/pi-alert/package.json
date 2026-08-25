@@ -1,0 +1,60 @@
+{
+  "name": "@pedro_klein/pi-alert",
+  "version": "0.2.0",
+  "description": "System notifications for Pi agent completion and configured tool calls",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "src",
+    "LICENSE"
+  ],
+  "scripts": {
+    "dev": "tsup --watch",
+    "build": "tsup",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "keywords": [
+    "pi-package",
+    "pi",
+    "alert",
+    "notification"
+  ],
+  "license": "MIT",
+  "author": "Max Petretta",
+  "contributors": [
+    "Pedro Klein"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/PedroKlein/pi-extensions",
+    "directory": "packages/pi-alert"
+  },
+  "homepage": "https://github.com/PedroKlein/pi-extensions/tree/main/packages/pi-alert",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "tsup": "^8.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}
