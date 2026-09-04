@@ -51,7 +51,7 @@ async function collect(stream: unknown): Promise<any[]> {
 }
 
 describe("gateway transport failover", () => {
-	it("suppresses a pre-output transient failure and retries through the new route", async () => {
+	it("suppresses a pre-output transient failure, retries, and preserves alias identity", async () => {
 		const deliver = vi.fn((_kind: unknown, model: UnknownModel) => {
 			const provider = String(model.provider);
 			const output = message(provider, provider === "backend-a" ? "error" : "stop");
@@ -73,10 +73,12 @@ describe("gateway transport failover", () => {
 		const reportUsage = vi.fn();
 		transport.setUsageReporter(reportUsage);
 
-		const stream = transport.streamSimple({ id: "heavy-1" }, {}, {});
+		const stream = transport.streamSimple({ id: "heavy-1", provider: "gateway", api: "gateway" }, {}, {});
 		const events = await collect(stream);
 
 		expect(deliver).toHaveBeenCalledTimes(2);
+		expect(deliver.mock.calls[0][1]).toMatchObject({ id: "real-model", provider: "backend-a" });
+		expect(deliver.mock.calls[1][1]).toMatchObject({ id: "real-model", provider: "backend-b" });
 		expect(deliver.mock.calls[0][3]).toMatchObject({ apiKey: "backend-a-key" });
 		expect(deliver.mock.calls[1][3]).toMatchObject({ apiKey: "backend-b-key" });
 		expect(onFailure).toHaveBeenCalledWith(
@@ -87,7 +89,11 @@ describe("gateway transport failover", () => {
 			}),
 		);
 		expect(events.map((event) => event.type)).toEqual(["start", "text_delta", "done"]);
-		expect(events.at(-1).message.provider).toBe("backend-b");
+		expect(events.at(-1).message).toMatchObject({
+			api: "gateway",
+			provider: "gateway",
+			model: "heavy-1",
+		});
 		expect(reportUsage).toHaveBeenCalledWith(
 			expect.objectContaining({
 				source: "pi-gateway",

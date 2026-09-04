@@ -162,14 +162,14 @@ export function createGatewayTransport(host: TransportHost): GatewayTransport {
 				);
 			}
 			const first = deliverTarget(kind, target, context, options);
-			if (!failureHandler || !isAsyncIterable(first)) return first;
+			if (!isAsyncIterable(first)) return first;
 			return retryingStream({
 				aliasId: model.id,
 				first,
 				firstTarget: target,
 				getTarget: () => routes.get(model.id),
 				deliver: (next) => deliverTarget(kind, next, context, options),
-				onFailure: failureHandler,
+				onFailure: failureHandler ?? (async () => false),
 				backendName,
 				reportUsage: usageReporter,
 			});
@@ -212,7 +212,21 @@ interface GatewayEvent {
 	type: string;
 	error?: Record<string, unknown>;
 	message?: Record<string, unknown>;
+	partial?: Record<string, unknown>;
 	[key: string]: unknown;
+}
+
+function projectAliasIdentity(message: Record<string, unknown>, aliasId: string): Record<string, unknown> {
+	return { ...message, api: GATEWAY_API, provider: GATEWAY_API, model: aliasId };
+}
+
+function projectGatewayEvent(event: GatewayEvent, aliasId: string): GatewayEvent {
+	return {
+		...event,
+		...(event.error ? { error: projectAliasIdentity(event.error, aliasId) } : {}),
+		...(event.message ? { message: projectAliasIdentity(event.message, aliasId) } : {}),
+		...(event.partial ? { partial: projectAliasIdentity(event.partial, aliasId) } : {}),
+	};
 }
 
 interface RetryingStreamInput {
@@ -229,6 +243,7 @@ interface RetryingStreamInput {
 function retryingStream(input: RetryingStreamInput): AsyncIterable<GatewayEvent> & { result(): Promise<unknown> } {
 	const output = new GatewayEventStream();
 	const attempted = new Set<string>();
+	const push = (event: GatewayEvent) => output.push(projectGatewayEvent(event, input.aliasId));
 
 	async function pump(source: AsyncIterable<GatewayEvent>, target: GatewayRouteTarget): Promise<"complete" | "error"> {
 		const currentBackend = input.backendName(target);
@@ -239,7 +254,7 @@ function retryingStream(input: RetryingStreamInput): AsyncIterable<GatewayEvent>
 			for await (const event of source) {
 				if (event.type === "error") {
 					if (committed) {
-						output.push(event);
+						push(event);
 						return "error";
 					}
 					const error = event.error ?? {};
@@ -271,23 +286,23 @@ function retryingStream(input: RetryingStreamInput): AsyncIterable<GatewayEvent>
 						}
 						input.reportUsage?.(gatewayRetryUsage("error", input.aliasId, attempt, route, Date.now() - startedAt));
 					}
-					for (const pending of buffered) output.push(pending);
-					output.push(event);
+					for (const pending of buffered) push(pending);
+					push(event);
 					return "error";
 				}
 
 				if (event.type === "done") {
-					for (const pending of buffered) output.push(pending);
-					output.push(event);
+					for (const pending of buffered) push(pending);
+					push(event);
 					return "complete";
 				}
 
 				if (!committed && isSemanticEvent(event)) {
 					committed = true;
-					for (const pending of buffered) output.push(pending);
+					for (const pending of buffered) push(pending);
 					buffered.length = 0;
 				}
-				if (committed) output.push(event);
+				if (committed) push(event);
 				else buffered.push(event);
 			}
 			output.end();
