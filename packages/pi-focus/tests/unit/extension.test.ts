@@ -233,6 +233,23 @@ describe("/focus", () => {
     expect(h.widgetLines()).toHaveLength(3);
   });
 
+  it("persists bounded telemetry labels for long focus text", async () => {
+    const now = `running  ${"checks ".repeat(30)}`;
+    const focus = createFocusTransition(null, {
+      goal: "Run checks",
+      now,
+      expectedDurationMs: 60_000,
+    }, "agent", 0);
+    const h = harness([{ type: "custom", customType: FOCUS_ENTRY_TYPE, data: focus }]);
+    await h.start();
+
+    await h.emit("tool_execution_start", { toolCallId: "long", toolName: "bash", args: {} });
+
+    const label = (h.entries[0].data as any).label as string;
+    expect(label).toBe(now.trim().replace(/\s+/g, " ").slice(0, 120));
+    expect(label).toHaveLength(120);
+  });
+
   it("persists long and exceptional telemetry and warns once for a possible stall", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);

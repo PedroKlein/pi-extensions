@@ -100,12 +100,17 @@ export function createTelemetryTransition(
     kind,
     id: execution.id,
     toolName: execution.toolName,
-    label: execution.label,
+    label: normalizeTelemetryLabel(execution.label, execution.toolName),
     at,
     ...(execution.expectedDurationMs ? { expectedDurationMs: execution.expectedDurationMs } : {}),
   };
   if (!isTelemetryTransition(transition)) throw new Error("invalid telemetry transition");
   return transition;
+}
+
+export function normalizeTelemetryLabel(label: string, fallback: string): string {
+  const normalized = label.trim().replace(/\s+/g, " ");
+  return (normalized || fallback).slice(0, 120);
 }
 
 export function replayTelemetryEntries(entries: readonly unknown[]): TelemetryReplay {

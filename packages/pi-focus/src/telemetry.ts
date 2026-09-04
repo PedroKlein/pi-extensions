@@ -1,4 +1,5 @@
 import type { ExecutionView } from "./render.js";
+import { normalizeTelemetryLabel } from "./state.js";
 
 export interface ActiveExecution {
   id: string;
@@ -21,7 +22,7 @@ export class TelemetryTracker {
     this.executions.set(id, {
       id,
       toolName,
-      label: safeLabel(label, toolName),
+      label: normalizeTelemetryLabel(label, toolName),
       startedAt,
       lastOutputAt: startedAt,
       ...(expectedDurationMs ? { expectedDurationMs } : {}),
@@ -100,9 +101,4 @@ function priority(execution: ActiveExecution): number {
   if (execution.possiblyStalled) return 2;
   if (execution.expectedDurationMs) return 1;
   return 0;
-}
-
-function safeLabel(label: string, fallback: string): string {
-  const normalized = label.trim().replace(/\s+/g, " ");
-  return (normalized || fallback).slice(0, 120);
 }
