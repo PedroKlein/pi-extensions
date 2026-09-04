@@ -18,6 +18,7 @@
       "packages/pi-repos/src/index.ts",
       "packages/pi-status/src/index.ts",
       "packages/pi-task/src/index.ts",
+      "packages/pi-tool-toggle/src/index.ts",
       "packages/pi-term/src/index.ts",
       "packages/pi-todo/src/index.ts"
     ],

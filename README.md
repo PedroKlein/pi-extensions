@@ -22,6 +22,7 @@ or steal ideas.
 | [`@pedro_klein/pi-repos`](packages/pi-repos) | Repo management + orchestration layer |
 | [`@pedro_klein/pi-status`](packages/pi-status) | Context bar compositor + LLM environment injection |
 | [`@pedro_klein/pi-task`](packages/pi-task) | Task graph manager — DAG plans with parallel groups |
+| [`@pedro_klein/pi-tool-toggle`](packages/pi-tool-toggle) | Session-scoped TUI for enabling and disabling tools |
 | [`@pedro_klein/pi-term`](packages/pi-term) | Floating terminal panel for TUI |
 | [`@pedro_klein/pi-todo`](packages/pi-todo) | TODO board with PR review tracking |
 

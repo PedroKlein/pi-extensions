@@ -408,6 +408,24 @@ importers:
         specifier: ^3.0.0
         version: 3.2.6(@types/node@25.9.4)(jiti@2.7.0)(lightningcss@1.32.0)(yaml@2.9.0)
 
+  packages/pi-tool-toggle:
+    devDependencies:
+      '@earendil-works/pi-coding-agent':
+        specifier: '*'
+        version: 0.80.3(ws@8.21.0)(zod@4.4.3)
+      '@earendil-works/pi-tui':
+        specifier: '*'
+        version: 0.80.3
+      tsup:
+        specifier: ^8.0.0
+        version: 8.5.1(jiti@2.7.0)(postcss@8.5.16)(typescript@5.9.3)(yaml@2.9.0)
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.6(@types/node@25.9.4)(jiti@2.7.0)(lightningcss@1.32.0)(yaml@2.9.0)
+
 packages:
 
   '@anthropic-ai/sdk@0.91.1':
@@ -1755,6 +1773,7 @@ packages:
   eslint@9.39.4:
     resolution: {integrity: sha512-XoMjdBOwe/esVgEvLmNsD3IRHkm7fbKIUGvrleloJXUZgDHig2IPWNniv+GwjyJXzuNqVjlr5+4yVUZjycJwfQ==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+    deprecated: This version is no longer supported. Please see https://eslint.org/version-support for other options.
     hasBin: true
     peerDependencies:
       jiti: '*'
