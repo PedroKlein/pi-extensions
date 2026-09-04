@@ -13,6 +13,7 @@ or steal ideas.
 | [`@pedro_klein/pi-adhd`](packages/pi-adhd) | Attention management — sticky notes, side-chat, reminders |
 | [`@pedro_klein/pi-ask`](packages/pi-ask) | Interactive TUI questionnaire tool |
 | [`@pedro_klein/pi-baml`](packages/pi-baml) | BAML integration for typed structured LLM output |
+| [`@pedro_klein/pi-focus`](packages/pi-focus) | Persistent semantic focus + safe execution telemetry |
 | [`@pedro_klein/pi-games`](packages/pi-games) | Snake & Flappy Bird while the agent works |
 | [`@pedro_klein/pi-gateway`](packages/pi-gateway) | Tier alias provider (`heavy-1`, `medium-1`, ...) with 402/429 failover |
 | [`@pedro_klein/pi-memory`](packages/pi-memory) | Persistent memory with Dream async session mining |
