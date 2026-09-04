@@ -151,6 +151,65 @@ describe("pi-caffeinate", () => {
     expect(mockProcess.kill).toHaveBeenCalledOnce();
   });
 
+  it("clears status when the active inhibitor exits", async () => {
+    vi.doMock("node:os", () => ({ platform: () => "darwin" }));
+
+    const listeners = new Map<string, () => void>();
+    const mockProcess = {
+      on: vi.fn((event: string, listener: () => void) => listeners.set(event, listener)),
+      kill: vi.fn(),
+    };
+    vi.doMock("node:child_process", () => ({ spawn: vi.fn().mockReturnValue(mockProcess) }));
+
+    const { default: register } = await import("../../src/index.js");
+    const pi = makePi();
+    register(pi as any);
+
+    const ctx = makeCtx();
+    await pi._handlers["agent_start"]!({}, ctx);
+    listeners.get("exit")!();
+
+    expect(ctx.ui.setStatus).toHaveBeenLastCalledWith("caffeinate", undefined);
+    expect(pi.events.emit).toHaveBeenLastCalledWith("pi-status:update", {
+      id: "caffeinate",
+      render: null,
+    });
+  });
+
+  it("ignores a delayed inhibitor exit after session shutdown", async () => {
+    vi.doMock("node:os", () => ({ platform: () => "darwin" }));
+
+    const listeners = new Map<string, () => void>();
+    const mockProcess = {
+      on: vi.fn((event: string, listener: () => void) => listeners.set(event, listener)),
+      kill: vi.fn(),
+    };
+    vi.doMock("node:child_process", () => ({ spawn: vi.fn().mockReturnValue(mockProcess) }));
+
+    const { default: register } = await import("../../src/index.js");
+    const pi = makePi();
+    register(pi as any);
+
+    const ui = makeCtx().ui;
+    let stale = false;
+    const ctx = {
+      get ui() {
+        if (stale) throw new Error("stale extension context");
+        return ui;
+      },
+    };
+
+    await pi._handlers["agent_start"]!({}, ctx);
+    await pi._handlers["session_shutdown"]!({}, ctx);
+    const statusCallCount = ui.setStatus.mock.calls.length;
+    const eventCallCount = pi.events.emit.mock.calls.length;
+    stale = true;
+
+    expect(() => listeners.get("exit")!()).not.toThrow();
+    expect(ui.setStatus).toHaveBeenCalledTimes(statusCallCount);
+    expect(pi.events.emit).toHaveBeenCalledTimes(eventCallCount);
+  });
+
   it("does not spawn a second inhibitor if one is already running", async () => {
     vi.doMock("node:os", () => ({ platform: () => "darwin" }));
 

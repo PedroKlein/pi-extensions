@@ -39,13 +39,16 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			inhibitor.on("error", () => {
+			const activeInhibitor = inhibitor;
+			activeInhibitor.on("error", () => {
+				if (inhibitor !== activeInhibitor) return;
 				inhibitor = null;
 				ctx.ui.setStatus("caffeinate", undefined);
 				pi.events.emit("pi-status:update", { id: "caffeinate", render: null });
 			});
 
-			inhibitor.on("exit", () => {
+			activeInhibitor.on("exit", () => {
+				if (inhibitor !== activeInhibitor) return;
 				inhibitor = null;
 				ctx.ui.setStatus("caffeinate", undefined);
 				pi.events.emit("pi-status:update", { id: "caffeinate", render: null });
@@ -66,12 +69,13 @@ export default function (pi: ExtensionAPI) {
 	function stopInhibitor(ctx: ExtensionContext) {
 		if (!inhibitor) return;
 
+		const activeInhibitor = inhibitor;
+		inhibitor = null;
 		try {
-			inhibitor.kill();
+			activeInhibitor.kill();
 		} catch {
 			// Already dead
 		}
-		inhibitor = null;
 		ctx.ui.setStatus("caffeinate", undefined);
 		pi.events.emit("pi-status:update", { id: "caffeinate", render: null });
 	}
