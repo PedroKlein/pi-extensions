@@ -110,9 +110,11 @@ describe("focus state", () => {
       { type: "custom", customType: "pi-focus-telemetry", data: startA },
       { type: "custom", customType: "pi-focus-telemetry", data: startB },
       { type: "custom", customType: "pi-focus-telemetry", data: endA },
+      { type: "custom", customType: "pi-focus-telemetry", data: { ...startA, id: " " } },
       { type: "custom", customType: "pi-focus-telemetry", data: { ...startA, expectedDurationMs: -1 } },
     ]);
 
+    expect(replay.events).toHaveLength(3);
     expect(replay.interrupted).toEqual([startB]);
   });
 });

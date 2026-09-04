@@ -250,6 +250,22 @@ describe("/focus", () => {
     expect(label).toHaveLength(120);
   });
 
+  it("preserves opaque provider tool-call IDs", async () => {
+    const toolCallId = "x".repeat(454);
+    const focus = createFocusTransition(null, {
+      goal: "Run checks",
+      now: "integration tests",
+      expectedDurationMs: 60_000,
+    }, "agent", 0);
+    const h = harness([{ type: "custom", customType: FOCUS_ENTRY_TYPE, data: focus }]);
+    await h.start();
+
+    await h.emit("tool_execution_start", { toolCallId, toolName: "bash", args: {} });
+    await h.emit("tool_execution_end", { toolCallId, toolName: "bash", isError: false });
+
+    expect(h.entries.map((entry) => (entry.data as any).id)).toEqual([toolCallId, toolCallId]);
+  });
+
   it("persists long and exceptional telemetry and warns once for a possible stall", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);

@@ -179,7 +179,7 @@ function isTelemetryTransition(value: unknown): value is TelemetryTransition {
   const transition = asRecord(value);
   if (!transition || transition.version !== VERSION) return false;
   if (!["execution-start", "execution-end", "stall", "failure", "abort", "waiting"].includes(String(transition.kind))) return false;
-  if (!isBoundedText(transition.id, 200) || !isBoundedText(transition.toolName, 100) || !isBoundedText(transition.label, 120)) return false;
+  if (!isNonEmptyText(transition.id) || !isBoundedText(transition.toolName, 100) || !isBoundedText(transition.label, 120)) return false;
   if (!isTimestamp(transition.at)) return false;
   return transition.expectedDurationMs === undefined || (
     Number.isSafeInteger(transition.expectedDurationMs) && Number(transition.expectedDurationMs) > 0
@@ -205,7 +205,11 @@ function isText(value: unknown): value is string {
 }
 
 function isBoundedText(value: unknown, maxLength: number): value is string {
-  return typeof value === "string" && value.trim().length > 0 && value.length <= maxLength;
+  return isNonEmptyText(value) && value.length <= maxLength;
+}
+
+function isNonEmptyText(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
 }
 
 function cleanText(value: unknown): string | undefined {
