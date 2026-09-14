@@ -114,6 +114,22 @@ async function prompt(
   )) as { systemPrompt?: string } | undefined;
 }
 
+describe("native subagent child runtime", () => {
+  it("does not install mode controls in a native child host", () => {
+    vi.stubEnv("PI_SUBAGENT_CHILD", "1");
+    vi.stubEnv("PI_SUBAGENT_DEPTH", "0");
+    try {
+      const harness = createHarness("ask");
+
+      expect(harness.listeners).toHaveLength(0);
+      expect(harness.commands).toHaveLength(0);
+      expect(harness.setActiveTools).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
 describe("exact-name personal skill resolver", () => {
   it("rewrites an explicit exact-name request through native skill expansion", async () => {
     const harness = createHarness("ask");

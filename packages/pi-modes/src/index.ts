@@ -128,8 +128,8 @@ function negatedInvocationPattern(name: string): RegExp {
 // ─── Extension ─────────────────────────────────────────────────────────────
 
 export default function piModes(pi: ExtensionAPI): void {
-	// Skip in subagent child processes
-	if (Number(process.env.PI_SUBAGENT_DEPTH ?? "0") > 0) return;
+	// Child sessions receive the parent's explicitly resolved tool contract.
+	if (process.env.PI_SUBAGENT_CHILD === "1" || Number(process.env.PI_SUBAGENT_DEPTH ?? "0") > 0) return;
 
 	let currentMode: Mode = "ask";
 	let modePrompts = loadModePrompts();
