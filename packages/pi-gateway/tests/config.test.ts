@@ -42,6 +42,19 @@ describe("aliases.json loader — valid inputs", () => {
 		expect(cfg.backends["openrouter"].quotaHint).toBeUndefined();
 	});
 
+	it("accepts a force-only backend outside the automatic fallback chain", () => {
+		const src = JSON.stringify({
+			fallbackChain: ["primary"],
+			backends: {
+				primary: { tiers: { heavy: "primary-heavy" } },
+				codex: { forceOnly: true, tiers: { heavy: "gpt-5.6-sol" } },
+			},
+		});
+		const cfg = parseAliasesConfig(src);
+		expect(cfg.backends.codex.forceOnly).toBe(true);
+		expect(cfg.backends.primary.forceOnly).toBe(false);
+	});
+
 	it("accepts an ordered list of models per tier (indexed diversity)", () => {
 		const src = JSON.stringify({
 			fallbackChain: ["openrouter"],
@@ -133,6 +146,19 @@ describe("aliases.json loader — invalid inputs", () => {
 		});
 		expect(() => parseAliasesConfig(src)).toThrowError(
 			expect.objectContaining({ cause: "schema" }),
+		);
+	});
+
+	it("rejects a force-only backend in the automatic fallback chain", () => {
+		const src = JSON.stringify({
+			fallbackChain: ["codex"],
+			backends: { codex: { forceOnly: true, tiers: { heavy: "gpt-5.6-sol" } } },
+		});
+		expect(() => parseAliasesConfig(src)).toThrowError(
+			expect.objectContaining({
+				cause: "semantic",
+				message: expect.stringContaining("force-only"),
+			}),
 		);
 	});
 

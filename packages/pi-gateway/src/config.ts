@@ -15,6 +15,7 @@
  *     "backends": {
  *       "openrouter": {
  *         "resetSchedule": "utc-midnight",
+ *         "forceOnly": false,
  *         "tiers": {
  *           "heavy":  ["anthropic/claude-opus-4", "openai/gpt-5"],
  *           "medium": "anthropic/claude-sonnet-4",
@@ -49,7 +50,7 @@ export const QUOTA_HINTS = ["daily-eur-cap"] as const;
 export const GATEWAY_API = "gateway";
 export type QuotaHint = (typeof QUOTA_HINTS)[number];
 
-/** Neutral tier slots. Family-pinned aliases are auto-derived per backend. */
+/** Neutral tier slots used to derive indexed gateway aliases. */
 export const TIER_SLOTS = ["heavy", "medium", "light", "xlight", "minimal"] as const;
 export type TierSlot = (typeof TIER_SLOTS)[number];
 
@@ -82,6 +83,7 @@ const TTiers = Type.Object(tierPropSchemas, { additionalProperties: false });
 const TBackend = Type.Object(
 	{
 		resetSchedule: Type.Optional(TResetSchedule),
+		forceOnly: Type.Optional(Type.Boolean()),
 		tiers: TTiers,
 		quotaHint: Type.Optional(TQuotaHint),
 		capStatusCodes: Type.Optional(Type.Array(Type.Integer({ minimum: 100, maximum: 599 }), { minItems: 1 })),
@@ -108,6 +110,7 @@ export type BackendConfigRaw = Static<typeof TBackend>;
  */
 export interface BackendConfig {
 	resetSchedule: ResetSchedule | undefined;
+	forceOnly?: boolean;
 	tiers: Readonly<Partial<Record<TierSlot, readonly string[]>>>;
 	quotaHint: QuotaHint | undefined;
 	capStatusCodes: readonly number[];
@@ -232,6 +235,13 @@ export function parseAliasesConfig(source: string, filePath = "<aliases.json>"):
 				`${filePath}/fallbackChain`,
 			);
 		}
+		if (rawConfig.backends[name].forceOnly === true) {
+			throw new AliasesConfigError(
+				`fallbackChain includes force-only backend '${name}'`,
+				"semantic",
+				`${filePath}/fallbackChain`,
+			);
+		}
 	}
 
 	// Every backend must declare at least one tier, and no tier may be an empty
@@ -268,6 +278,7 @@ function normalize(raw: AliasesConfigRaw): AliasesConfig {
 		}
 		backends[name] = {
 			resetSchedule: b.resetSchedule,
+			forceOnly: b.forceOnly ?? false,
 			tiers,
 			quotaHint: b.quotaHint,
 			capStatusCodes: b.capStatusCodes ?? DEFAULT_CAP_STATUS_CODES,

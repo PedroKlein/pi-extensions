@@ -88,6 +88,23 @@ function editBackend(
 	return withBackends(raw, { ...raw.backends, [name]: fn(cur) });
 }
 
+/** Set whether a backend can only be selected through an active override. */
+export function setForceOnly(
+	raw: AliasesConfigRaw,
+	name: string,
+	forceOnly: boolean,
+): AliasesConfigRaw {
+	const next = editBackend(raw, name, (backend) => {
+		const updated = { ...backend };
+		if (forceOnly) updated.forceOnly = true;
+		else delete updated.forceOnly;
+		return updated;
+	});
+	return forceOnly
+		? { ...next, fallbackChain: next.fallbackChain.filter((entry) => entry !== name) }
+		: next;
+}
+
 /** Set (or clear, with undefined) a backend's reset schedule. */
 export function setResetSchedule(
 	raw: AliasesConfigRaw,

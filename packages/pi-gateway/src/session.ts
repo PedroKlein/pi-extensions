@@ -100,6 +100,7 @@ export async function registerGatewayProvider(
 	const tokenByBackend = new Map<string, string>();
 	const authByBackend = new Map<string, ResolvedBackendAuth>();
 	for (const b of backends) {
+		if (b.config.forceOnly === true && state.activeBackendOverride !== b.name) continue;
 		try {
 			const auth = await registry.getProviderAuth?.(b.name);
 			const token = auth?.auth.apiKey ?? await registry.getApiKeyForProvider(b.name);

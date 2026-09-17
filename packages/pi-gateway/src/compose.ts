@@ -140,7 +140,9 @@ export interface ComposeResult {
 export function composeBootstrapModels(aliases: AliasesConfig): GatewayModelEntry[] {
 	const orderedNames = [
 		...aliases.fallbackChain,
-		...Object.keys(aliases.backends).filter((name) => !aliases.fallbackChain.includes(name)),
+		...Object.keys(aliases.backends).filter(
+			(name) => !aliases.fallbackChain.includes(name) && aliases.backends[name].forceOnly !== true,
+		),
 	];
 	const models: GatewayModelEntry[] = [];
 
@@ -210,9 +212,14 @@ export function composeGatewayModels(input: ComposeInput): ComposeResult {
 	const active = input.state.activeBackendOverride;
 	const orderedNames: string[] = [];
 	if (active) orderedNames.push(active);
-	for (const n of effectiveChain) if (!orderedNames.includes(n)) orderedNames.push(n);
-	// Any backend not in the chain still contributes family-pinned aliases.
-	for (const b of input.backends) if (!orderedNames.includes(b.name)) orderedNames.push(b.name);
+	for (const name of effectiveChain) {
+		if (byName.get(name)?.config.forceOnly === true && name !== active) continue;
+		if (!orderedNames.includes(name)) orderedNames.push(name);
+	}
+	for (const backend of input.backends) {
+		if (backend.config.forceOnly === true && backend.name !== active) continue;
+		if (!orderedNames.includes(backend.name)) orderedNames.push(backend.name);
+	}
 
 	// Cache auth per backend (resolveApiKey may be a live call).
 	const authByBackend = new Map<string, string | undefined>();

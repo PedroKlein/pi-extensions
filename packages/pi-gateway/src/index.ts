@@ -1,9 +1,9 @@
 /**
  * pi-gateway — pi (earendil-works) entry point.
  *
- * Virtual provider that exposes tier aliases (heavy-1, medium-1, light-1, plus
- * family-pinned variants) routing to already-registered pi providers with
- * automatic failover on cap hits.
+ * Virtual provider that exposes tier aliases (heavy-1, medium-1, light-1)
+ * routing to already-registered pi providers with automatic failover on cap
+ * hits and optional force-only backends.
  *
  * This file is the thin pi adapter: it builds the pi {@link GatewayPlatform}
  * (pi's provider registration + the pi transport host) and hands off to the

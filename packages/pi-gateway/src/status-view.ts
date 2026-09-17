@@ -126,8 +126,14 @@ export function computeAliasRoutes(input: StatusRenderInput): AliasRoute[] {
 	const active = input.state.activeBackendOverride;
 	const ordered: string[] = [];
 	if (active) ordered.push(active);
-	for (const n of chain) if (!ordered.includes(n)) ordered.push(n);
-	for (const n of Object.keys(input.aliases.backends)) if (!ordered.includes(n)) ordered.push(n);
+	for (const name of chain) {
+		if (input.aliases.backends[name]?.forceOnly === true && name !== active) continue;
+		if (!ordered.includes(name)) ordered.push(name);
+	}
+	for (const [name, backend] of Object.entries(input.aliases.backends)) {
+		if (backend.forceOnly === true && name !== active) continue;
+		if (!ordered.includes(name)) ordered.push(name);
+	}
 
 	const routes: AliasRoute[] = [];
 	for (const slot of TIER_SLOTS) {

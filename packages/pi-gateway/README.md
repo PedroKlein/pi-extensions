@@ -156,8 +156,8 @@ What you can configure:
 
 - **Backends** — add (`+ Add backend`, choosing from providers pi knows),
   rename (fallback-chain references update automatically), and delete.
-- **Per-backend settings** — `resetSchedule` and `quotaHint` via preset
-  pickers, and `capStatusCodes` via a text field.
+- **Per-backend settings** — `forceOnly`, `resetSchedule`, and `quotaHint` via
+  toggles/preset pickers, and `capStatusCodes` via a text field.
 - **Tiers × models** — for each tier (`heavy`/`medium`/`light`/`xlight`/
   `minimal`) multi-select and order models from that backend's live model
   list (the ordered selection becomes `heavy-1`, `heavy-2`, …).
@@ -208,6 +208,14 @@ IDs. A list declares indexed diversity: index 1 → `<tier>-1`, index 2 →
         "medium": "llama-3.3-70b",
         "light":  "llama-3.1-8b"
       }
+    },
+    "openai-codex": {
+      "forceOnly": true,
+      "tiers": {
+        "heavy": "gpt-5.6-sol",
+        "medium": "gpt-5.6-terra",
+        "light": "gpt-5.6-luna"
+      }
     }
   }
 }
@@ -222,6 +230,7 @@ backend, named agnostically. When `openrouter` hits its cap, both fail over to
 
 - `fallbackChain` — ordered list of backend names. First healthy backend that declares a given tier wins routing for that tier's indexed aliases.
 - `backends[name].tiers` — map of `heavy | medium | light | xlight | minimal` → a model ID **or an ordered list of model IDs** as registered by the backing pi provider. At least one tier required; a list may not be empty.
+- `backends[name].forceOnly` (optional, default `false`) — exclude this backend from automatic fallback routing. It becomes eligible only while explicitly selected with `/gateway force <backend>`. Force-only backends must not appear in `fallbackChain`.
 - `backends[name].resetSchedule` (optional) — named preset for computing "next reset instant" after a cap hit:
   - `utc-midnight` — daily reset at 00:00 UTC
   - `utc-monthly-1st` — monthly reset at 00:00 UTC on the 1st
@@ -281,6 +290,11 @@ the first **healthy** backend with a valid token that declares the tier and
 emits `<tier>-1..K` routing into that backend's list, clamping the index to its
 length. Unhealthy backends drop out transparently; when the router has fewer
 models than `K`, high indices reuse its last model.
+
+**Force-only backends.** A backend with `forceOnly: true` is excluded from the
+normal alias order and cannot appear in `fallbackChain`. It participates only
+while selected with `/gateway force <backend>`; clearing the override returns to
+the configured automatic chain.
 
 **Failure attribution.** Because indexed aliases are backend-agnostic, a failure
 on `heavy-2` can't be attributed by name. The composer emits an `alias → backend`

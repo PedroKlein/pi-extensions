@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { AliasesConfig } from "../src/config.js";
 import { TIER_SLOTS } from "../src/config.js";
 import {
+	composeBootstrapModels,
 	composeGatewayModels,
 	isBackendUnhealthy,
 	type ComposeInput,
@@ -72,6 +73,31 @@ const ALL_TIERS = {
 };
 
 // -- Tests ------------------------------------------------------------------
+
+describe("composeBootstrapModels", () => {
+	it("does not let force-only backends define the normal startup alias set", () => {
+		const aliases: AliasesConfig = {
+			fallbackChain: ["primary"],
+			backends: {
+				primary: {
+					resetSchedule: undefined,
+					forceOnly: false,
+					tiers: { heavy: ["primary-heavy"] },
+					quotaHint: undefined,
+					capStatusCodes: [402, 429],
+				},
+				codex: {
+					resetSchedule: undefined,
+					forceOnly: true,
+					tiers: { medium: ["terra", "gpt-5.4"] },
+					quotaHint: undefined,
+					capStatusCodes: [402, 429],
+				},
+			},
+		};
+		expect(composeBootstrapModels(aliases).map((model) => model.id)).toEqual(["heavy-1"]);
+	});
+});
 
 describe("composeGatewayModels — output counts", () => {
 	it("two backends, all single-model tiers → 5 indexed neutral aliases (no family-pinned)", () => {
@@ -258,6 +284,57 @@ describe("composeGatewayModels — indexed failover fallthrough", () => {
 });
 
 describe("composeGatewayModels — fallback chain semantics", () => {
+	it("never selects a force-only backend during automatic routing", () => {
+		const primary = backend("primary", { heavy: "primary-heavy" });
+		const codex = backend("openai-codex", { heavy: "gpt-5.6-sol" }, {
+			config: {
+				resetSchedule: undefined,
+				tiers: { heavy: ["gpt-5.6-sol"] },
+				quotaHint: undefined,
+				capStatusCodes: [402, 429],
+				forceOnly: true,
+			},
+		});
+		const state: GatewayState = {
+			...emptyState(),
+			unhealthyUntil: {
+				primary: {
+					until: new Date(Date.now() + 3_600_000).toISOString(),
+					reason: "cap",
+				},
+			},
+		};
+		const { models } = composeGatewayModels({
+			fallbackChain: ["primary"],
+			backends: [primary, codex],
+			state,
+			resolveApiKey: (b) => `tok-${b.name}`,
+		});
+		expect(models).toEqual([]);
+	});
+
+	it("routes to a force-only backend when it is explicitly forced", () => {
+		const primary = backend("primary", { heavy: "primary-heavy" });
+		const codex = backend("openai-codex", { heavy: "gpt-5.6-sol" }, {
+			config: {
+				resetSchedule: undefined,
+				tiers: { heavy: ["gpt-5.6-sol"] },
+				quotaHint: undefined,
+				capStatusCodes: [402, 429],
+				forceOnly: true,
+			},
+		});
+		const { models } = composeGatewayModels({
+			fallbackChain: ["primary"],
+			backends: [primary, codex],
+			state: { ...emptyState(), activeBackendOverride: "openai-codex" },
+			resolveApiKey: (b) => `tok-${b.name}`,
+		});
+		expect(models.find((model) => model.id === "heavy-1")?.name).toBe(
+			"gpt-5.6-sol name (openai-codex)",
+		);
+	});
+
 	it("neutral alias picks first HEALTHY backend in chain that has the slot", () => {
 		const backends = [
 			backend("openrouter", { heavy: "or-heavy" }),

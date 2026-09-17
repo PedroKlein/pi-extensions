@@ -12,6 +12,7 @@ import {
 	renameBackend,
 	setCapStatusCodes,
 	setFallbackChain,
+	setForceOnly,
 	setQuotaHint,
 	setResetSchedule,
 	setTierModels,
@@ -112,6 +113,15 @@ describe("edit helpers — purity + behavior", () => {
 		expect(r.backends.copilot.tiers.medium).toEqual(["cop-med-1", "cop-med-2"]);
 		r = setTierModels(r, "copilot", "heavy", []);
 		expect(r.backends.copilot.tiers.heavy).toBeUndefined();
+	});
+
+	it("setForceOnly enables force-only routing and removes the backend from the chain", () => {
+		const enabled = setForceOnly(sample(), "copilot", true);
+		expect(enabled.backends.copilot.forceOnly).toBe(true);
+		expect(enabled.fallbackChain).toEqual(["openrouter"]);
+
+		const disabled = setForceOnly(enabled, "copilot", false);
+		expect(disabled.backends.copilot.forceOnly).toBeUndefined();
 	});
 
 	it("setFallbackChain replaces the chain", () => {

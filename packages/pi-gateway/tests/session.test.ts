@@ -186,6 +186,42 @@ describe("registerGatewayProvider — unregistered backend graceful degradation"
 });
 
 describe("registerGatewayProvider — state override respected", () => {
+	it("does not resolve credentials for an unforced force-only backend", async () => {
+		const aliases: AliasesConfig = {
+			fallbackChain: ["openrouter"],
+			backends: {
+				openrouter: {
+					resetSchedule: undefined,
+					forceOnly: false,
+					tiers: { heavy: ["or-heavy"] },
+					quotaHint: undefined,
+					capStatusCodes: [402, 429],
+				},
+				"openai-codex": {
+					resetSchedule: undefined,
+					forceOnly: true,
+					tiers: { heavy: ["gpt-5.6-sol"] },
+					quotaHint: undefined,
+					capStatusCodes: [402, 429],
+				},
+			},
+		};
+		const registry = fakeRegistry(
+			[
+				{ id: "or-heavy", provider: "openrouter", api: "openai-completions" },
+				{ id: "gpt-5.6-sol", provider: "openai-codex", api: "openai-codex-responses" },
+			],
+			{},
+			{ openrouter: "openrouter-token", "openai-codex": "codex-token" },
+		);
+		const getProviderAuth = vi.spyOn(registry, "getProviderAuth");
+
+		await registerGatewayProvider({ aliases, state: emptyState(), registry, register: vi.fn() });
+
+		expect(getProviderAuth).toHaveBeenCalledWith("openrouter");
+		expect(getProviderAuth).not.toHaveBeenCalledWith("openai-codex");
+	});
+
 	it("neutral aliases use activeBackendOverride when set", async () => {
 		const aliases: AliasesConfig = {
 			fallbackChain: ["openrouter", "github-copilot"],

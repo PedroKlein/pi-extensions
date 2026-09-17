@@ -18,6 +18,7 @@ import {
 	renameBackend,
 	setCapStatusCodes,
 	setFallbackChain,
+	setForceOnly,
 	setQuotaHint,
 	setResetSchedule,
 	setTierModels,
@@ -364,6 +365,7 @@ export class EditorController {
 		const caps = b.capStatusCodes && b.capStatusCodes.length > 0 ? b.capStatusCodes.join(", ") : "default (402, 429)";
 		this.menu = [
 			{ label: `Rename (${name})`, run: () => this.enterRename(name) },
+			{ label: `Force only: ${b.forceOnly === true ? "yes" : "no"}`, run: () => this.toggleForceOnly(name) },
 			{ label: `Reset schedule: ${reset}`, run: () => this.push({ kind: "preset", backend: name, field: "reset" }) },
 			{ label: `Quota hint: ${quota}`, run: () => this.push({ kind: "preset", backend: name, field: "quota" }) },
 			{ label: `Cap status codes: ${caps}`, run: () => this.enterCapCodes(name) },
@@ -394,7 +396,9 @@ export class EditorController {
 	private buildChain(): void {
 		// Chain screen shows all backends; selection = membership; order = list
 		// order for selected. Seed items as: current chain first, then the rest.
-		const all = Object.keys(this.draft.backends);
+		const all = Object.keys(this.draft.backends).filter(
+			(name) => this.draft.backends[name].forceOnly !== true,
+		);
 		const chain = this.draft.fallbackChain.filter((n) => all.includes(n));
 		const rest = all.filter((n) => !chain.includes(n));
 		this._filterable = true;
@@ -427,6 +431,14 @@ export class EditorController {
 
 	private enterCapCodes(name: string): void {
 		this.push({ kind: "input", purpose: "cap-codes", backend: name });
+	}
+
+	private toggleForceOnly(name: string): void {
+		const forceOnly = this.draft.backends[name]?.forceOnly !== true;
+		this.draft = setForceOnly(this.draft, name, forceOnly);
+		this._dirty = true;
+		this.rebuild();
+		this._notice = `set force only ${forceOnly ? "on" : "off"} (unsaved)`;
 	}
 
 	private deleteBackend(name: string): void {

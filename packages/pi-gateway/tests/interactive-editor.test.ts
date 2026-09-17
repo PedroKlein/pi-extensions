@@ -138,6 +138,16 @@ describe("EditorController — backend CRUD + chain", () => {
 		expect(written[0].fallbackChain).toEqual(["copilot", "openrouter"]);
 	});
 
+	it("marks a backend force-only and removes it from the fallback chain", () => {
+		const { deps, written } = makeDeps(initial);
+		const ctrl = new EditorController(deps);
+		open(ctrl, "Backend: copilot");
+		open(ctrl, "Force only");
+		ctrl.save();
+		expect(written[0].backends.copilot.forceOnly).toBe(true);
+		expect(written[0].fallbackChain).toEqual(["openrouter"]);
+	});
+
 	it("setting reset schedule via the preset picker", () => {
 		const { deps, written } = makeDeps(initial);
 		const ctrl = new EditorController(deps);

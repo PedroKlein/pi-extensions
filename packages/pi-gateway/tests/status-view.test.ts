@@ -80,6 +80,30 @@ describe("renderStatusSections — four sections present", () => {
 		expect(row).toContain("50.27/50.00 EUR");
 	});
 
+	it("omits force-only backends from unforced alias routes", () => {
+		const aliases: AliasesConfig = {
+			fallbackChain: ["primary"],
+			backends: {
+				primary: { ...CFG.backends.openrouter, tiers: { heavy: ["primary-heavy"] } },
+				"openai-codex": {
+					...CFG.backends["github-copilot"],
+					forceOnly: true,
+					tiers: { heavy: ["gpt-5.6-sol"] },
+				},
+			},
+		};
+		const routes = computeAliasRoutes({
+			aliases,
+			state: {
+				...emptyState(),
+				unhealthyUntil: {
+					primary: { until: new Date(Date.now() + 60_000).toISOString(), reason: "cap" },
+				},
+			},
+		});
+		expect(routes.find((route) => route.id === "heavy-1")?.backend).toBeUndefined();
+	});
+
 	it("aliases section shows indexed neutral rows and no family-pinned rows", () => {
 		const s = renderStatusSections({ aliases: CFG, state: emptyState(), now: NOW });
 		const ids = s.aliases.filter((r) => /^\w+-/.test(r.trim())).map((r) => r.trim().split(/\s+/)[0]);
@@ -249,6 +273,18 @@ describe("actions — setFallbackChainOverride", () => {
 		expect(() =>
 			setFallbackChainOverride(emptyState(), CFG, ["openrouter", "ghost"]),
 		).toThrowError(/unknown backend/);
+	});
+	it("rejects force-only backends", () => {
+		const aliases: AliasesConfig = {
+			...CFG,
+			backends: {
+				...CFG.backends,
+				codex: { ...CFG.backends.openrouter, forceOnly: true },
+			},
+		};
+		expect(() =>
+			setFallbackChainOverride(emptyState(), aliases, ["openrouter", "codex"]),
+		).toThrowError(/force-only/);
 	});
 	it("throws on empty chain", () => {
 		expect(() => setFallbackChainOverride(emptyState(), CFG, [])).toThrowError(

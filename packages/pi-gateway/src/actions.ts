@@ -39,7 +39,7 @@ export function setActiveOverride(
 
 /**
  * Replace the fallback-chain override. Passing `undefined` clears it (falls
- * back to aliases.json). Every entry must name a known backend.
+ * back to aliases.json). Every entry must name a known non-force-only backend.
  */
 export function setFallbackChainOverride(
 	state: GatewayState,
@@ -51,6 +51,9 @@ export function setFallbackChainOverride(
 		for (const n of chain) {
 			if (!(n in aliases.backends)) {
 				throw new Error(`unknown backend '${n}' in chain`);
+			}
+			if (aliases.backends[n].forceOnly === true) {
+				throw new Error(`force-only backend '${n}' cannot be added to the fallback chain`);
 			}
 		}
 	}
