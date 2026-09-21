@@ -32,7 +32,8 @@ import { NotesStore } from "./notes/store.js";
 import { CATEGORIES } from "./notes/model.js";
 import { classifyNote, classifyHeuristic, type ClassifyOptions } from "./notes/capture.js";
 import { showNoteForm } from "./notes/form.js";
-import { loadPinned, savePinned, removePinned, resolveRepoSlug } from "./notes/persistence.js";
+import { loadPinned, removePinned, resolveRepoSlug } from "./notes/persistence.js";
+import { applyPin } from "./notes/pin.js";
 import { createNotesTUI } from "./notes/tui.js";
 import { createChatTUI } from "./chat/tui.js";
 import { onTurnEnd, updateStatus } from "./reminders/tracker.js";
@@ -107,8 +108,7 @@ export default function piAdhd(pi: ExtensionAPI) {
     try {
       await createShutdownOverlay(ctx, store, {
         onPin: (note, scope) => {
-          store.update(note.id, { pinned: scope });
-          savePinned({ ...note, pinned: scope }, scope, repoSlug);
+          applyPin(store, note.id, scope, repoSlug);
         },
       });
     } catch {
@@ -211,12 +211,13 @@ export default function piAdhd(pi: ExtensionAPI) {
           store.remove(note.id);
         },
         onPin: (note, scope) => {
-          store.update(note.id, { pinned: scope });
-          const updated = store.get(note.id);
-          if (updated) {
-            savePinned(updated, scope, repoSlug);
-            ctx.ui.notify(`📌 Pinned: "${note.title}" (${scope})`, "info");
-          }
+          const nextScope = applyPin(store, note.id, scope, repoSlug);
+          ctx.ui.notify(
+            nextScope === null
+              ? `Unpinned: "${note.title}" (session-only)`
+              : `📌 Pinned: "${note.title}" (${nextScope})`,
+            "info",
+          );
         },
         onEdit: (note) => {
           pendingEditId = note.id;
