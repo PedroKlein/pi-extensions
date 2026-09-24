@@ -1,0 +1,63 @@
+{
+  "name": "@pedro_klein/pi-ssh-session",
+  "version": "0.1.0",
+  "description": "Approved commands and file transfers over one persistent SSH shell for Pi",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "dev": "tsup --watch",
+    "build": "tsup",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "keywords": [
+    "pi-package",
+    "pi",
+    "ssh",
+    "remote",
+    "session"
+  ],
+  "license": "MIT",
+  "author": "Pedro Klein",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/PedroKlein/pi-extensions",
+    "directory": "packages/pi-ssh-session"
+  },
+  "homepage": "https://github.com/PedroKlein/pi-extensions/tree/main/packages/pi-ssh-session",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "@types/node": "^25.0.0",
+    "typebox": "^1.1.38",
+    "tsup": "^8.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}

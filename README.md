@@ -20,6 +20,7 @@ or steal ideas.
 | [`@pedro_klein/pi-modes`](packages/pi-modes) | 5-mode system (Ask/Brainstorm/Plan/Build/None) with tool gating |
 | [`@pedro_klein/pi-readonly-bash`](packages/pi-readonly-bash) | Bash policy enforcement — read-only shell for safe modes |
 | [`@pedro_klein/pi-repos`](packages/pi-repos) | Repo management + orchestration layer |
+| [`@pedro_klein/pi-ssh-session`](packages/pi-ssh-session) | Approved commands and file transfers over one persistent SSH shell |
 | [`@pedro_klein/pi-status`](packages/pi-status) | Context bar compositor + LLM environment injection |
 | [`@pedro_klein/pi-task`](packages/pi-task) | Task graph manager — DAG plans with parallel groups |
 | [`@pedro_klein/pi-tool-toggle`](packages/pi-tool-toggle) | Session-scoped TUI for enabling and disabling tools |
@@ -34,7 +35,10 @@ Individual packages:
 pi install npm:@pedro_klein/pi-modes
 pi install npm:@pedro_klein/pi-memory
 pi install npm:@pedro_klein/pi-repos
+pi install npm:@pedro_klein/pi-ssh-session
 ```
+
+`pi-ssh-session` uses key or agent authentication, verifies unknown hosts with OpenSSH's `accept-new` policy, and asks before connections, commands, sudo commands, uploads, and downloads. Command output is bounded, sudo passwords use a masked prompt and are not persisted, and interactive SSH/password/TTY sessions are unsupported. See the [package reference](packages/pi-ssh-session/README.md).
 
 All extensions (local git install):
 
