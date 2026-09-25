@@ -47,7 +47,7 @@ export interface CapEventOutcome {
  */
 const TRANSIENT_STATUS_CODES = new Set([408, 425, 429, 500, 502, 503, 504]);
 const TRANSIENT_COOLDOWN_MS = 5 * 60 * 1000;
-const TRANSIENT_ERROR = /fetch failed|network error|ECONN(?:RESET|REFUSED)|ETIMEDOUT|EAI_AGAIN|socket hang up|connection reset|service unavailable/i;
+const TRANSIENT_ERROR = /fetch failed|network error|ECONN(?:RESET|REFUSED)|ETIMEDOUT|EAI_AGAIN|socket hang up|connection reset|service unavailable|Responses API failed without upstream details/i;
 
 export function classifyCapEvent(
 	event: CapEventInput,

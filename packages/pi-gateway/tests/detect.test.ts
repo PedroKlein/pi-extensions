@@ -160,6 +160,24 @@ describe("classifyCapEvent", () => {
 		expect(r.kind).toBe("transient");
 	});
 
+	it("fails over temporarily when a Responses backend fails without upstream details", () => {
+		const r = classifyCapEvent(
+			{
+				errorMessage: "Responses API failed without upstream details",
+				stopReason: "error",
+				provider: "gateway",
+				modelId: "heavy-1",
+			},
+			CFG,
+			NOW,
+			{ "heavy-1": "openrouter" },
+		);
+		expect(r.capHit).toBe(true);
+		expect(r.kind).toBe("transient");
+		expect(r.status).toBeUndefined();
+		expect(r.entry?.until).toBe("2025-01-15T12:35:00.000Z");
+	});
+
 	it("fails over temporarily on status-less network errors", () => {
 		const r = classifyCapEvent(
 			{
