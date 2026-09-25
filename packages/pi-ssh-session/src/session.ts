@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 
 const CONNECT_TIMEOUT_MS = 30_000;
-const COMMAND_TIMEOUT_MS = 120_000;
 const STDERR_LIMIT = 65_536;
 const MARKER_PREFIX = "\x1ePI_SSH_DONE_";
 const MARKER_SUFFIX = "\x1f";
@@ -150,7 +149,7 @@ export class SSHSession {
 
   execute(
     command: string,
-    timeout = COMMAND_TIMEOUT_MS,
+    timeout?: number,
     signal?: AbortSignal,
   ): Promise<CommandResult> {
     return this.enqueue(command, timeout, signal);
@@ -159,7 +158,7 @@ export class SSHSession {
   executeWithInputLine(
     command: string,
     input: string | Uint8Array,
-    timeout = COMMAND_TIMEOUT_MS,
+    timeout?: number,
     signal?: AbortSignal,
   ): Promise<CommandResult> {
     return this.enqueue(command, timeout, signal, input);
@@ -183,7 +182,7 @@ export class SSHSession {
 
   private enqueue(
     command: string,
-    timeout: number,
+    timeout?: number,
     signal?: AbortSignal,
     input?: string | Uint8Array,
   ): Promise<CommandResult> {
@@ -203,7 +202,7 @@ export class SSHSession {
 
   private run(
     command: string,
-    timeout: number,
+    timeout?: number,
     signal?: AbortSignal,
     input?: string | Uint8Array,
   ): Promise<CommandResult> {
@@ -214,12 +213,13 @@ export class SSHSession {
     signal?.throwIfAborted();
 
     const id = randomUUID();
+    let timer: ReturnType<typeof setTimeout> | undefined;
     return new Promise((resolve, reject) => {
       let settled = false;
       const finish = <T>(callback: (value: T) => void, value: T) => {
         if (settled) return;
         settled = true;
-        clearTimeout(timer);
+        if (timer) clearTimeout(timer);
         signal?.removeEventListener("abort", abort);
         if (this.pending?.id === id) this.pending = null;
         callback(value);
@@ -229,10 +229,12 @@ export class SSHSession {
         finish(reject, reason instanceof Error ? reason : new Error("SSH operation aborted."));
         void this.disconnect();
       };
-      const timer = setTimeout(() => {
-        finish(reject, new Error(`SSH command timed out after ${timeout}ms.`));
-        void this.disconnect();
-      }, timeout);
+      if (timeout !== undefined) {
+        timer = setTimeout(() => {
+          finish(reject, new Error(`SSH command timed out after ${timeout}ms.`));
+          void this.disconnect();
+        }, timeout);
+      }
 
       this.pending = {
         id,

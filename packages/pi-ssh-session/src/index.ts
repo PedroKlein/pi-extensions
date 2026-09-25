@@ -31,7 +31,11 @@ const Parameters = Type.Object({
   command: Type.Optional(Type.String({ description: "Remote shell command for execute or sudo" })),
   localPath: Type.Optional(Type.String({ description: "Local source or destination path for file transfer" })),
   remotePath: Type.Optional(Type.String({ description: "Remote source or destination path for file transfer" })),
-  timeout: Type.Optional(Type.Number({ minimum: 1, description: "Operation timeout in milliseconds" })),
+  files: Type.Optional(Type.Array(Type.Object({
+    localPath: Type.String({ description: "Local source or destination path" }),
+    remotePath: Type.String({ description: "Remote source or destination path" }),
+  }), { description: "Multiple local/remote path pairs for upload or download" })),
+  timeout: Type.Optional(Type.Number({ minimum: 0, default: 0, description: "Operation timeout in milliseconds; 0 or omitted waits indefinitely" })),
   cacheSudoPassword: Type.Optional(Type.Boolean({ description: "If the user chooses YOLO, prompt once and retain the sudo password in memory for this connection" })),
 });
 
@@ -42,9 +46,15 @@ type Parameters = {
   command?: string;
   localPath?: string;
   remotePath?: string;
+  files?: TransferFile[];
   timeout?: number;
   cacheSudoPassword?: boolean;
 };
+
+interface TransferFile {
+  localPath: string;
+  remotePath: string;
+}
 
 type ConnectionMode = "prompt" | "yolo";
 
@@ -60,6 +70,7 @@ interface Details {
   localPath?: string;
   remotePath?: string;
   bytes?: number;
+  files?: Array<TransferFile & { bytes: number }>;
   mode?: ConnectionMode;
 }
 
@@ -73,8 +84,8 @@ function validate(params: Parameters): void {
     status: new Set(["action", "timeout"]),
     disconnect: new Set(["action", "timeout"]),
     sudo: new Set(["action", "command", "timeout"]),
-    upload: new Set(["action", "localPath", "remotePath", "timeout"]),
-    download: new Set(["action", "localPath", "remotePath", "timeout"]),
+    upload: new Set(["action", "localPath", "remotePath", "files", "timeout"]),
+    download: new Set(["action", "localPath", "remotePath", "files", "timeout"]),
   };
   const required = params.action === "connect" ? "host" : ["execute", "sudo"].includes(params.action) ? "command" : undefined;
   if (required && (typeof params[required] !== "string" || !params[required].trim())) {
@@ -84,9 +95,30 @@ function validate(params: Parameters): void {
     throw new Error("cacheSudoPassword must be a boolean.");
   }
   if (["upload", "download"].includes(params.action)) {
-    for (const path of ["localPath", "remotePath"] as const) {
-      if (typeof params[path] !== "string" || !params[path]) {
-        throw new Error(`Action "${params.action}" requires a non-empty ${path}.`);
+    if (params.files !== undefined && !Array.isArray(params.files)) {
+      throw new Error(`Action "${params.action}" files must be an array.`);
+    }
+    const hasBatch = (params.files?.length ?? 0) > 0;
+    const hasLocalPath = typeof params.localPath === "string" && params.localPath.length > 0;
+    const hasRemotePath = typeof params.remotePath === "string" && params.remotePath.length > 0;
+    if (hasBatch && (hasLocalPath || hasRemotePath)) {
+      throw new Error(`Action "${params.action}" accepts either localPath and remotePath or files, not both.`);
+    }
+    if (hasBatch) {
+      params.files!.forEach((file, index) => {
+        for (const path of ["localPath", "remotePath"] as const) {
+          if (typeof file[path] !== "string" || !file[path]) {
+            throw new Error(`Action "${params.action}" files[${index}] requires a non-empty ${path}.`);
+          }
+        }
+      });
+    } else if (params.files !== undefined && !hasLocalPath && !hasRemotePath) {
+      throw new Error(`Action "${params.action}" requires localPath and remotePath, or non-empty files.`);
+    } else {
+      for (const path of ["localPath", "remotePath"] as const) {
+        if (typeof params[path] !== "string" || !params[path]) {
+          throw new Error(`Action "${params.action}" requires a non-empty ${path}.`);
+        }
       }
     }
   }
@@ -167,13 +199,14 @@ export default function sshSessionExtension(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "ssh_session",
     label: "SSH session",
-    description: `Manage one persistent non-interactive SSH shell. Actions: connect, execute, status, disconnect, sudo, upload, download. Shell state persists between calls. Every connection asks the user to choose prompt or YOLO mode. Output is truncated to ${DEFAULT_MAX_LINES} lines or ${formatSize(DEFAULT_MAX_BYTES)}.`,
+    description: `Manage one persistent non-interactive SSH shell. Actions: connect, execute, status, disconnect, sudo, upload, download. Shell state persists between calls. Every connection asks the user to choose prompt or YOLO mode. Upload and download accept one path pair or a files array. Commands wait indefinitely unless timeout is set. Output is truncated to ${DEFAULT_MAX_LINES} lines or ${formatSize(DEFAULT_MAX_BYTES)}.`,
     promptSnippet: "Connect to and run commands in one persistent remote SSH shell",
     promptGuidelines: [
       "Prefer ssh_session over local bash when the requested work targets a remote host.",
       "Use ssh_session status before assuming a connection exists; connect explicitly when needed.",
       "Use action=sudo for commands requiring elevated privileges; do not prefix action=execute commands with sudo.",
-      "Use upload and download to transfer individual files over the active SSH session.",
+      "Use upload and download to transfer files over the active SSH session; prefer files for multiple path pairs.",
+      "Use timeout=0 unless the user requested a finite operation timeout. An explicit timeout closes the connection so an unknown remote command cannot corrupt the shared shell.",
     ],
     parameters: Parameters,
     executionMode: "sequential",
@@ -189,6 +222,7 @@ export default function sshSessionExtension(pi: ExtensionAPI): void {
         host,
         mode: connectionMode,
       };
+      const timeout = params.timeout && params.timeout > 0 ? params.timeout : undefined;
 
       if (params.action === "connect") {
         const target = params.host!.trim();
@@ -208,7 +242,7 @@ export default function sshSessionExtension(pi: ExtensionAPI): void {
           try {
             password = await promptSudoPassword(ctx);
             if (password === null) throw new Error("Sudo authentication was cancelled.");
-            await authenticateSudo(session, password, params.timeout, signal);
+            await authenticateSudo(session, password, timeout, signal);
             cachedSudoPassword = password;
             password = null;
           } catch (error) {
@@ -243,28 +277,58 @@ export default function sshSessionExtension(pi: ExtensionAPI): void {
 
       if (!session.connected || !host) throw new Error("No active SSH session. Use action=connect first.");
       if (params.action === "upload" || params.action === "download") {
-        const localPath = resolve(ctx.cwd, params.localPath!);
-        const remotePath = params.remotePath!;
-        const source = params.action === "upload" ? localPath : `${host}:${remotePath}`;
-        const destination = params.action === "upload" ? `${host}:${remotePath}` : localPath;
+        const isBatch = (params.files?.length ?? 0) > 0;
+        const files = (isBatch ? params.files! : [{ localPath: params.localPath!, remotePath: params.remotePath! }])
+          .map(({ localPath, remotePath }) => ({ localPath: resolve(ctx.cwd, localPath), remotePath }));
+        const endpoints = files.map(({ localPath, remotePath }) => ({
+          source: params.action === "upload" ? localPath : `${host}:${remotePath}`,
+          destination: params.action === "upload" ? `${host}:${remotePath}` : localPath,
+        }));
         if (connectionMode !== "yolo") {
+          const message = isBatch
+            ? endpoints.map(({ source, destination }, index) =>
+              `File ${index + 1}:\nSource: ${JSON.stringify(source)}\nDestination: ${JSON.stringify(destination)}`,
+            ).join("\n\n")
+            : `Source: ${JSON.stringify(endpoints[0].source)}\nDestination: ${JSON.stringify(endpoints[0].destination)}`;
           await approve(
             ctx,
             params.action === "upload" ? "Upload via SSH?" : "Download via SSH?",
-            `Source: ${JSON.stringify(source)}\nDestination: ${JSON.stringify(destination)}`,
+            message,
             "File transfer requires interactive approval.",
             "File transfer was not approved.",
           );
         }
-        const bytes = params.action === "upload"
-          ? await upload(session, localPath, remotePath, params.timeout, signal)
-          : await download(session, remotePath, localPath, params.timeout, signal);
-        details.localPath = localPath;
-        details.remotePath = remotePath;
-        details.bytes = bytes;
+
+        const completed: Array<TransferFile & { bytes: number }> = [];
+        for (const file of files) {
+          try {
+            const bytes = params.action === "upload"
+              ? await upload(session, file.localPath, file.remotePath, timeout, signal)
+              : await download(session, file.remotePath, file.localPath, timeout, signal);
+            completed.push({ ...file, bytes });
+          } catch (error) {
+            if (!isBatch) throw error;
+            const message = error instanceof Error ? error.message : String(error);
+            throw new Error(`Batch ${params.action} stopped after ${completed.length} of ${files.length} files: ${message}`);
+          }
+        }
+
+        if (isBatch) {
+          details.files = completed;
+          const bytes = completed.reduce((total, file) => total + file.bytes, 0);
+          const text = params.action === "upload"
+            ? `Uploaded ${completed.length} files to ${host} (${bytes} bytes).`
+            : `Downloaded ${completed.length} files from ${host} (${bytes} bytes).`;
+          return { content: [{ type: "text" as const, text }], details };
+        }
+
+        const [file] = completed;
+        details.localPath = file.localPath;
+        details.remotePath = file.remotePath;
+        details.bytes = file.bytes;
         const text = params.action === "upload"
-          ? `Uploaded ${JSON.stringify(localPath)} to ${JSON.stringify(`${host}:${remotePath}`)} (${bytes} bytes).`
-          : `Downloaded ${JSON.stringify(`${host}:${remotePath}`)} to ${JSON.stringify(localPath)} (${bytes} bytes).`;
+          ? `Uploaded ${JSON.stringify(file.localPath)} to ${JSON.stringify(`${host}:${file.remotePath}`)} (${file.bytes} bytes).`
+          : `Downloaded ${JSON.stringify(`${host}:${file.remotePath}`)} to ${JSON.stringify(file.localPath)} (${file.bytes} bytes).`;
         return { content: [{ type: "text" as const, text }], details };
       }
 
@@ -283,7 +347,7 @@ export default function sshSessionExtension(pi: ExtensionAPI): void {
       }
 
       if (params.action === "sudo") {
-        const preflight = await session.execute("sudo -n true", params.timeout, signal);
+        const preflight = await session.execute("sudo -n true", timeout, signal);
         if (preflight.exitCode !== 0) {
           if (!/password.*required/i.test(preflight.output)) {
             throw new Error(`Sudo is unavailable: ${preflight.output || `exit code ${preflight.exitCode}`}`);
@@ -293,7 +357,7 @@ export default function sshSessionExtension(pi: ExtensionAPI): void {
               throw new Error("Sudo authentication is required, but this YOLO connection has no cached sudo password.");
             }
             try {
-              await authenticateSudo(session, cachedSudoPassword, params.timeout, signal);
+              await authenticateSudo(session, cachedSudoPassword, timeout, signal);
             } catch (error) {
               clearSudoPassword();
               throw error;
@@ -303,19 +367,19 @@ export default function sshSessionExtension(pi: ExtensionAPI): void {
             const password = await promptSudoPassword(ctx);
             if (password === null) throw new Error("Sudo authentication was cancelled.");
             try {
-              await authenticateSudo(session, password, params.timeout, signal);
+              await authenticateSudo(session, password, timeout, signal);
             } finally {
               password.fill(0);
             }
           }
         }
-        const result = await session.execute(`sudo -n -- bash -c ${shellQuote(command)}`, params.timeout, signal);
+        const result = await session.execute(`sudo -n -- bash -c ${shellQuote(command)}`, timeout, signal);
         const text = await formatOutput(result, details);
         if (result.exitCode !== 0) throw new Error(`${text}\n\nCommand exited with code ${result.exitCode}.`);
         return { content: [{ type: "text" as const, text }], details };
       }
 
-      const result = await session.execute(command, params.timeout, signal);
+      const result = await session.execute(command, timeout, signal);
       const text = await formatOutput(result, details);
       if (result.exitCode !== 0) throw new Error(`${text}\n\nCommand exited with code ${result.exitCode}.`);
       return { content: [{ type: "text" as const, text }], details };
@@ -327,7 +391,9 @@ export default function sshSessionExtension(pi: ExtensionAPI): void {
         : ["execute", "sudo"].includes(args.action)
           ? args.command
           : ["upload", "download"].includes(args.action)
-            ? `${args.localPath} ↔ ${args.remotePath}`
+            ? args.files?.length
+              ? `${args.files.length} files`
+              : `${args.localPath} ↔ ${args.remotePath}`
             : undefined;
       const preview = target ? truncateLine(target.replace(/\s+/g, " ").trim(), 120).text : "";
       const suffix = preview ? ` ${preview}` : "";

@@ -110,6 +110,9 @@ describe("ssh_session extension", () => {
     await expect(call(tool, { action: "execute", command: "printf ok" })).resolves.toMatchObject({
       content: [{ type: "text", text: "ok" }],
     });
+    await expect(call(tool, { action: "execute", command: "sleep 0.02; printf no-timeout", timeout: 0 })).resolves.toMatchObject({
+      content: [{ type: "text", text: "no-timeout" }],
+    });
     await expect(call(tool, { action: "disconnect" })).resolves.toMatchObject({
       content: [{ type: "text", text: "Disconnected from example-host." }],
     });
@@ -124,6 +127,7 @@ describe("ssh_session extension", () => {
       command: "",
       localPath: "",
       remotePath: "",
+      files: [],
       timeout: 10_000,
       mode: "",
       cacheSudoPassword: false,

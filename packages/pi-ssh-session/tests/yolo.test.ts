@@ -379,6 +379,7 @@ describe("ssh_session YOLO mode", () => {
       command: "",
       localPath: "",
       remotePath: "",
+      files: [],
       timeout: 10_000,
       mode: "",
       cacheSudoPassword: false,

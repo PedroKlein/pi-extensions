@@ -83,6 +83,7 @@ describe("ssh_session transfers", () => {
     const ctx = context(directory);
     expect(extension.tool.parameters.properties).toHaveProperty("localPath");
     expect(extension.tool.parameters.properties).toHaveProperty("remotePath");
+    expect(extension.tool.parameters.properties).toHaveProperty("files");
     await expect(call(extension.tool, {
       action: "upload",
       remotePath: "/tmp/remote.bin",
@@ -97,6 +98,20 @@ describe("ssh_session transfers", () => {
       remotePath: "/tmp/remote.bin",
       command: "true",
     }, ctx)).rejects.toThrow('Action "upload" does not accept command.');
+    await expect(call(extension.tool, {
+      action: "upload",
+      files: [],
+    }, ctx)).rejects.toThrow('Action "upload" requires localPath and remotePath, or non-empty files.');
+    await expect(call(extension.tool, {
+      action: "upload",
+      localPath: "local.bin",
+      remotePath: "/tmp/remote.bin",
+      files: [{ localPath: "other.bin", remotePath: "/tmp/other.bin" }],
+    }, ctx)).rejects.toThrow('Action "upload" accepts either localPath and remotePath or files, not both.');
+    await expect(call(extension.tool, {
+      action: "download",
+      files: [{ localPath: "", remotePath: "/tmp/remote.bin" }],
+    }, ctx)).rejects.toThrow('Action "download" files[0] requires a non-empty localPath.');
     expect(await fakeSSH.arguments()).toEqual([]);
   });
 
@@ -150,6 +165,83 @@ describe("ssh_session transfers", () => {
       commands: await fakeSSH.commands(),
       sshArguments: await fakeSSH.arguments(),
     })).not.toContain(secret);
+  });
+
+  it("uploads and downloads multiple files with one approval per batch", async () => {
+    const sources = ["batch-source-a.bin", "batch-source-b.bin"];
+    const remotes = [join(directory, "batch-remote-a.bin"), join(directory, "batch-remote-b.bin")];
+    const destinations = ["batch-destination-a.bin", "batch-destination-b.bin"];
+    const contents = [Buffer.from([0, 1, 2]), Buffer.from("batch-b")];
+    await Promise.all(sources.map((source, index) => writeFile(join(directory, source), contents[index])));
+    const confirmations: Array<[string, string]> = [];
+    const ctx = context(directory, async (title, message) => {
+      confirmations.push([title, message]);
+      return true;
+    });
+    await call(extension.tool, { action: "connect", host: "transfer-batch" }, ctx);
+
+    const uploaded = await call(extension.tool, {
+      action: "upload",
+      files: sources.map((localPath, index) => ({ localPath, remotePath: remotes[index] })),
+    }, ctx);
+    const downloaded = await call(extension.tool, {
+      action: "download",
+      files: destinations.map((localPath, index) => ({ localPath, remotePath: remotes[index] })),
+    }, ctx);
+
+    await Promise.all(destinations.map(async (destination, index) => {
+      expect(await readFile(join(directory, destination))).toEqual(contents[index]);
+    }));
+    const totalBytes = contents.reduce((total, content) => total + content.length, 0);
+    expect(uploaded).toMatchObject({
+      content: [{ text: `Uploaded 2 files to transfer-batch (${totalBytes} bytes).` }],
+      details: {
+        files: sources.map((localPath, index) => ({
+          localPath: join(directory, localPath),
+          remotePath: remotes[index],
+          bytes: contents[index].length,
+        })),
+      },
+    });
+    expect(downloaded).toMatchObject({
+      content: [{ text: `Downloaded 2 files from transfer-batch (${totalBytes} bytes).` }],
+      details: {
+        files: destinations.map((localPath, index) => ({
+          localPath: join(directory, localPath),
+          remotePath: remotes[index],
+          bytes: contents[index].length,
+        })),
+      },
+    });
+    expect(confirmations).toEqual([
+      ["Upload via SSH?", sources.map((localPath, index) =>
+        `File ${index + 1}:\nSource: ${JSON.stringify(join(directory, localPath))}\nDestination: ${JSON.stringify(`transfer-batch:${remotes[index]}`)}`,
+      ).join("\n\n")],
+      ["Download via SSH?", destinations.map((localPath, index) =>
+        `File ${index + 1}:\nSource: ${JSON.stringify(`transfer-batch:${remotes[index]}`)}\nDestination: ${JSON.stringify(join(directory, localPath))}`,
+      ).join("\n\n")],
+    ]);
+  });
+
+  it("stops a transfer batch at the first failure", async () => {
+    const ctx = context(directory);
+    await Promise.all([
+      writeFile(join(directory, "first.bin"), "first"),
+      writeFile(join(directory, "third.bin"), "third"),
+    ]);
+    await call(extension.tool, { action: "connect", host: "transfer-batch-failure" }, ctx);
+
+    await expect(call(extension.tool, {
+      action: "upload",
+      files: [
+        { localPath: "first.bin", remotePath: join(directory, "remote-first.bin") },
+        { localPath: "missing.bin", remotePath: join(directory, "remote-missing.bin") },
+        { localPath: "third.bin", remotePath: join(directory, "remote-third.bin") },
+      ],
+    }, ctx)).rejects.toThrow("Batch upload stopped after 1 of 3 files");
+
+    expect(await readFile(join(directory, "remote-first.bin"), "utf8")).toBe("first");
+    await expect(access(join(directory, "remote-third.bin"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("keeps adversarial local and remote paths literal", async () => {

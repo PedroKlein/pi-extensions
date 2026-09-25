@@ -19,10 +19,10 @@ The local machine must provide OpenSSH. Authentication uses configured SSH keys 
 | `status` | none | Reports the active host and approval mode, or that no session is connected. |
 | `disconnect` | none | Terminates the active SSH process. |
 | `sudo` | `command`, optional `timeout` | Runs the command through non-interactive `sudo` after checking or acquiring a remote sudo timestamp. |
-| `upload` | `localPath`, `remotePath`, optional `timeout` | Transfers one local file to the active host. Relative local paths resolve against Pi's current working directory. |
-| `download` | `remotePath`, `localPath`, optional `timeout` | Transfers one remote file to the local machine. Relative local paths resolve against Pi's current working directory. |
+| `upload` | `localPath` and `remotePath`, or `files`; optional `timeout` | Transfers one or more local files to the active host. `files` is an array of `{ localPath, remotePath }` pairs. Relative local paths resolve against Pi's current working directory. |
+| `download` | `remotePath` and `localPath`, or `files`; optional `timeout` | Transfers one or more remote files to the local machine. `files` is an array of `{ localPath, remotePath }` pairs. Relative local paths resolve against Pi's current working directory. |
 
-`timeout` is measured in milliseconds and defaults to 120,000. Connection setup has a 30,000 ms timeout.
+`timeout` is an optional limit in milliseconds. Commands and transfers wait indefinitely when it is omitted or set to `0`. An explicit positive timeout closes the SSH connection because the remote shell may still be running the timed-out operation and cannot safely accept another command. Connection setup always has a 30,000 ms timeout.
 
 ## Approval modes
 
@@ -30,7 +30,7 @@ Every connection presents a human choice between prompt and YOLO mode; the agent
 
 - connecting, showing the host and every supplied SSH option;
 - executing or running with `sudo`, showing the command;
-- uploading or downloading, showing the source and destination.
+- uploading or downloading, showing every source and destination in the request.
 
 YOLO mode replaces those repeated confirmations with one explicit warning during `connect`. Approving it authorizes commands, `sudo`, uploads, and downloads on that connection without further confirmation. Use it only when the agent and task are trusted: any of those operations may change the remote or local system without another human checkpoint.
 
@@ -59,7 +59,7 @@ One SSH process and one remote shell exist per Pi session. Remote commands and t
 
 `execute` and `sudo` combine stdout and stderr. Results are limited to 2,000 lines or 50 KiB. When output is truncated, the complete output is written to an owner-only temporary `output.txt` and its path is returned.
 
-Uploads and downloads encode bytes with base64 inside the existing shell; they do not create another SSH connection. Transfer results contain only the host, paths, and byte count. Uploads create or overwrite the remote file, and downloads create or overwrite the local file after a successful remote read. Parent directories must already exist. Relative remote paths resolve against the persistent remote shell's current directory. Download writes use Pi's file mutation queue.
+Uploads and downloads encode bytes with base64 inside the existing shell; they do not create another SSH connection. A `files` batch is processed sequentially and stops at the first failure; earlier files may already have completed. Transfer results contain only the host, paths, and byte counts. Uploads create or overwrite remote files, and downloads create or overwrite local files after successful remote reads. Parent directories must already exist. Relative remote paths resolve against the persistent remote shell's current directory. Download writes use Pi's file mutation queue.
 
 ## Sudo passwords
 

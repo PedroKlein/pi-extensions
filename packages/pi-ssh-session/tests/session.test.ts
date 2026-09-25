@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SSHSession } from "../src/session.js";
 import { type FakeSSH, installFakeSSH, waitFor } from "./helpers.js";
 
@@ -93,6 +93,19 @@ describe("SSHSession", () => {
 
     await expect(operation).rejects.toThrow("Failed to connect to slow-connect");
     await waitFor(fakeSSH.exits, "slow-connect");
+  });
+
+  it("does not impose a default command timeout", async () => {
+    await session.connect("no-timeout-host");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const operation = session.execute("sleep 0.05; printf alive");
+      await vi.advanceTimersByTimeAsync(120_001);
+      vi.useRealTimers();
+      await expect(operation).resolves.toEqual({ output: "alive", exitCode: 0 });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it.each([
