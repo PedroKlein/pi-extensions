@@ -1,5 +1,11 @@
 # @pedro_klein/pi-caffeinate
 
+## 0.2.1
+
+### Patch Changes
+
+- c7496fb: Ignore delayed inhibitor exit events after session shutdown so they cannot access an expired Pi extension context.
+
 ## 0.2.0
 
 ### Minor Changes
