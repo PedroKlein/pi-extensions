@@ -131,15 +131,7 @@ required to get started — defaults work out of the box.
 {
   "pi-repos": {
     "storageDir": "~/Dev/pi-repos",
-    "summaryModel": "backend-a/example-summary-model",
-    "hooks": {
-      "post-add": [
-        { "command": "gitnexus", "args": ["analyze", "--skip-agents-md", "--skip-skills", "{path}"], "timeout": 180000 }
-      ],
-      "post-sync": [
-        { "command": "gitnexus", "args": ["analyze", "--skip-agents-md", "--skip-skills", "{path}"], "timeout": 180000 }
-      ]
-    }
+    "summaryModel": "backend-a/example-summary-model"
   }
 }
 ```

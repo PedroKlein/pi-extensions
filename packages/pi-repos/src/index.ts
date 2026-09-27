@@ -259,7 +259,6 @@ export default function piRepos(pi: ExtensionAPI): void {
       group:   Type.Optional(Type.String({ description: "Group name to add this repo to" })),
       starred: Type.Optional(Type.Boolean({ description: "Pin as starred" })),
       tag:     Type.Optional(Type.String({ description: "Clone at a specific tag or ref (creates detached worktree)" })),
-      wiki:    Type.Optional(Type.Boolean({ description: "Also generate gitnexus wiki (LLM-heavy, slower)" })),
     }) as any,
     async execute(_id, params, _signal, _update, _ctx): Promise<ToolResult> {
       const p = params as any;
@@ -467,7 +466,7 @@ export default function piRepos(pi: ExtensionAPI): void {
       "- connect: add a directional relationship between two repos\n" +
       "- suggest: AI-suggest connections based on member TL;DRs (returns suggestions, does not persist)\n" +
       "- docs: list/read/write group-level documentation files\n" +
-      "- sync: fetch all member repos + trigger gitnexus group sync if available",
+      "- sync: fetch all member repos",
     promptSnippet: "repos_group — group CRUD, connections, docs, sync",
     parameters: Type.Object({
       action:      Type.String({ description: "create | add | remove | info | connect | suggest | docs | sync" }),
