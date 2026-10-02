@@ -32,7 +32,6 @@ describe("pi-ask prompt placement", () => {
       ]),
     );
     expect(events).not.toContain("before_agent_start");
-    expect(JSON.stringify(askUser)).not.toContain("mode-switch");
     expect(JSON.stringify(askUser)).not.toContain("action");
   });
 

@@ -14,6 +14,5 @@
   - Normalized `package.json`: proper `exports`, `files: ["src"]`, `pi.extensions`, `repository`, `homepage`
   - README rewritten with structured sections (Install → What it provides → Config → How it works → Development)
   - Added unit tests to every package (531 tests total across 14 packages)
-  - Fixed `pi.skills` manifest in pi-repos, `pi.prompts` manifest in pi-modes
   - Fixed pi-readonly-bash (was missing version, main, files, scripts)
   - Added `mkdir` to bash policy denylist (pi-readonly-bash bug fix)
