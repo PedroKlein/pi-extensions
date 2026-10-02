@@ -100,7 +100,6 @@ In `~/.pi/agent/settings.json`:
       "minerModel": "custom-provider/miner",
       "refinerModel": "custom-provider/refiner",
       "advisorModel": "custom-provider/advisor",
-      "extensions": ["npm:custom-provider-extension"],
       "journalDir": "~/.pi/memory/dream-journal",
       "sessionsDir": "~/.pi/agent/sessions",
       "skillsDir": "~/.agents/skills"
@@ -117,9 +116,8 @@ In `~/.pi/agent/settings.json`:
 | `dream.autoTrigger` | `true` | Auto-run Dream on session start |
 | `dream.minHoursSinceDream` | `24` | Minimum hours between Dream runs |
 | `dream.minSessionsSinceDream` | `5` | Minimum unprocessed sessions to trigger Dream |
-| `dream.extensions` | `[]` | Extensions explicitly loaded by isolated Dream child processes |
 
-Dream disables extension discovery in child processes. Add a provider extension to `dream.extensions` when a configured Dream model is registered by an extension rather than built into Pi.
+Dream resolves its configured models through the active Pi session, including virtual models and extension-registered providers.
 
 **Local project override** — put `"pi-memory": { "localPath": "./.pi/memory" }` in `.pi/settings.json` to use a project-local database instead of the global one.
 
@@ -130,7 +128,6 @@ Dream disables extension discovery in child processes. Add a provider extension 
 | `~/.pi/memory/memory.db` | SQLite database (facts, lessons, events, Dream state) |
 | `~/.pi/memory/category-map.json` | Project → lesson category mapping |
 | `~/.pi/memory/dream-journal/` | Timestamped markdown reports from Dream runs |
-| `~/.pi/memory/dream-sessions/` | Session files for consolidation subprocess |
 
 ## Development
 

@@ -28,7 +28,12 @@ import type {
 /** Minimal shape of the modelRegistry surface the resolver depends on. */
 export interface ResolverModelRegistry {
 	find(provider: string, modelId: string): unknown | undefined;
-	getProvider(provider: string): { id: string; name?: string } | undefined;
+	getProvider(provider: string): {
+		id: string;
+		name?: string;
+		stream?: (model: unknown, context: unknown, options: unknown) => unknown;
+		streamSimple?: (model: unknown, context: unknown, options: unknown) => unknown;
+	} | undefined;
 	getRegisteredProviderConfig(provider: string):
 		| { apiKey?: string; baseUrl?: string; api?: string; oauth?: unknown }
 		| undefined;

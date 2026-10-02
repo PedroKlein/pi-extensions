@@ -10,14 +10,9 @@ export interface FingerprintInput {
   systemPrompt: string;
   tools: FingerprintTool[];
   activeToolNames: string[];
-  mode?: string;
 }
 
-export type ExpectedTransitionSource =
-  | "mode-switch"
-  | "mcp-change"
-  | "reload"
-  | "resource-change";
+export type ExpectedTransitionSource = "reload" | "resource-change";
 
 export type FingerprintClassification =
   | "initial"
@@ -33,7 +28,6 @@ export interface FingerprintRecord {
   toolsChanged: boolean;
   classification: FingerprintClassification;
   likelySource: string;
-  mode: string | null;
 }
 
 export interface FingerprintReport {
@@ -43,7 +37,7 @@ export interface FingerprintReport {
 }
 
 export interface FingerprintStore {
-  expectTransition(source: ExpectedTransitionSource, mode?: string): void;
+  expectTransition(source: ExpectedTransitionSource): void;
   record(input: FingerprintInput): FingerprintRecord;
   report(): FingerprintReport;
 }
@@ -81,15 +75,19 @@ export function createFingerprintStore(
   initialHistory: FingerprintRecord[] = [],
 ): FingerprintStore {
   const history: FingerprintRecord[] = initialHistory.map((record) => ({
-    ...record,
+    sequence: record.sequence,
+    promptHash: record.promptHash,
+    toolHash: record.toolHash,
+    promptChanged: record.promptChanged,
+    toolsChanged: record.toolsChanged,
+    classification: record.classification,
+    likelySource: record.likelySource,
   }));
-  let expected:
-    | { source: ExpectedTransitionSource; mode: string | null }
-    | undefined;
+  let expected: ExpectedTransitionSource | undefined;
 
   return {
-    expectTransition(source, mode) {
-      expected = { source, mode: mode ?? null };
+    expectTransition(source) {
+      expected = source;
     },
     record(input) {
       const previous = history.at(-1);
@@ -106,7 +104,7 @@ export function createFingerprintStore(
         likelySource = "unchanged";
       } else if (previous && expected) {
         classification = "expected";
-        likelySource = expected.source;
+        likelySource = expected;
       } else if (previous) {
         classification = "unexpected";
         likelySource = promptChanged
@@ -124,7 +122,6 @@ export function createFingerprintStore(
         toolsChanged,
         classification,
         likelySource,
-        mode: input.mode ?? expected?.mode ?? previous?.mode ?? null,
       };
       history.push(record);
       expected = undefined;

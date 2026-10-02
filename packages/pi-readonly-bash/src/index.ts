@@ -33,6 +33,10 @@ export default function piReadonlyBash(pi: ExtensionAPI): void {
 			"Blocked: rm, mv, cp, mkdir, chmod, sed, awk, redirects (>), heredocs (<<), tee, xargs, eval, install/publish/deploy commands.",
 			"Output is truncated to last 2000 lines or 50KB. Use timeout for long-running commands.",
 		].join(" "),
+		exposure: "direct",
+		defaultActive: false,
+		constrainedSampling: { type: "json_schema", strict: "prefer" },
+		annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
 
 		renderCall(args: { command?: string; timeout?: number }, theme: any) {
 			const command = typeof args.command === "string" && args.command.trim()
@@ -55,6 +59,7 @@ export default function piReadonlyBash(pi: ExtensionAPI): void {
 						type: "text" as const,
 						text: `Readonly bash blocked: ${reason}. ${READ_ONLY_BASH_ALLOWED_HINT}`,
 					}],
+					details: undefined,
 					isError: true,
 				};
 			}

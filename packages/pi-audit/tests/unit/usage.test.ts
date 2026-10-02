@@ -14,6 +14,7 @@ describe("createUsageStore", () => {
       cacheWrite: 20,
       output: 30,
       reasoning: 5,
+      cost: 0.03,
       durationMs: 250,
       trigger: "automatic",
       status: "complete",
@@ -27,6 +28,7 @@ describe("createUsageStore", () => {
       cacheWrite: 0,
       output: 12,
       reasoning: 3,
+      cost: 0.02,
       durationMs: 100,
       trigger: "user",
       status: "complete",
@@ -40,6 +42,7 @@ describe("createUsageStore", () => {
         cacheWrite: 20,
         output: 42,
         reasoning: 8,
+        cost: 0.05,
         durationMs: 350,
       },
       bySource: {
@@ -50,6 +53,7 @@ describe("createUsageStore", () => {
           cacheWrite: 20,
           output: 42,
           reasoning: 8,
+          cost: 0.05,
           durationMs: 350,
         },
       },
@@ -63,6 +67,7 @@ describe("createUsageStore", () => {
           cacheWrite: 20,
           output: 30,
           reasoning: 5,
+          cost: 0.03,
           durationMs: 250,
           trigger: "automatic",
           status: "complete",
@@ -76,6 +81,7 @@ describe("createUsageStore", () => {
           cacheWrite: 0,
           output: 12,
           reasoning: 3,
+          cost: 0.02,
           durationMs: 100,
           trigger: "user",
           status: "complete",
@@ -87,7 +93,6 @@ describe("createUsageStore", () => {
   it.each([
     ["pi-memory", "dream-complete"],
     ["pi-subagents-watchdog", "watchdog-review"],
-    ["pi-modes", "mode-switch-continuation"],
     ["pi-core", "retry-complete"],
     ["pi-gateway", "retry-complete"],
     ["pi-auto-retry", "retry-complete"],
@@ -110,6 +115,22 @@ describe("createUsageStore", () => {
           : {}),
       }),
     ).toEqual(expect.objectContaining({ source, operation, status: "complete" }));
+  });
+
+  it("defaults legacy events without cost to zero", () => {
+    expect(parseUsageEvent({
+      source: "example-extension",
+      operation: "legacy",
+      model: "custom-provider/example-model",
+      input: 1,
+      cacheRead: 0,
+      cacheWrite: 0,
+      output: 1,
+      reasoning: 0,
+      durationMs: 10,
+      trigger: "automatic",
+      status: "complete",
+    })).toEqual(expect.objectContaining({ cost: 0 }));
   });
 
   it("rejects incomplete usage events", () => {

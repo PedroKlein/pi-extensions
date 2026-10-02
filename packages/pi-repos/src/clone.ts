@@ -16,7 +16,6 @@ import { join, basename } from "node:path";
 import type { RepoEntry, RepoType, ReposConfig, FreshnessInfo, WorktreeInfo } from "./types.js";
 import { getPaths, expandTilde } from "./config.js";
 import { loadIndex, saveIndex, resolveRepo, repoId, repoMetaDir, readSummary } from "./storage.js";
-import { generateTldr } from "./summarize.js";
 import { executeHooks, type HookVariables } from "./hooks.js";
 
 const execFile = promisify(execFileCb);
@@ -230,10 +229,6 @@ export async function cloneRepo(
   }
   saveIndex(config, index);
 
-  // Fire-and-forget: generate TL;DR in the background
-  const metaDir = repoMetaDir(config, entry);
-  generateTldr(config, entry, metaDir).catch(() => {});
-
   // Fire-and-forget: execute post-add hooks
   const hookVars: HookVariables = {
     path: existsSync(worktreeDir) ? worktreeDir : repoStoreDir,
@@ -375,10 +370,6 @@ export async function registerLocal(
     index.repos.push(entry);
   }
   saveIndex(config, index);
-
-  // Fire-and-forget: generate TL;DR in the background
-  const metaDir = repoMetaDir(config, entry);
-  generateTldr(config, entry, metaDir).catch(() => {});
 
   // Fire-and-forget: execute post-add hooks
   executeHooks(config, "post-add", {

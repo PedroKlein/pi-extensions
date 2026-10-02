@@ -40,12 +40,11 @@ export const RESET_SCHEDULES = ["utc-midnight", "utc-monthly-1st", "utc-hourly"]
 export const QUOTA_HINTS = ["daily-eur-cap"] as const;
 
 /**
- * The api id the gateway registers in pi's global api registry. Gateway models
- * are registered with `api: GATEWAY_API` so pi routes their requests to the
- * gateway transport (see transport.ts), which maps the neutral alias id to the
- * real backend model and delegates to that backend's real transport. This
- * indirection is required because pi sends `model.id` verbatim as the wire
- * model name — a neutral alias like `heavy-1` is not a real model name.
+ * The api id assigned to the gateway provider's custom stream. Gateway models
+ * use `api: GATEWAY_API`, whose stream maps the neutral alias id to the real
+ * backend model and delegates to that backend's registered provider. This is
+ * required because pi sends `model.id` verbatim as the wire model name — a
+ * neutral alias like `heavy-1` is not a real model name.
  */
 export const GATEWAY_API = "gateway";
 export type QuotaHint = (typeof QUOTA_HINTS)[number];

@@ -35,16 +35,10 @@ The agent calls `ask_user` with an array of questions. Pi renders the TUI form a
       label: string
       description?: string   // shown in detail panel when highlighted
       recommended?: boolean  // shows ★ badge
-      action?: {
-        type: "mode-switch"
-        mode: string         // e.g. "build", "plan", "ask"
-      }
     }>
   }>
 }
 ```
-
-Options with an `action` field automatically fire that action when the user selects and submits. The `mode-switch` action emits a `pi-ask:mode-switch` event (consumed by [pi-modes](../pi-modes)).
 
 ## UI layout
 

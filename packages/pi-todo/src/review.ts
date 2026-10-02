@@ -2,97 +2,16 @@
  * AI-powered PR review actions:
  * - Summary modal with structured sections and inline Q&A
  * - Clone & Review session creation
- * Optional BAML tier when pi-baml is available.
  */
 
-import { readFileSync } from "node:fs";
-import { complete } from "@earendil-works/pi-ai";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { BorderedLoader } from "@earendil-works/pi-coding-agent";
+import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
+import { BorderedLoader, SessionManager } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Input, Key, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { TUI } from "@earendil-works/pi-tui";
 import type { Task, PrMeta } from "./model.js";
 import { fetchPrDiff, clonePrBranch, parsePrUrl } from "./github.js";
-
-// Load BAML code at module level — non-fatal if file is missing
-let REVIEW_PR_BAML: string | null = null;
-try {
-	REVIEW_PR_BAML = readFileSync(new URL('./review_pr.baml', import.meta.url).pathname, 'utf-8');
-} catch {
-	// BAML file unavailable — reviewPrWithBaml will be a no-op
-}
-
-/** Structured PR review returned by BAML ReviewPR function. */
-interface PrReview {
-	what: string;
-	why: string;
-	scope: string;
-	risks: string[];
-	verdict: string;
-}
-
-/**
- * Parse a PR review using BAML (typed structured output) and render to markdown.
- * Returns null if BAML code is unavailable or the call fails — caller should fall back.
- */
-export async function reviewPrWithBaml(
-	meta: PrMeta,
-	diff: string,
-	baml: any,
-	modelRegistry: any,
-): Promise<string | null> {
-	if (!REVIEW_PR_BAML) return null;
-
-	const review: PrReview = await baml.execBaml(
-		REVIEW_PR_BAML,
-		'ReviewPR',
-		{
-			owner: meta.owner,
-			repo: meta.repo,
-			number: meta.number,
-			title: meta.title,
-			author: meta.author,
-			branch: meta.branch,
-			state: meta.state,
-			diff,
-		},
-		modelRegistry,
-		'standard',
-	);
-
-	return renderPrReview(review);
-}
-
-function renderPrReview(review: PrReview): string {
-	const lines: string[] = [];
-
-	lines.push('## What');
-	lines.push(review.what);
-	lines.push('');
-
-	lines.push('## Why');
-	lines.push(review.why);
-	lines.push('');
-
-	lines.push('## Scope');
-	lines.push(review.scope);
-	lines.push('');
-
-	lines.push('## Risks');
-	if (review.risks.length === 0) {
-		lines.push('No significant risks identified.');
-	} else {
-		for (const risk of review.risks) {
-			lines.push(`- ${risk}`);
-		}
-	}
-	lines.push('');
-
-	lines.push('## Verdict');
-	lines.push(review.verdict);
-
-	return lines.join('\n');
-}
+import { reportNestedUsage } from "./usage.js";
 
 // ── AI Summary Modal ──────────────────────────────────────────────────
 
@@ -151,7 +70,6 @@ export async function showAiSummaryModal(
 	task: Task,
 	pi: ExtensionAPI,
 	ctx: ExtensionContext,
-	baml?: any,
 ): Promise<void> {
 	if (!task.prMeta || !task.url) return;
 
@@ -188,25 +106,9 @@ export async function showAiSummaryModal(
 		const loader = new BorderedLoader(_tui, theme, "Generating AI summary...");
 		loader.onAbort = () => done(null);
 
-		(async () => {
-			// Tier 1: BAML — typed structured extraction
-			if (baml?.available) {
-				try {
-					const bamlSummary = await reviewPrWithBaml(meta, truncatedDiff, baml, ctx.modelRegistry);
-					if (bamlSummary) {
-						done(bamlSummary);
-						return;
-					}
-				} catch (err: any) {
-					ctx.ui.notify(`⚠ BAML ReviewPR failed: ${(err as Error).message}. Using fallback.`, 'warning');
-				}
-			}
-
-			// Tier 2: LLM via complete()
-			generateSummary(meta, truncatedDiff, ctx)
-				.then((s) => done(s))
-				.catch(() => done(null));
-		})();
+		generateSummary(meta, truncatedDiff, pi, ctx, loader.signal)
+			.then((s) => done(s))
+			.catch(() => done(null));
 
 		return loader;
 	});
@@ -226,6 +128,7 @@ export async function showAiSummaryModal(
 				meta,
 				diff: truncatedDiff,
 				initialSummary: summaryText,
+				pi,
 				ctx,
 			});
 		},
@@ -244,13 +147,12 @@ export async function showAiSummaryModal(
 async function generateSummary(
 	meta: PrMeta,
 	diff: string,
-	ctx: ExtensionContext
+	pi: ExtensionAPI,
+	ctx: ExtensionContext,
+	signal?: AbortSignal,
 ): Promise<string | null> {
 	const model = ctx.model;
 	if (!model) return null;
-
-	const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-	if (!auth?.ok || !auth.apiKey) return null;
 
 	const prompt = SUMMARY_PROMPT
 		.replace("{owner}", meta.owner)
@@ -261,37 +163,26 @@ async function generateSummary(
 		.replace("{branch}", meta.branch)
 		.replace("{state}", meta.state);
 
-	const response = await complete(
+	return completeText(
 		model,
-		{
-			systemPrompt: prompt,
-			messages: [{
-				role: "user",
-				content: [{ type: "text", text: `Here is the diff:\n\n${diff}` }],
-				timestamp: Date.now(),
-			}],
-		},
-		{ apiKey: auth.apiKey, headers: auth.headers }
+		ctx,
+		prompt,
+		`Here is the diff:\n\n${diff}`,
+		(response, durationMs) => reportNestedUsage(pi, "pr-summary", model, response, durationMs),
+		signal,
 	);
-
-	return response.content
-		.filter((c): c is { type: "text"; text: string } => c.type === "text")
-		.map((c) => c.text)
-		.join("\n")
-		.trim() || null;
 }
 
 async function generateQaAnswer(
 	meta: PrMeta,
 	diff: string,
 	question: string,
-	ctx: ExtensionContext
+	pi: ExtensionAPI,
+	ctx: ExtensionContext,
+	signal?: AbortSignal,
 ): Promise<string | null> {
 	const model = ctx.model;
 	if (!model) return null;
-
-	const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-	if (!auth?.ok || !auth.apiKey) return null;
 
 	const prompt = QA_PROMPT
 		.replace("{owner}", meta.owner)
@@ -300,22 +191,42 @@ async function generateQaAnswer(
 		.replace("{title}", meta.title)
 		.replace("{question}", question);
 
-	const response = await complete(
+	return completeText(
+		model,
+		ctx,
+		prompt,
+		`Diff:\n\n${diff}\n\nQuestion: ${question}`,
+		(response, durationMs) => reportNestedUsage(pi, "pr-question", model, response, durationMs),
+		signal,
+	);
+}
+
+async function completeText(
+	model: Model<Api>,
+	ctx: ExtensionContext,
+	systemPrompt: string,
+	text: string,
+	onResponse: (response: AssistantMessage, durationMs: number) => void,
+	signal?: AbortSignal,
+): Promise<string | null> {
+	const startedAt = Date.now();
+	const response = await ctx.modelRegistry.streamSimple(
 		model,
 		{
-			systemPrompt: prompt,
+			systemPrompt,
 			messages: [{
 				role: "user",
-				content: [{ type: "text", text: `Diff:\n\n${diff}\n\nQuestion: ${question}` }],
+				content: [{ type: "text", text }],
 				timestamp: Date.now(),
 			}],
 		},
-		{ apiKey: auth.apiKey, headers: auth.headers }
-	);
+		signal ? { signal } : {},
+	).result();
+	onResponse(response, Date.now() - startedAt);
 
 	return response.content
-		.filter((c): c is { type: "text"; text: string } => c.type === "text")
-		.map((c) => c.text)
+		.filter((part): part is { type: "text"; text: string } => part.type === "text")
+		.map((part) => part.text)
 		.join("\n")
 		.trim() || null;
 }
@@ -329,16 +240,18 @@ interface SummaryUIOptions {
 	meta: PrMeta;
 	diff: string;
 	initialSummary: string;
+	pi: ExtensionAPI;
 	ctx: ExtensionContext;
 }
 
 function createSummaryUI(opts: SummaryUIOptions) {
-	const { tui, theme, done, meta, diff, initialSummary, ctx } = opts;
+	const { tui, theme, done, meta, diff, initialSummary, pi, ctx } = opts;
 
 	let scrollOffset = 0;
 	let qaHistory: { question: string; answer: string }[] = [];
 	let askingQuestion = false;
 	let loadingAnswer = false;
+	let answerAbort: AbortController | null = null;
 	let cachedLines: string[] | undefined;
 
 	const questionInput = new Input();
@@ -352,20 +265,20 @@ function createSummaryUI(opts: SummaryUIOptions) {
 		}
 		askingQuestion = false;
 		loadingAnswer = true;
+		answerAbort = new AbortController();
 		refresh();
 
-		generateQaAnswer(meta, diff, q, ctx)
+		generateQaAnswer(meta, diff, q, pi, ctx, answerAbort.signal)
 			.then((answer) => {
 				if (answer) {
 					qaHistory.push({ question: q, answer });
 				}
-				loadingAnswer = false;
-				// Auto-scroll to bottom after new answer
 				scrollOffset = 99999;
-				refresh();
 			})
-			.catch(() => {
+			.catch(() => {})
+			.finally(() => {
 				loadingAnswer = false;
+				answerAbort = null;
 				refresh();
 			});
 	};
@@ -394,6 +307,7 @@ function createSummaryUI(opts: SummaryUIOptions) {
 		}
 
 		if (matchesKey(data, Key.escape) || data === "q") {
+			answerAbort?.abort();
 			done(undefined);
 			return;
 		}
@@ -595,7 +509,7 @@ Here is the diff:
 export async function startCloneReviewSession(
 	task: Task,
 	pi: ExtensionAPI,
-	ctx: any // ExtensionCommandContext — has newSession
+	ctx: ExtensionCommandContext,
 ): Promise<void> {
 	if (!task.prMeta || !task.url) return;
 
@@ -657,14 +571,20 @@ export async function startCloneReviewSession(
 
 	ctx.ui.notify(`Opening review session in ${result.cloneDir}`, "info");
 
-	await ctx.newSession({
-		cwd: result.cloneDir,
-		setup: async (sm: any) => {
-			sm.appendMessage({
-				role: "user",
-				content: [{ type: "text", text: reviewPrompt }],
-				timestamp: Date.now(),
-			});
-		},
+	const parentSession = ctx.sessionManager.getSessionFile();
+	const session = SessionManager.create(
+		result.cloneDir,
+		undefined,
+		parentSession ? { parentSession } : undefined,
+	);
+	session.appendMessage({
+		role: "user",
+		content: [{ type: "text", text: reviewPrompt }],
+		timestamp: Date.now(),
 	});
+	const sessionFile = session.getSessionFile();
+	if (!sessionFile) {
+		throw new Error("Failed to create review session");
+	}
+	await ctx.switchSession(sessionFile);
 }

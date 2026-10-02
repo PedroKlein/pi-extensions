@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { createFingerprintStore } from "../../src/fingerprints.js";
+import {
+  createFingerprintStore,
+  type FingerprintRecord,
+} from "../../src/fingerprints.js";
 
 const toolA = {
   name: "tool_a",
@@ -56,42 +59,39 @@ describe("createFingerprintStore", () => {
     });
   });
 
+  it("drops retired mode metadata from restored records", () => {
+    const store = createFingerprintStore([
+      {
+        sequence: 1,
+        promptHash: "prompt",
+        toolHash: "tools",
+        promptChanged: false,
+        toolsChanged: false,
+        classification: "initial",
+        likelySource: "initial",
+        mode: "build",
+      } as FingerprintRecord & { mode: string },
+    ]);
+
+    expect(store.report().current).not.toHaveProperty("mode");
+  });
+
   it.each([
-    {
-      name: "mode switch",
-      expectedSource: "mode-switch",
-      prepare: (store: ReturnType<typeof createFingerprintStore>) =>
-        store.expectTransition("mode-switch", "build"),
-      prompt: "build contract",
-      expectedClassification: "expected",
-      expectedMode: "build",
-    },
-    {
-      name: "MCP enable or disable",
-      expectedSource: "mcp-change",
-      prepare: (store: ReturnType<typeof createFingerprintStore>) =>
-        store.expectTransition("mcp-change", "ask"),
-      prompt: "ask contract with changed MCP tools",
-      expectedClassification: "expected",
-      expectedMode: "ask",
-    },
     {
       name: "reload",
       expectedSource: "reload",
       prepare: (store: ReturnType<typeof createFingerprintStore>) =>
-        store.expectTransition("reload", "ask"),
-      prompt: "reloaded ask contract",
+        store.expectTransition("reload"),
+      prompt: "reloaded stable contract",
       expectedClassification: "expected",
-      expectedMode: "ask",
     },
     {
       name: "resource change",
       expectedSource: "resource-change",
       prepare: (store: ReturnType<typeof createFingerprintStore>) =>
-        store.expectTransition("resource-change", "ask"),
-      prompt: "ask contract with refreshed resources",
+        store.expectTransition("resource-change"),
+      prompt: "stable contract with refreshed resources",
       expectedClassification: "expected",
-      expectedMode: "ask",
     },
     {
       name: "unexplained prompt drift",
@@ -99,7 +99,6 @@ describe("createFingerprintStore", () => {
       prepare: (_store: ReturnType<typeof createFingerprintStore>) => undefined,
       prompt: "unexplained dynamic line",
       expectedClassification: "unexpected",
-      expectedMode: "ask",
     },
   ])(
     "classifies $name",
@@ -108,14 +107,12 @@ describe("createFingerprintStore", () => {
       prepare,
       prompt,
       expectedClassification,
-      expectedMode,
     }) => {
       const store = createFingerprintStore();
       store.record({
-        systemPrompt: "ask contract",
+        systemPrompt: "stable contract",
         tools: [toolA],
         activeToolNames: ["tool_a"],
-        mode: "ask",
       });
 
       prepare(store);
@@ -123,14 +120,13 @@ describe("createFingerprintStore", () => {
         systemPrompt: prompt,
         tools: [toolA],
         activeToolNames: ["tool_a"],
-        mode: expectedMode,
       });
 
       expect(transition).toMatchObject({
         classification: expectedClassification,
         likelySource: expectedSource,
-        mode: expectedMode,
       });
+      expect(transition).not.toHaveProperty("mode");
       expect(store.report().previous?.sequence).toBe(1);
       expect(store.report().current?.sequence).toBe(2);
     },

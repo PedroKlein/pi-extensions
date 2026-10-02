@@ -4,18 +4,16 @@
  * Registers:
  * - `ask_user` tool: the agent calls this to ask the user structured questions
  * - `/answer` command: parses last assistant message into the same TUI
- *
- * Supports action options (e.g., mode-switch) that emit events via pi.events.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { BorderedLoader } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { StringEnum } from "@earendil-works/pi-ai";
+import { StringEnum, type Api, type AssistantMessage, type Model } from "@earendil-works/pi-ai";
 import { parseAssistantMessage } from "./parser.js";
 import { createAskUserUI } from "./ui.js";
-import type { AskUserResult, NormalizedQuestion, OptionAction, Question } from "./types.js";
+import type { AskUserResult, NormalizedQuestion, Question } from "./types.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -66,47 +64,36 @@ function appendGlobalNote(text: string, result: AskUserResult): string {
 	return text;
 }
 
-/** Collect all actions from selected options in a result */
-function collectActions(result: AskUserResult): OptionAction[] {
-	const actions: OptionAction[] = [];
-	if (result.cancelled) return actions;
-
-	for (const ans of result.answers) {
-		const q = result.questions.find((qq) => qq.id === ans.id);
-		if (!q || q.type === "text") continue;
-
-		for (const sel of ans.selections) {
-			const opt = q.options?.find((o) => o.value === sel.value);
-			if (opt?.action) {
-				actions.push(opt.action);
-			}
-		}
-	}
-	return actions;
-}
-
-/** Fire collected actions via the event bus */
-function fireActions(pi: ExtensionAPI, actions: OptionAction[]): void {
-	for (const action of actions) {
-		if (action.type === "mode-switch") {
-			pi.events.emit("pi-ask:mode-switch", { mode: action.mode });
-		}
-	}
+function reportNestedUsage(
+	pi: ExtensionAPI,
+	operation: string,
+	selectedModel: Model<Api>,
+	response: AssistantMessage,
+	durationMs: number,
+): void {
+	pi.events.emit("pi-audit:usage", {
+		source: "pi-ask",
+		operation,
+		model: `${selectedModel.provider}/${selectedModel.id}`,
+		input: response.usage.input,
+		cacheRead: response.usage.cacheRead,
+		cacheWrite: response.usage.cacheWrite,
+		output: response.usage.output,
+		reasoning: response.usage.reasoning ?? 0,
+		durationMs,
+		trigger: "user",
+		status: response.stopReason === "error" || response.stopReason === "aborted" ? "error" : "complete",
+		route: `${response.provider}/${response.model}`,
+	});
 }
 
 // ── Schema ───────────────────────────────────────────────────────────────────
-
-const ActionSchema = Type.Object({
-	type: StringEnum(["mode-switch"] as const, { description: "Action type" }),
-	mode: Type.Optional(Type.String({ description: "Target mode for mode-switch (e.g. 'build', 'plan', 'ask', 'brainstorm')" })),
-});
 
 const OptionSchema = Type.Object({
 	value: Type.String({ description: "Value identifier for this option" }),
 	label: Type.String({ description: "Display label" }),
 	description: Type.Optional(Type.String({ description: "Detailed description shown in side panel when option is highlighted. Always provide this." })),
 	recommended: Type.Optional(Type.Boolean({ description: "Mark as recommended (shows ★ badge)" })),
-	action: Type.Optional(ActionSchema),
 });
 
 const QuestionSchema = Type.Object({
@@ -135,18 +122,20 @@ export default function (pi: ExtensionAPI) {
 			"Use this tool whenever you need to ask the user to choose between options, confirm decisions, or provide input. " +
 			"Supports single-select (pick one), multi-select (pick many), and free-text questions. " +
 			"Users can annotate their selections with extra context and ask clarifying questions about options. " +
-			"Always provide a description for each option — it is shown in the detail panel when the option is highlighted. " +
-			"Options can include an 'action' field to trigger side effects like switching modes.",
+			"Always provide a description for each option — it is shown in the detail panel when the option is highlighted.",
 		promptSnippet: "Ask the user structured questions via an interactive TUI (single/multi select, free text, with per-option annotations)",
 		promptGuidelines: [
 			"ALWAYS use ask_user when you need user input on choices or decisions. Never list options as plain text and ask the user to pick.",
 			"Provide a meaningful 'description' for EVERY option — it is shown in a detail panel and helps the user decide.",
 			"Use 'recommended: true' on options you think are best, with reasoning in the description.",
 			"Use 'multi' type when several options could apply, 'single' when exactly one must be chosen, 'text' for open-ended questions.",
-			"To switch modes (e.g., from brainstorm to build), add action: { type: 'mode-switch', mode: 'build' } to the option. The mode switch happens automatically when the user selects it.",
 			"For questions that need context or explanation, present the context in your chat message before calling ask_user. Keep the 'prompt' field short (one line) — it can reference what you explained in chat. Do not cram analysis into prompt or context fields.",
 		],
 		parameters: AskUserParams,
+		exposure: "model-only",
+		executionMode: "sequential",
+		constrainedSampling: { type: "json_schema", strict: "prefer" },
+		annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
 
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			if (!ctx.hasUI) {
@@ -165,37 +154,25 @@ export default function (pi: ExtensionAPI) {
 				}
 			}
 
+			const selectedModel = ctx.model ?? null;
 			const result = await ctx.ui.custom<AskUserResult>((tui, theme, _kb, done) => {
 				return createAskUserUI({
 					tui,
 					theme,
 					done,
 					questions,
-					model: ctx.model ?? null,
+					model: selectedModel,
 					modelRegistry: ctx.modelRegistry,
+					onResponse: selectedModel
+						? (response, durationMs) => reportNestedUsage(pi, "option-explain", selectedModel, response, durationMs)
+						: undefined,
 				});
 			});
 
-			// Fire any actions from selected options
-			const actions = collectActions(result);
-			fireActions(pi, actions);
-
 			const text = appendGlobalNote(formatResultForLLM(result), result);
 
-			// Append action info to LLM output
-			const actionLines: string[] = [];
-			for (const action of actions) {
-				if (action.type === "mode-switch") {
-					actionLines.push(`[Mode switched to: ${action.mode}]`);
-				}
-			}
-
-			const fullText = actionLines.length > 0
-				? text + "\n\n" + actionLines.join("\n")
-				: text;
-
 			return {
-				content: [{ type: "text", text: fullText }],
+				content: [{ type: "text", text }],
 				details: result,
 			};
 		},
@@ -236,12 +213,8 @@ export default function (pi: ExtensionAPI) {
 					continue;
 				}
 				for (const sel of ans.selections) {
-					const opt = q?.options?.find((o) => o.value === sel.value);
 					const customTag = sel.custom ? theme.fg("dim", " (custom)") : "";
-					const actionTag = opt?.action?.type === "mode-switch"
-						? theme.fg("accent", ` → /${opt.action.mode}`)
-						: "";
-					lines.push(`${theme.fg("success", "✓ ")}${theme.fg("accent", label)}: ${sel.label}${customTag}${actionTag}`);
+					lines.push(`${theme.fg("success", "✓ ")}${theme.fg("accent", label)}: ${sel.label}${customTag}`);
 					if (sel.annotation) {
 						lines.push(theme.fg("dim", `    → "${sel.annotation}"`));
 					}
@@ -298,7 +271,13 @@ export default function (pi: ExtensionAPI) {
 				const loader = new BorderedLoader(tui, theme, `Extracting questions with ${ctx.model!.id}...`);
 				loader.onAbort = () => done(null);
 
-				parseAssistantMessage(lastText!, ctx.model!, ctx.modelRegistry, loader.signal)
+				parseAssistantMessage(
+					lastText!,
+					ctx.model!,
+					ctx.modelRegistry,
+					loader.signal,
+					(response, durationMs) => reportNestedUsage(pi, "question-extract", ctx.model!, response, durationMs),
+				)
 					.then((qs) => done(qs))
 					.catch(() => done(null));
 
@@ -311,6 +290,7 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			const normalized = normalizeQuestions(questions);
+			const selectedModel = ctx.model ?? null;
 
 			// Open the same TUI
 			const result = await ctx.ui.custom<AskUserResult>((tui, theme, _kb, done) => {
@@ -319,8 +299,11 @@ export default function (pi: ExtensionAPI) {
 					theme,
 					done,
 					questions: normalized,
-					model: ctx.model ?? null,
+					model: selectedModel,
 					modelRegistry: ctx.modelRegistry,
+					onResponse: selectedModel
+						? (response, durationMs) => reportNestedUsage(pi, "option-explain", selectedModel, response, durationMs)
+						: undefined,
 				});
 			});
 
@@ -329,22 +312,8 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			// Fire any actions from selected options
-			const actions = collectActions(result);
-			fireActions(pi, actions);
-
-			// Send as user message
 			const text = appendGlobalNote(formatResultForLLM(result), result);
-			const actionLines: string[] = [];
-			for (const action of actions) {
-				if (action.type === "mode-switch") {
-					actionLines.push(`[Mode switched to: ${action.mode}]`);
-				}
-			}
-			const fullText = actionLines.length > 0
-				? text + "\n\n" + actionLines.join("\n")
-				: text;
-			pi.sendUserMessage(fullText);
+			pi.sendUserMessage(text);
 		},
 	});
 }

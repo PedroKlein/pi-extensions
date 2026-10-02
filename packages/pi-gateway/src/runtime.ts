@@ -55,7 +55,7 @@ export function listRegistryProviders(registry: unknown): string[] {
 
 /** Harness-specific integration the runtime depends on. */
 export interface GatewayPlatform {
-	/** The request transport (already bound to the harness's api registry). */
+	/** The request router used by the harness's registered gateway provider. */
 	transport: GatewayTransport;
 	/** Register (or replace) the gateway provider in the harness. */
 	registerProvider: RegisterFn;
@@ -97,7 +97,6 @@ export function activateGateway(pi: GatewayHostApi, platform: GatewayPlatform): 
 	// Startup model selection happens before session_start. Queue a lightweight
 	// alias catalogue during extension load so configured gateway/* defaults can
 	// resolve; session_start replaces it with fully resolved backend metadata.
-	platform.transport.register();
 	try {
 		const aliases = loadAliasesConfig(ALIASES_PATH);
 		const models = composeBootstrapModels(aliases);
@@ -154,10 +153,6 @@ export function activateGateway(pi: GatewayHostApi, platform: GatewayPlatform): 
 
 	pi.on("session_start", async (_event: unknown, ctx: GatewayHostContext) => {
 		sessionContext = ctx;
-		// Register the gateway api transport once, before any provider
-		// registration, so the harness can resolve `api: "gateway"` when a gateway
-		// alias is selected.
-		platform.transport.register();
 		try {
 			await buildController(ctx);
 		} catch (err) {

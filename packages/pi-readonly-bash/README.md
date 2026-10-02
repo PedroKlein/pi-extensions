@@ -2,7 +2,7 @@
 
 Provides a `bash_readonly` tool that enforces a read-only policy — allows inspection commands (`ls`, `cat`, `grep`, `find`) but blocks anything that mutates state (`rm`, `mv`, redirects, pipes to files).
 
-I built this for use with pi-modes, where Ask and Brainstorm modes should let the agent inspect code without risking accidental changes.
+It supports restricted agents that need to inspect code without risking accidental changes.
 
 ## Install
 

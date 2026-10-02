@@ -9,11 +9,9 @@
       "packages/pi-adhd/src/index.ts",
       "packages/pi-alert/src/index.ts",
       "packages/pi-ask/src/index.ts",
-      "packages/pi-baml/src/index.ts",
       "packages/pi-focus/src/index.ts",
       "packages/pi-games/src/index.ts",
       "packages/pi-memory/src/index.ts",
-      "packages/pi-modes/src/index.ts",
       "packages/pi-readonly-bash/src/index.ts",
       "packages/pi-repos/src/index.ts",
       "packages/pi-ssh-session/src/index.ts",
@@ -24,7 +22,6 @@
       "packages/pi-todo/src/index.ts"
     ],
     "skills": [
-      "packages/pi-baml/skills",
       "packages/pi-repos/skills"
     ]
   },

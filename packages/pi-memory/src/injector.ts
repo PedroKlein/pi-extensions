@@ -83,7 +83,7 @@ export function buildDeterministicBlock(
   const selected: SemanticEntry[] = [];
 
   for (const entry of pinnedFacts) {
-    const candidate = renderPinnedBlock([...selected, entry]);
+    const candidate = renderWrappedPinnedBlock([...selected, entry]);
     if (encode(candidate).length > tokenBudget) break;
     selected.push(entry);
   }
@@ -91,7 +91,9 @@ export function buildDeterministicBlock(
   const omittedFacts = pinnedFacts.length - selected.length;
   const budgetExceeded = omittedFacts > 0;
   const text = selected.length > 0 ? renderPinnedBlock(selected) : "";
-  const estimatedTokens = text ? encode(text).length : 0;
+  const estimatedTokens = text
+    ? encode(renderWrappedPinnedBlock(selected)).length
+    : 0;
   const stats = store.stats();
 
   if (selected.length > 0) {
@@ -134,11 +136,13 @@ function matchesProjectScope(entry: SemanticEntry, slug: string): boolean {
 
 function renderPinnedBlock(entries: SemanticEntry[]): string {
   return [
-    "<memory>",
     "## Pinned Preferences",
     ...entries.map((entry) => `- ${formatPinnedFact(entry)}`),
-    "</memory>",
   ].join("\n");
+}
+
+function renderWrappedPinnedBlock(entries: SemanticEntry[]): string {
+  return `<memory>\n${renderPinnedBlock(entries)}\n</memory>`;
 }
 
 function buildDisplayLine(

@@ -17,7 +17,7 @@
  * - memory_lessons: list learned corrections
  * - memory_stats: show memory statistics
  */
-import type { ExtensionAPI, AgentToolResult } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, AgentToolResult, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { join } from "node:path";
@@ -33,9 +33,62 @@ import {
 } from "./consolidator.js";
 import { readDreamConfig } from "./dream/config.js";
 import { checkGates, executeDream } from "./dream/orchestrator.js";
+import { createModelCall } from "./model-call.js";
 
 type ToolResult = AgentToolResult<unknown>;
 function ok(text: string): ToolResult { return { content: [{ type: "text", text }], details: {} }; }
+function dataResult(text: string, structuredContent: NonNullable<ToolResult["structuredContent"]>): ToolResult {
+  return { content: [{ type: "text", text }], details: {}, structuredContent };
+}
+
+const MemoryFactSchema = Type.Object({
+  key: Type.String({ maxLength: 512 }),
+  value: Type.String({ maxLength: 4096 }),
+  confidence: Type.Number(),
+  source: Type.String({ maxLength: 100 }),
+});
+const MemorySearchOutput = Type.Object({
+  results: Type.Array(MemoryFactSchema, { maxItems: 100 }),
+  count: Type.Integer({ minimum: 0, maximum: 100 }),
+  truncated: Type.Boolean(),
+});
+const MemoryLessonSchema = Type.Object({
+  id: Type.String({ maxLength: 100 }),
+  rule: Type.String({ maxLength: 4096 }),
+  category: Type.String({ maxLength: 200 }),
+  source: Type.String({ maxLength: 100 }),
+  negative: Type.Boolean(),
+});
+const MemoryLessonsOutput = Type.Object({
+  lessons: Type.Array(MemoryLessonSchema, { maxItems: 100 }),
+  count: Type.Integer({ minimum: 0, maximum: 100 }),
+  truncated: Type.Boolean(),
+});
+const MemoryStatsOutput = Type.Object({
+  semantic: Type.Integer({ minimum: 0 }),
+  lessons: Type.Integer({ minimum: 0 }),
+  events: Type.Integer({ minimum: 0 }),
+  pinned: Type.Integer({ minimum: 0 }),
+  dbPath: Type.String({ maxLength: 4096 }),
+});
+
+const memoryQueryContract = {
+  exposure: "direct" as const,
+  executionMode: "sequential" as const,
+  constrainedSampling: { type: "json_schema" as const, strict: "prefer" as const },
+  annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+};
+const memoryMutationContract = {
+  exposure: "direct" as const,
+  executionMode: "sequential" as const,
+  constrainedSampling: { type: "json_schema" as const, strict: "prefer" as const },
+  annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+};
+
+function bounded(value: string, maxLength: number): { value: string; truncated: boolean } {
+  if (value.length <= maxLength) return { value, truncated: false };
+  return { value: value.slice(0, maxLength), truncated: true };
+}
 
 /**
  * Strip one layer of surrounding quotes from a string value.
@@ -58,9 +111,6 @@ function stripQuotes<T>(v: T): T {
   }
   return v;
 }
-
-/** Consolidation subprocess sessions go here — separate from main sessions to avoid dream feedback loop */
-const CONSOLIDATION_SESSIONS_DIR = join(homedir(), ".pi", "memory", "dream-sessions");
 
 const DEFAULT_MEMORY_DIR = join(homedir(), ".pi", "memory");
 const DEFAULT_DB_PATH = join(DEFAULT_MEMORY_DIR, "memory.db");
@@ -153,6 +203,15 @@ export default function (pi: ExtensionAPI) {
   let cachedCtx: any = null;
   let resolvedDbPath: string = DEFAULT_DB_PATH;
   let memoryConfig: MemoryConfig = readSettingsConfig();
+  let backgroundAbort = new AbortController();
+  const backgroundTasks = new Set<Promise<void>>();
+  const modelCall = (ctx: Pick<Parameters<typeof createModelCall>[0], "model" | "modelRegistry">) =>
+    createModelCall(ctx, (event) => pi.events.emit("pi-audit:usage", event));
+  const schedule = (work: Promise<unknown>): void => {
+    const observed = work.then(() => undefined, () => undefined);
+    backgroundTasks.add(observed);
+    void observed.finally(() => backgroundTasks.delete(observed));
+  };
 
   // Cached memory block — built once at session_start, injected every turn
   let cachedMemoryBlock: ContextBlock | null = null;
@@ -180,6 +239,9 @@ export default function (pi: ExtensionAPI) {
   // ─── Lifecycle ───────────────────────────────────────────────────
 
   pi.on("session_start", async (_event, ctx) => {
+    backgroundAbort.abort();
+    await Promise.allSettled([...backgroundTasks]);
+    backgroundAbort = new AbortController();
     try {
       sessionCwd = ctx.cwd;
       cachedCtx = ctx;
@@ -252,18 +314,21 @@ export default function (pi: ExtensionAPI) {
         if (dreamConfig.enabled && dreamConfig.autoTrigger) {
           if (checkGates(store, dreamConfig)) {
             ctx.ui.notify("Automatic Dream started", "info");
-            void executeDream(
+            schedule(executeDream(
               store,
               dreamConfig,
-              (cmd, args, opts) => pi.exec(cmd, args, opts),
+              modelCall(ctx),
               ctx.ui,
               {
                 manual: false,
+                signal: backgroundAbort.signal,
                 onUsageEvent: (event) => pi.events.emit("pi-audit:usage", event),
+              },
+            ).then((result) => {
+              if (!result.success && result.error !== "Model call aborted") {
+                ctx.ui.notify(`Dream failed: ${result.error || "unknown error"}`, "error");
               }
-            ).catch((err) => {
-              ctx.ui.notify(`Dream failed: ${err?.message?.slice(0, 100) || "unknown error"}`, "error");
-            });
+            }));
           }
         }
       } catch {
@@ -274,12 +339,12 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  pi.on("before_agent_start", async (event, _ctx) => {
-    if (!store || !cachedMemoryBlock || !cachedMemoryBlock.text) return;
-
-    return {
-      systemPrompt: `${event.systemPrompt}\n\n${cachedMemoryBlock.text}`,
-    };
+  pi.on("before_agent_start", (event) => {
+    if (cachedMemoryBlock?.text) {
+      event.systemPromptOptions.sections.memory = cachedMemoryBlock.text;
+    } else {
+      delete event.systemPromptOptions.sections.memory;
+    }
   });
 
   pi.on("agent_end", async (event, _ctx) => {
@@ -308,7 +373,7 @@ export default function (pi: ExtensionAPI) {
     if (memoryConfig.consolidationEnabled && pendingUserMessages.length >= 3) {
       ctx.ui.setStatus("pi-memory", "🧠 Consolidating memory...");
       try {
-        await consolidateSession();
+        await consolidateSession(ctx, "automatic");
       } catch {
         // Best-effort
       }
@@ -321,7 +386,9 @@ export default function (pi: ExtensionAPI) {
     cachedMemoryBlock = null;
   });
 
-  pi.on("session_shutdown", async () => {
+  pi.on("session_shutdown", async (_event, ctx) => {
+    backgroundAbort.abort();
+    await Promise.allSettled([...backgroundTasks]);
     if (!store) return;
 
     // Consolidate if enabled and we have enough conversation
@@ -330,7 +397,7 @@ export default function (pi: ExtensionAPI) {
         cachedCtx.ui.setStatus("pi-memory", "🧠 Consolidating memory...");
       }
       try {
-        await consolidateSession();
+        await consolidateSession(ctx, "automatic");
       } catch {
         // Best-effort — don't crash on shutdown
       }
@@ -342,7 +409,10 @@ export default function (pi: ExtensionAPI) {
 
   // ─── Consolidation ──────────────────────────────────────────────
 
-  async function consolidateSession(): Promise<void> {
+  async function consolidateSession(
+    ctx: Pick<ExtensionContext, "model" | "modelRegistry" | "signal">,
+    trigger: "automatic" | "user",
+  ): Promise<void> {
     if (!store) return;
 
     const input: ConsolidationInput = {
@@ -356,21 +426,19 @@ export default function (pi: ExtensionAPI) {
     const currentLessons = store.listLessons(undefined, 200).map(l => ({ rule: l.rule, category: l.category }));
 
     const prompt = buildConsolidationPrompt(input, currentFacts, currentLessons);
-    const model = memoryConfig.consolidationModel || "github-copilot/claude-sonnet-4.6";
     try {
-      const result = await pi.exec("pi", [
-        "-p", prompt,
-        "--print",
-        "--no-extensions",
-        "--model", model,
-        "--session-dir", CONSOLIDATION_SESSIONS_DIR,
-      ], {
-        timeout: 45_000,
-        cwd: sessionCwd,
+      const result = await modelCall(ctx)({
+        model: memoryConfig.consolidationModel,
+        systemPrompt: "",
+        prompt,
+        operation: "memory-consolidate",
+        trigger,
+        signal: ctx.signal,
+        timeoutMs: 45_000,
       });
 
-      if (result.code === 0 && result.stdout) {
-        const extracted = parseConsolidationResponse(result.stdout);
+      if (result) {
+        const extracted = parseConsolidationResponse(result);
         const applied = applyExtracted(store!, extracted, `session:${sessionId ?? "unknown"}`);
         if (applied.semantic + applied.lessons > 0) {
           console.error(`pi-memory: consolidated ${applied.semantic} facts, ${applied.lessons} lessons`);
@@ -393,23 +461,32 @@ export default function (pi: ExtensionAPI) {
       "Search before making assumptions about user workflow, coding style, or project architecture.",
       "On errors or unexpected behavior, search memory for the error domain BEFORE retrying.",
     ],
+    ...memoryQueryContract,
     parameters: Type.Object({
       query: Type.String({ description: "Search query" }),
-      limit: Type.Optional(Type.Number({ description: "Max results (default 10)" })),
+      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100, description: "Max results (default 10)" })),
     }),
+    outputSchema: MemorySearchOutput,
     async execute(_id, params, _signal, _update, _ctx) {
-      if (!store) return ok("Memory store not initialized");
+      if (!store) throw new Error("Memory store not initialized");
 
-      const results = store.searchSemantic(params.query, params.limit ?? 10);
-      if (results.length === 0) {
-        return ok("No matching memories found.");
-      }
+      const requestedLimit = params.limit ?? 10;
+      const found = store.searchSemantic(params.query, requestedLimit + 1);
+      let truncated = found.length > requestedLimit;
+      const results = found.slice(0, requestedLimit).map((entry) => {
+        const key = bounded(entry.key, 512);
+        const value = bounded(entry.value, 4096);
+        truncated ||= key.truncated || value.truncated;
+        return { key: key.value, value: value.value, confidence: entry.confidence, source: entry.source };
+      });
+      const structuredContent = { results, count: results.length, truncated };
+      const text = results.length === 0
+        ? "No matching memories found."
+        : results.map((result) =>
+          `${result.key}: ${result.value} (confidence: ${result.confidence}, source: ${result.source})`
+        ).join("\n");
 
-      const text = results.map(r =>
-        `${r.key}: ${r.value} (confidence: ${r.confidence}, source: ${r.source})`
-      ).join("\n");
-
-      return ok(text);
+      return dataResult(text, structuredContent);
     },
   });
 
@@ -417,6 +494,7 @@ export default function (pi: ExtensionAPI) {
     name: "memory_remember",
     label: "Memory Remember",
     description: "Store a fact, preference, or lesson in persistent memory. Use dotted keys like pref.editor, project.rosie.lang, tool.sed.usage. For corrections, use type='lesson'.",
+    ...memoryMutationContract,
     parameters: Type.Object({
       type: Type.String({ description: "'fact' for key-value, 'lesson' for a correction" }),
       key: Type.Optional(Type.String({ description: "Dotted key for facts (e.g. pref.commit_style)" })),
@@ -473,6 +551,7 @@ export default function (pi: ExtensionAPI) {
     name: "memory_forget",
     label: "Memory Forget",
     description: "Remove a fact or lesson from persistent memory.",
+    ...memoryMutationContract,
     parameters: Type.Object({
       type: Type.String(),
       key: Type.Optional(Type.String({ description: "Key for facts" })),
@@ -513,23 +592,40 @@ export default function (pi: ExtensionAPI) {
     promptGuidelines: [
       "Check memory_lessons when entering a domain where past mistakes were made (e.g., Go error handling, CI workflows, PR scope).",
     ],
+    ...memoryQueryContract,
     parameters: Type.Object({
       category: Type.Optional(Type.String({ description: "Filter by category" })),
-      limit: Type.Optional(Type.Number({ description: "Max results (default 50)" })),
+      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100, description: "Max results (default 50)" })),
     }),
+    outputSchema: MemoryLessonsOutput,
     async execute(_id, params, _signal, _update, _ctx) {
-      if (!store) return ok("Memory store not initialized");
+      if (!store) throw new Error("Memory store not initialized");
 
-      const lessons = store.listLessons(params.category, params.limit ?? 50);
-      if (lessons.length === 0) {
-        return ok("No lessons learned yet.");
-      }
+      const requestedLimit = params.limit ?? 50;
+      const found = store.listLessons(params.category, requestedLimit + 1);
+      let truncated = found.length > requestedLimit;
+      const lessons = found.slice(0, requestedLimit).map((entry) => {
+        const id = bounded(entry.id, 100);
+        const rule = bounded(entry.rule, 4096);
+        const category = bounded(entry.category, 200);
+        const source = bounded(entry.source, 100);
+        truncated ||= id.truncated || rule.truncated || category.truncated || source.truncated;
+        return {
+          id: id.value,
+          rule: rule.value,
+          category: category.value,
+          source: source.value,
+          negative: entry.negative,
+        };
+      });
+      const structuredContent = { lessons, count: lessons.length, truncated };
+      const text = lessons.length === 0
+        ? "No lessons learned yet."
+        : lessons.map((lesson) =>
+          `${lesson.negative ? "❌" : "✅"} [${lesson.category}] ${lesson.rule} (id: ${lesson.id.slice(0, 8)})`
+        ).join("\n");
 
-      const text = lessons.map(l =>
-        `${l.negative ? "❌" : "✅"} [${l.category}] ${l.rule} (id: ${l.id.slice(0, 8)})`
-      ).join("\n");
-
-      return ok(text);
+      return dataResult(text, structuredContent);
     },
   });
 
@@ -537,14 +633,17 @@ export default function (pi: ExtensionAPI) {
     name: "memory_stats",
     label: "Memory Stats",
     description: "Show memory statistics — how many facts, lessons, and events are stored.",
+    ...memoryQueryContract,
     parameters: Type.Object({}),
+    outputSchema: MemoryStatsOutput,
     async execute(_id, _params, _signal, _update, _ctx) {
-      if (!store) return ok("Memory store not initialized");
+      if (!store) throw new Error("Memory store not initialized");
 
       const stats = store.stats();
       const pinned = store.listPinned();
+      const structuredContent = { ...stats, pinned: pinned.length, dbPath: resolvedDbPath.slice(0, 4096) };
       const text = `Memory: ${stats.semantic} semantic facts (${pinned.length} pinned), ${stats.lessons} active lessons, ${stats.events} events logged\nDB: ${resolvedDbPath}`;
-      return ok(text);
+      return dataResult(text, structuredContent);
     },
   });
 
@@ -553,6 +652,7 @@ export default function (pi: ExtensionAPI) {
     label: "Memory Pin",
     description: "Pin or unpin a fact for always-on context injection. Pinned facts are injected into every turn's system prompt. Use sparingly — only for critical behavioral preferences that prevent repeated mistakes.",
     promptSnippet: "Pin/unpin facts for always-on context injection",
+    ...memoryMutationContract,
     parameters: Type.Object({
       action: Type.String({ description: "'pin' to pin, 'unpin' to unpin, 'list' to show all pinned" }),
       key: Type.Optional(Type.String({ description: "Fact key to pin/unpin (required for pin/unpin)" })),
@@ -609,12 +709,13 @@ export default function (pi: ExtensionAPI) {
         const result = await executeDream(
           store,
           dreamConfig,
-          (cmd, args, opts) => pi.exec(cmd, args, opts),
+          modelCall(ctx),
           ctx.ui,
           {
             manual: true,
+            signal: ctx.signal,
             onUsageEvent: (event) => pi.events.emit("pi-audit:usage", event),
-          }
+          },
         );
 
         if (!result.success) {
@@ -641,7 +742,7 @@ export default function (pi: ExtensionAPI) {
 
       ctx.ui.notify("Consolidating session memory...", "info");
       try {
-        await consolidateSession();
+        await consolidateSession(ctx, "user");
         const stats = store.stats();
         ctx.ui.notify(`Memory updated: ${stats.semantic} facts, ${stats.lessons} lessons`, "info");
       } catch (err: any) {

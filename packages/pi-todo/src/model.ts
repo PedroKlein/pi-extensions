@@ -114,17 +114,11 @@ export function createTask(
 	const type = partial?.type ?? "chore";
 	const effectiveRepoId = getTaskRepoId(type, repoId);
 	return {
-		id,
 		title,
 		status: "open",
-		type,
 		priority: "medium",
-		repoId: effectiveRepoId,
-		createdAt: now,
-		updatedAt: now,
 		...partial,
-		// Ensure these can't be overridden
-		id: id,
+		id,
 		type,
 		repoId: effectiveRepoId,
 		createdAt: partial?.createdAt ?? now,

@@ -2,6 +2,7 @@
  * Chat TUI overlay — side-chat with model picker, streaming, and exit actions.
  */
 
+import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey, visibleWidth, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { ChatEngine } from "./engine.js";
@@ -15,6 +16,7 @@ export interface ChatTUIOptions {
   initialMessage?: string | undefined;
   extraContext?: string | undefined;
   ctx: ExtensionContext;
+  onResponse?: (response: AssistantMessage, durationMs: number, model: Model<Api>) => void;
 }
 
 /**
@@ -27,7 +29,7 @@ export async function createChatTUI(
   const { ctx, initialMessage } = options;
   if (!ctx.hasUI) return;
 
-  const engine = new ChatEngine(ctx, options.extraContext);
+  const engine = new ChatEngine(ctx, options.extraContext, options.onResponse);
 
   await ctx.ui.custom<void>(
     (_tui, theme, _kb, done) => {

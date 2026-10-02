@@ -61,7 +61,7 @@ export function buildRepoSummaryContext(
 
   const suffix =
     `\n\n[Summary truncated to ${tokenBudget} tokens. ` +
-    `Use repos_info for the full summary and annotations.]`;
+    `Use codemode to call tools.repos_info for the full summary and annotations.]`;
   let low = 0;
   let high = tldr.length;
   let best = "";

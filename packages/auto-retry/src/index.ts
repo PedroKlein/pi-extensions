@@ -2,8 +2,8 @@
  * Auto-Retry Extension
  *
  * Detects when the LLM produces a malformed tool call (JSON parse error)
- * and automatically sends a follow-up user message asking it to retry
- * with smaller, simpler edits.
+ * and schedules one hidden continuation asking it to retry with smaller,
+ * simpler edits.
  *
  * The error surfaces as an AssistantMessage with:
  *   stopReason: "error"
@@ -43,6 +43,7 @@ export default function (pi: ExtensionAPI) {
 		startedAt: number;
 		model: string;
 	} | undefined;
+	let pendingMalformedRetry = false;
 
 	const modelName = (ctx: { model?: { provider?: string; id?: string } }): string =>
 		ctx.model?.provider && ctx.model?.id
@@ -71,12 +72,10 @@ export default function (pi: ExtensionAPI) {
 		}
 	});
 
-	// Detect malformed tool call errors and retry
-	pi.on("agent_end", async (event, ctx) => {
+	pi.on("agent_end", async (event) => {
 		const messages = event.messages;
 		if (!messages || messages.length === 0) return;
 
-		// Check the last assistant message
 		const last = messages[messages.length - 1];
 		if (last.role !== "assistant") return;
 
@@ -97,20 +96,20 @@ export default function (pi: ExtensionAPI) {
 			activeRetry = undefined;
 		}
 
-		const assistant = last as {
-			role: "assistant";
-			stopReason: string;
-			errorMessage?: string;
-		};
+		pendingMalformedRetry =
+			last.stopReason === "error" &&
+			Boolean(last.errorMessage) &&
+			isJsonParseError(last.errorMessage ?? "");
+	});
 
-		if (assistant.stopReason !== "error" || !assistant.errorMessage) return;
-		if (!isJsonParseError(assistant.errorMessage)) return;
+	pi.on("agent_before_settle", (event, ctx) => {
+		if (!pendingMalformedRetry) return;
+		pendingMalformedRetry = false;
+		if (event.outcome !== "error" || !event.context.canContinue) return;
 
-		// Enforce retry limit
 		if (consecutiveRetries >= MAX_RETRIES) {
-			const theme = ctx.ui.theme;
 			ctx.ui.notify(
-				theme.fg("error", `⛔ Auto-retry gave up after ${MAX_RETRIES} attempts — malformed JSON persists`),
+				ctx.ui.theme.fg("error", `⛔ Auto-retry gave up after ${MAX_RETRIES} attempts — malformed JSON persists`),
 				"error",
 			);
 			consecutiveRetries = 0;
@@ -145,14 +144,21 @@ export default function (pi: ExtensionAPI) {
 			attempt: consecutiveRetries,
 			route: model,
 		});
-
-		const theme = ctx.ui.theme;
 		ctx.ui.notify(
-			theme.fg("warning", `🔄 Malformed tool call JSON — auto-retrying (${consecutiveRetries}/${MAX_RETRIES})`),
+			ctx.ui.theme.fg("warning", `🔄 Malformed tool call JSON — auto-retrying (${consecutiveRetries}/${MAX_RETRIES})`),
 			"warning",
 		);
 
-		// Send as a new user message to trigger a fresh turn
-		pi.sendUserMessage(RETRY_MESSAGE, { deliverAs: "followUp" });
+		return {
+			entries: [
+				{
+					type: "custom_message" as const,
+					customType: "pi-auto-retry",
+					content: RETRY_MESSAGE,
+					display: false,
+				},
+			],
+			continue: true,
+		};
 	});
 }

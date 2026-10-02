@@ -16,7 +16,7 @@ pi install npm:@pedro_klein/pi-status
 - **External segment API** — other extensions register and update named segments in the bar via pi events
 - **LLM environment injection** — appends git branch, context percentage, and worktree warning to every agent system prompt
 - **Footer** — renders cwd, keybinding hints, and any extension status messages at the bottom of the TUI
-- **Title** — keeps the terminal title updated with model, mode (if pi-modes is active), and git branch
+- **Title** — keeps the terminal title updated with model and git branch
 
 ## Context Bar Segments
 

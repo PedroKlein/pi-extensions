@@ -20,6 +20,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AliasesConfig } from "../src/config.js";
 import { GatewayController } from "../src/controller.js";
 import type { RegistryLike } from "../src/session.js";
+import { createPiGatewayTransport } from "../src/transport.js";
 import { emptyState, readState, writeState } from "../src/state.js";
 
 const CFG: AliasesConfig = {
@@ -60,6 +61,20 @@ async function drain(): Promise<void> {
 	for (let i = 0; i < 10; i++) await new Promise((r) => setImmediate(r));
 }
 
+function source(events: unknown[]) {
+	return {
+		async *[Symbol.asyncIterator]() {
+			for (const event of events) yield event;
+		},
+	};
+}
+
+async function collect(stream: unknown): Promise<any[]> {
+	const events: any[] = [];
+	for await (const event of stream as AsyncIterable<any>) events.push(event);
+	return events;
+}
+
 let dir: string;
 let statePath: string;
 beforeEach(() => {
@@ -72,6 +87,73 @@ afterEach(() => {
 });
 
 describe("integration — full failover + heal cycle", () => {
+	it("retries a pre-output 402 through the next registered provider in the same request", async () => {
+		const transport = createPiGatewayTransport();
+		const registry = fakeRegistry();
+		const providerStream = vi.fn((model: { provider: string }) => {
+			const failed = {
+				role: "assistant",
+				content: [],
+				provider: model.provider,
+				model: model.provider === "openrouter" ? "or-heavy" : "copilot-heavy",
+				stopReason: "error",
+				errorStatus: 402,
+				errorMessage: "402: DAILY_CAP_EXCEEDED",
+			};
+			if (model.provider === "openrouter") {
+				return source([
+					{ type: "start", partial: failed },
+					{ type: "error", reason: "error", error: failed },
+				]);
+			}
+			const completed = {
+				...failed,
+				stopReason: "stop",
+				errorStatus: undefined,
+				errorMessage: undefined,
+				usage: {
+					input: 7,
+					output: 3,
+					cacheRead: 2,
+					cacheWrite: 0,
+					totalTokens: 12,
+					cost: { input: 0.01, output: 0.02, cacheRead: 0.001, cacheWrite: 0, total: 0.031 },
+				},
+			};
+			return source([
+				{ type: "start", partial: completed },
+				{ type: "text_delta", contentIndex: 0, delta: "ok", partial: completed },
+				{ type: "done", reason: "stop", message: completed },
+			]);
+		});
+		registry.getProvider = (name) => ({ id: name, stream: providerStream, streamSimple: providerStream });
+		const controller = new GatewayController({
+			aliases: CFG,
+			statePath,
+			registry,
+			register: vi.fn(),
+			notify: vi.fn(),
+			setRoutes: (routes) => transport.setRoutes(routes),
+			now: () => new Date("2025-01-15T12:00:00.000Z"),
+		});
+		transport.setFailureHandler((failure) => controller.handleTransportFailure(failure));
+		await controller.initialize();
+
+		const events = await collect(transport.streamSimple({ id: "heavy-1", api: "gateway" }, {}, {}));
+
+		expect(providerStream.mock.calls.map(([model]) => model.provider)).toEqual([
+			"openrouter",
+			"github-copilot",
+		]);
+		expect(events.map((event) => event.type)).toEqual(["start", "text_delta", "done"]);
+		expect(events.at(-1).message).toMatchObject({
+			provider: "gateway",
+			model: "heavy-1",
+			usage: { input: 7, output: 3, totalTokens: 12, cost: { total: 0.031 } },
+		});
+		expect(readState(statePath).unhealthyUntil.openrouter).toBeDefined();
+	});
+
 	it("cap hit on openrouter → swap to github-copilot; reset expires → swap back", async () => {
 		let now = new Date("2025-01-15T12:00:00.000Z");
 		const microtasks: Array<() => void> = [];

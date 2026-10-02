@@ -95,25 +95,13 @@ In Pi's `settings.json`:
 
 ## How it works
 
-**Adding a note:** `/note generate ADRs for auth decisions` runs AI classification (BAML if available, LLM otherwise, heuristic fallback), shows a preview form, you confirm.
+**Adding a note:** `/note generate ADRs for auth decisions` runs AI classification (LLM with a heuristic fallback), shows a preview form, you confirm.
 
 **Remembering:** Note sits in memory. Status bar shows the count. After 8 turns, it nudges you.
 
 **Using it:** Open the TUI, pick a note, press Enter. Prompt notes get injected as a user message (the agent responds). Reference notes get injected as context (the agent sees it silently). Reminder notes can't be injected at all.
 
 **Pinning:** Notes are ephemeral by default. Press `p` to save to `~/.pi/adhd/<org-repo>.json` (project-scoped) or `P` for `~/.pi/adhd/global.json`. Pinned notes reload next session.
-
-## Optional integrations
-
-If [pi-baml](https://github.com/PedroKlein/pi-baml) is installed, pi-adhd uses it for structured note classification via inline BAML (no `.baml` files needed). Otherwise it calls the LLM directly or falls back to a simple heuristic (everything defaults to "prompt").
-
-To install pi-baml alongside:
-```bash
-pi install npm:@pedro_klein/pi-baml
-pi install npm:@pedro_klein/pi-adhd
-```
-
-No hard dependencies on any other extension. pi-adhd works fine without pi-baml.
 
 ## Development
 

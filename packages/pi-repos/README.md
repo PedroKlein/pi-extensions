@@ -139,12 +139,13 @@ required to get started — defaults work out of the box.
 | Key | Default | Description |
 |-----|---------|-------------|
 | `storageDir` | `~/.local/share/pi-repos` | Root directory for all storage |
-| `summaryModel` | _(pi's default model)_ | Override model for TL;DR and group doc generation |
+| `summaryModel` | _(pi's active model)_ | Override model for TL;DR and group doc generation; resolved through the active session, including virtual models |
 | `hooks` | _(none)_ | Lifecycle hook commands (post-add, post-sync, pre-remove) |
 
 ### Lifecycle Hooks
 
 Hooks execute user-configured commands at lifecycle events, asynchronously (non-blocking).
+Git, ripgrep, and hook subprocesses remain intentionally: they perform repository/OS work, not model inference.
 Hook args support variable interpolation: `{path}`, `{id}`, `{branch}`, `{host}`, `{owner}`, `{name}`.
 
 | Event | When |

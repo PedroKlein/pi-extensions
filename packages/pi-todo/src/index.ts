@@ -15,26 +15,37 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { BorderedLoader } from "@earendil-works/pi-coding-agent";
 import { Key, Text, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { type Task, type PrMeta, type TodoState, GLOBAL_REPO_ID, WORK_REPO_ID, REVIEW_REPO_ID, shortRepoName, createTask, getCounters, getTasksForRepoWithGlobals, getTaskRepoId, getNextIdForScope } from "./model.js";
 import { loadState, saveState, initTodoStorage, getRepoSlug } from "./persistence.js";
 import { renderSnapshot } from "./snapshot.js";
 import { createBoardUI } from "./board.js";
-import { parseTaskWithBaml, parseTaskWithLLM, parseTaskFallback } from "./capture.js";
+import { parseTaskWithLLM, parseTaskFallback } from "./capture.js";
 import { parsePrUrl, discoverGitHubToken, fetchPrMeta, fallbackPrMeta } from "./github.js";
 import { showAiSummaryModal, startCloneReviewSession } from "./review.js";
+import { reportNestedUsage } from "./usage.js";
+
+const TodoParams = Type.Object({
+	action: StringEnum(["list", "add", "update", "complete", "delete"] as const),
+	id: Type.Optional(Type.Number({ description: "Task ID (required for update, complete, delete)" })),
+	title: Type.Optional(Type.String({ description: "Task title (required for add)" })),
+	description: Type.Optional(Type.String({ description: "Concise 2-3 sentence description" })),
+	type: Type.Optional(StringEnum(["feature", "bug", "chore", "research", "review", "personal"] as const)),
+	priority: Type.Optional(StringEnum(["low", "medium", "high"] as const)),
+	status: Type.Optional(StringEnum(["open", "blocked", "done"] as const)),
+	dueDate: Type.Optional(Type.String({ description: "Due date in YYYY-MM-DD format" })),
+	url: Type.Optional(Type.String({ description: "URL associated with the task (e.g. PR link)" })),
+	note: Type.Optional(Type.String({ description: "Additional note" })),
+	scope: Type.Optional(StringEnum(["repo", "all"] as const)),
+});
+
+type TodoDetails = { task?: Task; tasks?: Task[]; count?: number };
 
 export default function piTodo(pi: ExtensionAPI) {
 	let state: TodoState = { tasks: [] };
 	let currentRepoId = GLOBAL_REPO_ID;
 	let pendingCloneReviewTaskId: number | null = null;
-	let baml: any = null;
-
-	// Capture pi-baml library when available — stays null if pi-baml is not installed
-	pi.events.on('pi-baml:ready', (lib: any) => {
-		baml = lib;
-	});
 
 	// ── State helpers ─────────────────────────────────────────────────────
 
@@ -107,7 +118,7 @@ export default function piTodo(pi: ExtensionAPI) {
 
 	// ── AI Tool ───────────────────────────────────────────────────────────
 
-	pi.registerTool({
+	pi.registerTool<typeof TodoParams, TodoDetails>({
 		name: "todo",
 		label: "Todo",
 		description:
@@ -122,19 +133,11 @@ export default function piTodo(pi: ExtensionAPI) {
 			"For PR reviews, the user can use /todo <pr-url> to create review tasks. The board has AI summary (s), open in browser (o), and clone-review (c) actions.",
 			"Task types: feature, bug, chore, research, review (PR reviews), personal (non-work). Review and personal tasks are always global.",
 		],
-		parameters: Type.Object({
-			action: StringEnum(["list", "add", "update", "complete", "delete"] as const),
-			id: Type.Optional(Type.Number({ description: "Task ID (required for update, complete, delete)" })),
-			title: Type.Optional(Type.String({ description: "Task title (required for add)" })),
-			description: Type.Optional(Type.String({ description: "Concise 2-3 sentence description" })),
-			type: Type.Optional(StringEnum(["feature", "bug", "chore", "research", "review", "personal"] as const)),
-			priority: Type.Optional(StringEnum(["low", "medium", "high"] as const)),
-			status: Type.Optional(StringEnum(["open", "blocked", "done"] as const)),
-			dueDate: Type.Optional(Type.String({ description: "Due date in YYYY-MM-DD format" })),
-			url: Type.Optional(Type.String({ description: "URL associated with the task (e.g. PR link)" })),
-			note: Type.Optional(Type.String({ description: "Additional note" })),
-			scope: Type.Optional(StringEnum(["repo", "all"] as const)),
-		}),
+		parameters: TodoParams,
+		exposure: "model-only",
+		executionMode: "sequential",
+		constrainedSampling: { type: "json_schema", strict: "prefer" },
+		annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			switch (params.action) {
 				case "list": {
@@ -340,7 +343,7 @@ export default function piTodo(pi: ExtensionAPI) {
 				await pi.exec("open", [url], { timeout: 5000 });
 			},
 			onAiSummary: async (task: Task) => {
-				await showAiSummaryModal(task, pi, ctx, baml);
+				await showAiSummaryModal(task, pi, ctx);
 			},
 			onCloneReview: async (task: Task) => {
 				// Store task ID and trigger command (needs ExtensionCommandContext for newSession)
@@ -384,30 +387,17 @@ export default function piTodo(pi: ExtensionAPI) {
 
 			(async () => {
 				try {
-					let result: Partial<Task> | null = null;
+					const model = ctx.model;
+					const result = model
+						? await parseTaskWithLLM(
+							text,
+							model,
+							ctx.modelRegistry,
+							loader.signal,
+							(response, durationMs) => reportNestedUsage(pi, "task-capture", model, response, durationMs),
+						)
+						: null;
 
-					// Tier 1: BAML — typed structured extraction
-					if (baml?.available) {
-						try {
-							result = await parseTaskWithBaml(text, baml, ctx.modelRegistry);
-						} catch (err: any) {
-							ctx.ui.notify(`⚠ BAML ParseTask failed: ${(err as Error).message}. Using fallback.`, 'warning');
-							result = null;
-						}
-					}
-
-					// Tier 2: LLM
-					if (!result) {
-						const model = ctx.model;
-						if (model) {
-							const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-							if (auth?.ok && auth.apiKey) {
-								result = await parseTaskWithLLM(text, model, auth.apiKey, auth.headers);
-							}
-						}
-					}
-
-					// Tier 3: Heuristic fallback
 					done(result ?? parseTaskFallback(text));
 				} catch {
 					done(parseTaskFallback(text));
@@ -497,7 +487,14 @@ export default function piTodo(pi: ExtensionAPI) {
 		return ctx.ui.custom<Partial<Task> | null>(
 			(_tui, theme, _kb, done) => {
 				// Editable copy of parsed fields
-				const fields = {
+				const fields: {
+					title: string;
+					type: Task["type"];
+					priority: Task["priority"];
+					scope: string;
+					dueDate: string;
+					description: string;
+				} = {
 					title: parsed.title ?? originalText,
 					type: parsed.type ?? "chore",
 					priority: parsed.priority ?? "medium",
@@ -518,8 +515,8 @@ export default function piTodo(pi: ExtensionAPI) {
 				let editBuffer = "";
 				let cachedLines: string[] | undefined;
 
-				const TYPES = ["feature", "bug", "chore", "research", "review", "personal"];
-				const PRIORITIES = ["low", "medium", "high"];
+				const TYPES: Task["type"][] = ["feature", "bug", "chore", "research", "review", "personal"];
+				const PRIORITIES: Task["priority"][] = ["low", "medium", "high"];
 				const SCOPES = [...new Set([currentRepoId, GLOBAL_REPO_ID, WORK_REPO_ID])];
 
 				function invalidate() {
@@ -628,7 +625,9 @@ export default function piTodo(pi: ExtensionAPI) {
 							editing = false;
 							return;
 						}
-						fields[field] = editBuffer.trim();
+						if (field !== "type" && field !== "priority") {
+							fields[field] = editBuffer.trim();
+						}
 						editing = false;
 					} else if (matchesKey(data, Key.escape)) {
 						editing = false;

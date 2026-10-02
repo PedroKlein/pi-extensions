@@ -1,4 +1,6 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
+import { parseAssistantMessage } from "../../src/parser.js";
 
 // extractJSON is not exported — test it indirectly via the normalization output.
 // We test the parts of parser.ts that don't require a live LLM: the JSON extraction
@@ -111,6 +113,38 @@ function normalizeRaw(parsed: RawQuestion[], startIndex = 0) {
 				: undefined,
 		}));
 }
+
+describe("parseAssistantMessage", () => {
+	it("dispatches the selected model through ModelRuntime without resolving credentials", async () => {
+		const signal = new AbortController().signal;
+		const model = { provider: "router", id: "auto" } as never;
+		const response = {
+			content: [{ type: "text", text: '[{"id":"q1","prompt":"Choose?","type":"single"}]' }],
+			stopReason: "stop",
+		};
+		const streamSimple = vi.fn().mockReturnValue({
+			result: vi.fn().mockResolvedValue(response),
+		});
+		const modelRegistry = {
+			streamSimple,
+			getApiKeyAndHeaders: vi.fn(() => {
+				throw new Error("credential lookup must stay inside ModelRuntime");
+			}),
+		} as unknown as ModelRegistry;
+
+		await expect(parseAssistantMessage("Pick one", model, modelRegistry, signal)).resolves.toEqual([
+			expect.objectContaining({ id: "q1", prompt: "Choose?" }),
+		]);
+		expect(streamSimple).toHaveBeenCalledWith(
+			model,
+			expect.objectContaining({
+				systemPrompt: expect.stringContaining("You extract questions"),
+				messages: [expect.objectContaining({ role: "user" })],
+			}),
+			{ signal },
+		);
+	});
+});
 
 describe("question normalization", () => {
 	it("keeps valid questions", () => {

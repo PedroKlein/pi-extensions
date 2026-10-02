@@ -3,8 +3,7 @@
  * Used by the /answer command.
  */
 
-import { type Api, type Model } from "@earendil-works/pi-ai";
-import { complete } from "@earendil-works/pi-ai/compat";
+import { type Api, type AssistantMessage, type Model } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { Question } from "./types.js";
 
@@ -39,13 +38,10 @@ export async function parseAssistantMessage(
 	model: Model<Api>,
 	modelRegistry: ModelRegistry,
 	signal?: AbortSignal,
+	onResponse?: (response: AssistantMessage, durationMs: number) => void,
 ): Promise<Question[]> {
-	const auth = await modelRegistry.getApiKeyAndHeaders(model);
-	if (!auth.ok || !auth.apiKey) {
-		throw new Error(auth.ok ? `No API key for ${model.provider}` : auth.error);
-	}
-
-	const response = await complete(
+	const startedAt = Date.now();
+	const response = await modelRegistry.streamSimple(
 		model,
 		{
 			systemPrompt: SYSTEM_PROMPT,
@@ -57,8 +53,9 @@ export async function parseAssistantMessage(
 				},
 			],
 		},
-		{ apiKey: auth.apiKey, headers: auth.headers, signal },
-	);
+		signal ? { signal } : {},
+	).result();
+	onResponse?.(response, Date.now() - startedAt);
 
 	if (response.stopReason === "aborted") return [];
 

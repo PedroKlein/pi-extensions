@@ -27,12 +27,13 @@ function createAgentDir(settings: object): string {
 function createHarness(options?: {
   activeTools?: string[];
   branchEntries?: unknown[];
+  allTools?: Array<{ name: string; exposure: "direct" | "model-only" | "codemode" | "deferred" | "hidden" }>;
 }) {
   const handlers = new Map<string, Handler>();
   const commands = new Map<string, Command>();
-  const allTools = [
-    { name: "ssh_session" },
-    { name: "read" },
+  const allTools = options?.allTools ?? [
+    { name: "ssh_session", exposure: "model-only" as const },
+    { name: "read", exposure: "direct" as const },
   ];
   let activeTools = options?.activeTools ?? allTools.map((tool) => tool.name);
   let component: { handleInput?(data: string): void } | undefined;
@@ -167,5 +168,59 @@ describe("pi-tool-toggle", () => {
     await harness.handlers.get("input")?.({}, harness.ctx);
 
     expect(harness.getActiveTools()).toEqual(["read"]);
+  });
+
+  it("does not activate deferred or codemode tools while restoring an unrelated mask", async () => {
+    createAgentDir({
+      "pi-tool-toggle": {
+        defaultDisabled: ["repos_info", "memory_search", "ssh_session"],
+      },
+    });
+    const allTools = [
+      { name: "read", exposure: "direct" as const },
+      { name: "ssh_session", exposure: "model-only" as const },
+      { name: "memory_search", exposure: "codemode" as const },
+      { name: "repos_info", exposure: "deferred" as const },
+    ];
+    const harness = createHarness({ activeTools: ["read", "ssh_session"], allTools });
+    await harness.handlers.get("session_start")?.({}, harness.ctx);
+    expect(harness.getActiveTools()).toEqual(["read"]);
+
+    harness.ctx.sessionManager.getBranch = () => [{
+      type: "custom",
+      customType: "pi-tool-toggle",
+      data: { disabledTools: [] },
+    }];
+    await harness.handlers.get("session_tree")?.({}, harness.ctx);
+
+    expect(harness.getActiveTools()).toEqual(["read", "ssh_session"]);
+    expect(harness.getActiveTools()).not.toContain("memory_search");
+    expect(harness.getActiveTools()).not.toContain("repos_info");
+  });
+
+  it("shows registered, declared, callable, and deferred exposure states", async () => {
+    createAgentDir({});
+    const harness = createHarness({
+      activeTools: ["read", "memory_search"],
+      allTools: [
+        { name: "read", exposure: "direct" },
+        { name: "ask_user", exposure: "model-only" },
+        { name: "memory_search", exposure: "codemode" },
+        { name: "repos_info", exposure: "deferred" },
+        { name: "hidden_tool", exposure: "hidden" },
+      ],
+    });
+
+    await harness.commands.get("tools")?.("", harness.ctx);
+    const items = (harness.getComponent() as any)?.items ?? [];
+    const state = Object.fromEntries(items.map((item: any) => [item.label, item.currentValue]));
+
+    expect(state).toEqual({
+      read: "declared, callable",
+      ask_user: "registered",
+      memory_search: "declared, callable",
+      repos_info: "deferred, callable",
+      hidden_tool: "registered",
+    });
   });
 });

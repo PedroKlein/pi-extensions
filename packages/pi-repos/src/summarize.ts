@@ -2,32 +2,29 @@
  * pi-repos — TL;DR generation and repos_info logic.
  *
  * Strategy:
- * 1. Spawn `pi --print` with read-only tools + focused system prompt
- * 2. Prioritize README.md + AGENTS.md as primary context
- * 3. LLM explores the repo itself (reads files, follows structure)
- * 4. Store: tldr.md (≤10 lines), summary.md, rev.txt
+ * 1. Read bounded primary documentation from the repository
+ * 2. Generate a TL;DR and adaptive full summary through the session model runtime
+ * 3. Store: tldr.md (≤10 lines), summary.md, rev.txt
  *
- * All LLM work is background/async; structural fallback if pi binary unavailable.
+ * All LLM work is background/async; structural fallback if model work is unavailable.
  */
-import { execFile as execFileCb, spawn } from "node:child_process";
+import { execFile as execFileCb } from "node:child_process";
 import { promisify } from "node:util";
-import { existsSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { RepoEntry, ReposConfig, InfoOutput, Summary, FreshnessInfo, RepoGroup } from "./types.js";
 import { loadIndex, saveIndex, resolveRepo, repoMetaDir, readSummary, writeTldr, writeSummary, readAnnotations } from "./storage.js";
 import { getPaths } from "./config.js";
+import type { ModelCall } from "./model-call.js";
 
 const execFile = promisify(execFileCb);
 
 // ─── System Prompt ───────────────────────────────────────────────────────────
 
-const SUMMARIZER_SYSTEM_PROMPT = `You summarize code repositories. You have read-only access to the filesystem.
+const SUMMARIZER_SYSTEM_PROMPT = `You summarize code repositories from bounded repository context supplied by the caller.
 
-Your job:
-1. Explore the repository at the given path (read key files, check structure)
-2. Produce a clear, concise summary
-
-Focus on: what it does, key technologies, architecture patterns, and notable conventions.
+Produce a clear, concise summary focused on what the repository does, key technologies, architecture patterns, and notable conventions.
+Do not claim to have inspected files that are not in the supplied context.
 Do NOT produce preamble or meta-commentary — only the summary content itself.`;
 
 // ─── Head Resolution ─────────────────────────────────────────────────────────
@@ -83,6 +80,22 @@ function readPrimaryContext(repoPath: string): string {
       sections.push(`## AGENTS.md\n\n${content.slice(0, maxPerFile)}`);
     }
   }
+
+  const manifests = ["package.json", "go.mod", "Cargo.toml", "pyproject.toml", "pom.xml"];
+  for (const name of manifests) {
+    const path = join(repoPath, name);
+    if (!existsSync(path)) continue;
+    const content = readFileSync(path, "utf-8").trim();
+    if (content) sections.push(`## ${name}\n\n${content.slice(0, maxPerFile)}`);
+  }
+
+  try {
+    const entries = readdirSync(repoPath, { withFileTypes: true })
+      .filter((entry) => entry.name !== ".git" && entry.name !== "node_modules")
+      .slice(0, 100)
+      .map((entry) => `${entry.isDirectory() ? "d" : "f"} ${entry.name}`);
+    if (entries.length > 0) sections.push(`## Top-level structure\n\n${entries.join("\n")}`);
+  } catch { /* structural context is best-effort */ }
 
   return sections.length > 0 ? sections.join("\n\n---\n\n") : "";
 }
@@ -212,61 +225,24 @@ function buildAdaptiveSummaryPrompt(
 
   return (
     `Produce a structured markdown summary of the repository "${repoLabel}" at path: ${repoPath}\n\n` +
-    `APPROACH: First identify the most important files (README, main entry points, exports, manifests, config). ` +
-    `Read those files to understand what this repo provides. Then produce the summary.\n\n` +
+    `Use only the bounded repository context supplied below.\n\n` +
     `Focus your summary on:\n${focus}\n\n` +
     `Write from the perspective of someone who needs to USE or CONSUME this repo, not maintain it internally.\n` +
     `Be concise but thorough (200-500 words). Output ONLY the summary markdown.`
   );
 }
 
-// ─── pi --print Subprocess ───────────────────────────────────────────────────
+function isAbort(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
 
-/**
- * Run `pi --print --no-extensions --system-prompt <prompt> --model <model> <user_prompt>`.
- * Returns trimmed stdout, or null on error / timeout.
- */
-async function runPiPrint(model: string | undefined, systemPrompt: string, userPrompt: string): Promise<string | null> {
-  const args = [
-    "--print",
-    "--no-extensions",
-    "--system-prompt", systemPrompt,
-  ];
-  if (model) {
-    args.push("--model", model);
+async function callOrNull(modelCall: ModelCall, request: Parameters<ModelCall>[0]): Promise<string | null> {
+  try {
+    return await modelCall(request);
+  } catch (error) {
+    if (isAbort(error)) throw error;
+    return null;
   }
-  args.push(userPrompt);
-
-  return new Promise(resolve => {
-    let out = "";
-    let resolved = false;
-    let child: ReturnType<typeof spawn>;
-    try {
-      // detached: false ensures child is in our process group for cleanup
-      child = spawn("pi", args, { stdio: ["ignore", "pipe", "ignore"] });
-    } catch {
-      resolve(null);
-      return;
-    }
-
-    const done = (result: string | null) => {
-      if (resolved) return;
-      resolved = true;
-      resolve(result);
-    };
-
-    child.stdout!.on("data", (d: Buffer) => { out += d.toString(); });
-    child.on("close", code => done(code === 0 && out.trim().length > 0 ? out.trim() : null));
-    child.on("error", () => done(null));
-
-    // 3-minute timeout — SIGKILL to ensure no orphans
-    const timer = setTimeout(() => {
-      try { child.kill("SIGKILL"); } catch {}
-      done(null);
-    }, 180_000);
-
-    child.on("close", () => clearTimeout(timer));
-  });
 }
 
 // ─── Structural Fallback ─────────────────────────────────────────────────────
@@ -310,14 +286,17 @@ function structuralFallback(entry: RepoEntry, repoPath: string): string {
  * Generate TL;DR + full summary for a repo and persist to metaDir.
  *
  * Strategy:
- * 1. Build prompt with repo path + primary context (README, AGENTS.md)
- * 2. Spawn `pi --print` with read-only tools to let LLM explore
- * 3. Fall back to structural if pi is unavailable
+ * 1. Build a bounded prompt from README and AGENTS.md
+ * 2. Generate through the session model runtime
+ * 3. Fall back to structural metadata if model work is unavailable
  */
 export async function generateTldr(
   config: ReposConfig,
   entry: RepoEntry,
   metaDir: string,
+  modelCall: ModelCall,
+  signal?: AbortSignal,
+  trigger: "automatic" | "user" = "automatic",
 ): Promise<void> {
   mkdirSync(metaDir, { recursive: true });
 
@@ -328,7 +307,7 @@ export async function generateTldr(
   // Build user prompt with primary context from README + AGENTS.md
   const primaryContext = readPrimaryContext(repoPath);
   let tldrPrompt = `Summarize the repository "${repoLabel}" at path: ${repoPath}\n\n`;
-  tldrPrompt += `Explore the repository structure and key files to understand what it does.\n\n`;
+  tldrPrompt += `Use the supplied bounded repository context to understand what it does.\n\n`;
   tldrPrompt += `Produce your response in EXACTLY this format:\n`;
   tldrPrompt += `1. A TL;DR paragraph (max 10 lines) covering: what it does, key technologies, notable patterns.\n`;
   tldrPrompt += `2. On the very last line, output ONLY a type classification tag in this format:\n`;
@@ -339,7 +318,15 @@ export async function generateTldr(
     tldrPrompt += `\n\nHere is key documentation from the repository:\n\n${primaryContext}`;
   }
 
-  const tldrRaw = await runPiPrint(config.summaryModel, SUMMARIZER_SYSTEM_PROMPT, tldrPrompt);
+  const tldrRaw = await callOrNull(modelCall, {
+    model: config.summaryModel,
+    systemPrompt: SUMMARIZER_SYSTEM_PROMPT,
+    prompt: tldrPrompt,
+    operation: "repo-tldr",
+    trigger,
+    signal,
+    timeoutMs: 180_000,
+  });
 
   let detectedType: string | null = null;
   if (tldrRaw) {
@@ -357,8 +344,19 @@ export async function generateTldr(
   }
 
   // Full summary (two-pass, adaptive by repo type)
-  const summaryPrompt = buildAdaptiveSummaryPrompt(repoLabel, repoPath, detectedType, entry.autoTags);
-  const fullSummary = await runPiPrint(config.summaryModel, SUMMARIZER_SYSTEM_PROMPT, summaryPrompt);
+  const summaryPrompt = [
+    buildAdaptiveSummaryPrompt(repoLabel, repoPath, detectedType, entry.autoTags),
+    primaryContext ? `Here is key documentation from the repository:\n\n${primaryContext}` : "",
+  ].filter(Boolean).join("\n\n");
+  const fullSummary = await callOrNull(modelCall, {
+    model: config.summaryModel,
+    systemPrompt: SUMMARIZER_SYSTEM_PROMPT,
+    prompt: summaryPrompt,
+    operation: "repo-summary",
+    trigger,
+    signal,
+    timeoutMs: 180_000,
+  });
   if (fullSummary) {
     writeSummary(metaDir, fullSummary);
   }
@@ -392,6 +390,8 @@ export async function getRepoInfo(
   config: ReposConfig,
   identifier: string,
   regenerate = false,
+  modelCall?: ModelCall,
+  signal?: AbortSignal,
 ): Promise<InfoOutput> {
   const index = loadIndex(config);
   const entry = resolveRepo(index, identifier);
@@ -399,7 +399,8 @@ export async function getRepoInfo(
   const notesPath = join(metaDir, "notes.md");
 
   if (regenerate) {
-    await generateTldr(config, entry, metaDir);
+    if (!modelCall) throw new Error("Model runtime is required to regenerate repository summaries");
+    await generateTldr(config, entry, metaDir, modelCall, signal, "user");
   }
 
   // Read summary + staleness
@@ -572,6 +573,9 @@ function sanitizeMermaidId(id: string): string {
 export async function generateGroupDocs(
   config: ReposConfig,
   groupName: string,
+  modelCall: ModelCall,
+  signal?: AbortSignal,
+  trigger: "automatic" | "user" = "automatic",
 ): Promise<{ generated: string[]; errors: string[] }> {
   const { getGroupInfo: getGroup } = await import("./group.js");
   const group = getGroup(config, groupName);
@@ -591,7 +595,15 @@ export async function generateGroupDocs(
 
   for (const task of tasks) {
     try {
-      const result = await runPiPrint(config.summaryModel, GROUP_DOCS_SYSTEM_PROMPT, task.prompt);
+      const result = await callOrNull(modelCall, {
+        model: config.summaryModel,
+        systemPrompt: GROUP_DOCS_SYSTEM_PROMPT,
+        prompt: task.prompt,
+        operation: `group-doc-${task.file.replace(/\.md$/, "")}`,
+        trigger,
+        signal,
+        timeoutMs: 180_000,
+      });
       if (result) {
         writeFileSync(join(docsDir, task.file), result, "utf-8");
         generated.push(task.file);

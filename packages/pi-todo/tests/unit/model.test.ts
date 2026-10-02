@@ -180,6 +180,24 @@ describe("createTask", () => {
     const task = createTask(1, "Task", "myrepo", { updatedAt: 0 });
     expect(task.updatedAt).toBeGreaterThanOrEqual(before);
   });
+
+  it("does not let partial data replace identity or routing fields", () => {
+    const task = createTask(7, "Canonical title", "myrepo", {
+      id: 99,
+      title: "Imported title",
+      type: "personal",
+      repoId: "wrong-scope",
+      updatedAt: 0,
+    });
+
+    expect(task).toMatchObject({
+      id: 7,
+      title: "Imported title",
+      type: "personal",
+      repoId: GLOBAL_REPO_ID,
+    });
+    expect(task.updatedAt).toBeGreaterThan(0);
+  });
 });
 
 // ── getNextIdForScope ──────────────────────────────────────────────────────

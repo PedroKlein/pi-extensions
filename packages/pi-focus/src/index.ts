@@ -92,6 +92,10 @@ export default function piFocus(pi: ExtensionAPI): void {
       "Call focus_update when establishing a goal, detouring, starting expected-long work, waiting or blocked, returning from a detour, and completing or handing off.",
       "Keep focus_update text concise and suitable as a public progress note; provide a realistic expected_duration for expected-long work.",
     ],
+    exposure: "model-only",
+    executionMode: "sequential",
+    constrainedSampling: { type: "json_schema", strict: "prefer" },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     parameters: Type.Object({
       goal: Type.Optional(Type.String({ maxLength: 500, description: "Overall outcome; required on the first update" })),
       now: Type.Optional(nullableText),
@@ -205,11 +209,7 @@ export default function piFocus(pi: ExtensionAPI): void {
     refreshWidget();
   });
 
-  const onRuntimeEvent = pi.on as unknown as (
-    event: string,
-    handler: (event: unknown, ctx: ExtensionContext) => unknown,
-  ) => void;
-  onRuntimeEvent("agent_settled", () => {
+  pi.on("agent_settled", () => {
     settled = true;
     refreshWidget();
   });

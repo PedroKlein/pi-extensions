@@ -6,13 +6,13 @@
  * for keys that pi normalizes or that need translation.
  */
 
-import { matchesKey, Key } from "@earendil-works/pi-tui";
+import { matchesKey, type KeyId } from "@earendil-works/pi-tui";
 
 /**
  * Check if a key event matches a pi keybinding string like "ctrl+shift+g".
  * Uses pi's built-in matchesKey for consistency.
  */
-export function matchesPiKey(data: string, keyCombo: string): boolean {
+export function matchesPiKey(data: string, keyCombo: KeyId): boolean {
 	return matchesKey(data, keyCombo);
 }
 

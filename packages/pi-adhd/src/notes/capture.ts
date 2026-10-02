@@ -1,11 +1,11 @@
 /**
  * Note capture with AI classification.
  *
- * Tier 1: BAML (if pi-baml available)
- * Tier 2: Direct LLM call
- * Tier 3: Heuristic fallback
+ * Uses the active model when available, then falls back to heuristics.
  */
 
+import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
+import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { NoteCategory } from "./model.js";
 
 export interface ClassifiedNote {
@@ -15,10 +15,10 @@ export interface ClassifiedNote {
 }
 
 export interface ClassifyOptions {
-  /** pi-baml library (from EventBus) */
-  baml?: { available: boolean; execBaml?: <T>(code: string, fn: string, args: Record<string, unknown>) => Promise<T> };
-  /** Model for direct LLM classification */
-  model?: { id: string; apiKey: string; baseUrl?: string; headers?: Record<string, string> };
+  model?: Model<Api>;
+  modelRegistry?: ModelRegistry;
+  signal?: AbortSignal;
+  onResponse?: (response: AssistantMessage, durationMs: number) => void;
 }
 
 const CLASSIFY_PROMPT = `You are classifying a quick note the user wants to save for later.
@@ -43,88 +43,49 @@ Rules for the title:
 Note text:
 `;
 
-const BAML_CODE = `
-class ClassifiedNote {
-  title string @description("Short descriptive title, 3-6 words. Use key verb/noun from the note.")
-  category "prompt" | "reminder" | "reference" @description("prompt=action to do later, reminder=fact to keep in mind, reference=technical info or decision")
-}
-
-function ClassifyNote(text: string) -> ClassifiedNote {
-  client PiClient
-  prompt #"
-    Classify this quick note and give it a short title.
-
-    Categories:
-    - "prompt": Action to do later (generate ADRs, refactor module, ask about X)
-    - "reminder": Fact to keep in mind (CI broken, meeting at 3, don't forget X)
-    - "reference": Technical info or decision (auth uses JWT, chose approach B)
-
-    Title rules: 3-6 words, specific, use key verb/noun from the note.
-
-    Note: {{ text }}
-
-    {{ ctx.output_format }}
-  "#
-}
-`;
-
 /** Classify a note using the best available method */
 export async function classifyNote(text: string, options: ClassifyOptions = {}): Promise<ClassifiedNote> {
-  // Tier 1: BAML
-  if (options.baml?.available && options.baml.execBaml) {
+  if (options.model && options.modelRegistry) {
     try {
-      const result = await options.baml.execBaml<{ title: string; category: string }>(
-        BAML_CODE,
-        "ClassifyNote",
-        { text },
-      );
-      if (isValidCategory(result.category)) {
-        return { title: result.title.slice(0, 60), content: text, category: result.category };
-      }
-    } catch {
-      // Fall through to tier 2
-    }
-  }
-
-  // Tier 2: Direct LLM
-  if (options.model) {
-    try {
-      const result = await classifyWithLLM(text, options.model);
+      const result = await classifyWithLLM(text, options.model, options.modelRegistry, options.signal, options.onResponse);
       if (result) return result;
     } catch {
-      // Fall through to tier 3
+      // Fall through to heuristics
     }
   }
 
-  // Tier 3: Heuristic fallback
   return classifyHeuristic(text);
 }
 
 async function classifyWithLLM(
   text: string,
-  model: { id: string; apiKey: string; baseUrl?: string; headers?: Record<string, string> },
+  model: Model<Api>,
+  modelRegistry: ModelRegistry,
+  signal?: AbortSignal,
+  onResponse?: (response: AssistantMessage, durationMs: number) => void,
 ): Promise<ClassifiedNote | null> {
-  const url = (model.baseUrl ?? "https://api.openai.com/v1") + "/chat/completions";
-
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${model.apiKey}`,
-      ...(model.headers ?? {}),
+  const startedAt = Date.now();
+  const response = await modelRegistry.streamSimple(
+    model,
+    {
+      systemPrompt: CLASSIFY_PROMPT.trim(),
+      messages: [{
+        role: "user",
+        content: [{ type: "text", text }],
+        timestamp: Date.now(),
+      }],
     },
-    body: JSON.stringify({
-      model: model.id,
-      messages: [{ role: "user", content: CLASSIFY_PROMPT + text }],
-      temperature: 0,
-      max_tokens: 150,
-    }),
-  });
+    { ...(signal ? { signal } : {}), temperature: 0, maxTokens: 150 },
+  ).result();
+  onResponse?.(response, Date.now() - startedAt);
 
-  if (!response.ok) return null;
+  if (response.stopReason === "aborted" || response.stopReason === "error") return null;
 
-  const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
-  const content = data.choices?.[0]?.message?.content?.trim();
+  const content = response.content
+    .filter((part): part is { type: "text"; text: string } => part.type === "text")
+    .map((part) => part.text)
+    .join("\n")
+    .trim();
   if (!content) return null;
 
   // Try to extract JSON from the response (handle markdown code blocks)

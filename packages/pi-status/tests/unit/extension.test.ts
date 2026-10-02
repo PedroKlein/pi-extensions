@@ -37,6 +37,8 @@ describe("pi-status extension", () => {
 
     let contextTokens = 100_000;
     const widgets: string[][] = [];
+    const setTitle = vi.fn();
+    const setFooter = vi.fn();
     const ctx = {
       cwd: "/workspace/example",
       model: {
@@ -50,15 +52,38 @@ describe("pi-status extension", () => {
       ui: {
         theme: { fg: (_color: string, text: string) => text },
         setWidget: (_id: string, lines: string[]) => widgets.push(lines),
-        setTitle: vi.fn(),
-        setFooter: vi.fn(),
+        setTitle,
+        setFooter,
       },
     } as unknown as ExtensionContext;
 
     piStatus(pi);
+    expect(pi.events.on).not.toHaveBeenCalledWith(
+      "pi-modes:changed",
+      expect.any(Function),
+    );
     for (const handler of listeners.get("session_start") ?? []) {
       await handler({}, ctx);
     }
+
+    expect(setTitle).toHaveBeenLastCalledWith("pi - Example Model - main");
+    const footerFactory = setFooter.mock.calls[0]?.[0] as (
+      tui: { requestRender: () => void },
+      theme: { fg: (_color: string, text: string) => string },
+      data: {
+        onBranchChange: (handler: () => void) => () => void;
+        getExtensionStatuses: () => Map<string, string>;
+      },
+    ) => { render: (width: number) => string[] };
+    const footer = footerFactory(
+      { requestRender: vi.fn() },
+      { fg: (_color, text) => text },
+      {
+        onBranchChange: () => vi.fn(),
+        getExtensionStatuses: () => new Map(),
+      },
+    );
+    expect(footer.render(200).join("\n")).not.toContain("C-M-M mode");
 
     const applyPromptHooks = async (base: string): Promise<string> => {
       let prompt = base;

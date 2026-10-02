@@ -23,8 +23,6 @@ export default function piAudit(pi: ExtensionAPI): void {
   let fingerprints = createFingerprintStore();
   const usage = createUsageStore();
   const thresholdState = createContextThresholdState();
-  let currentMode: string | undefined;
-  let mcpStatusSignature: string | undefined;
   let driftWarningsIgnored = false;
   let currentContext: ExtensionContext | undefined;
   let explicitRetryScheduled = false;
@@ -68,25 +66,6 @@ export default function piAudit(pi: ExtensionAPI): void {
     pendingCoreRetry = false;
   });
 
-  pi.events.on("pi-modes:changed", (data: unknown) => {
-    if (!data || typeof data !== "object") return;
-    const mode = (data as Record<string, unknown>).mode;
-    if (typeof mode !== "string") return;
-    currentMode = mode;
-    fingerprints.expectTransition("mode-switch", mode);
-  });
-
-  pi.events.on("pi-mcp-adapter/status/v1", (data: unknown) => {
-    const signature = JSON.stringify(data);
-    if (
-      mcpStatusSignature !== undefined &&
-      mcpStatusSignature !== signature
-    ) {
-      fingerprints.expectTransition("mcp-change", currentMode);
-    }
-    mcpStatusSignature = signature;
-  });
-
   pi.on("session_start", (event, ctx) => {
     rememberContext(ctx);
     thresholdState.reset();
@@ -101,13 +80,13 @@ export default function piAudit(pi: ExtensionAPI): void {
     });
     fingerprints = createFingerprintStore(restored);
     if (event.reason === "reload") {
-      fingerprints.expectTransition("reload", currentMode);
+      fingerprints.expectTransition("reload");
     }
   });
 
   pi.on("resources_discover", (event) => {
     if (event.reason === "reload") {
-      fingerprints.expectTransition("resource-change", currentMode);
+      fingerprints.expectTransition("resource-change");
     }
   });
 
@@ -151,7 +130,6 @@ export default function piAudit(pi: ExtensionAPI): void {
       systemPrompt: event.systemPrompt,
       tools: pi.getAllTools(),
       activeToolNames: pi.getActiveTools(),
-      mode: currentMode,
     });
     pi.appendEntry("pi-audit:fingerprint", record);
     if (record.classification === "unexpected" && !driftWarningsIgnored) {
@@ -256,11 +234,7 @@ export default function piAudit(pi: ExtensionAPI): void {
     explicitRetryScheduled = false;
   });
 
-  const onRuntimeEvent = pi.on as unknown as (
-    event: string,
-    handler: (event: unknown, ctx: ExtensionContext) => unknown,
-  ) => void;
-  onRuntimeEvent("agent_settled", (_event, ctx) => {
+  pi.on("agent_settled", (_event, ctx) => {
     rememberContext(ctx);
     pendingCoreRetry = false;
     explicitRetryScheduled = false;
@@ -301,7 +275,6 @@ export default function piAudit(pi: ExtensionAPI): void {
           systemPrompt: ctx.getSystemPrompt(),
           tools: pi.getAllTools(),
           activeToolNames: pi.getActiveTools(),
-          mode: currentMode,
         });
       }
       const report = fingerprints.report();

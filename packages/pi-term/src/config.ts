@@ -1,15 +1,16 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import type { KeyId, OverlayAnchor, SizeValue } from "@earendil-works/pi-tui";
 
 export interface AppConfig {
 	name: string;
 	cmd: string;
-	key?: string;
-	width?: string;
-	height?: string;
-	anchor?: string;
-	closeKey?: string;
+	key?: KeyId;
+	width?: SizeValue;
+	height?: SizeValue;
+	anchor?: OverlayAnchor;
+	closeKey?: KeyId;
 	cwd?: string;
 	env?: Record<string, string>;
 	shell?: string;
@@ -22,11 +23,11 @@ export interface AppConfig {
 }
 
 export interface Defaults {
-	width: string;
-	height: string;
-	anchor: string;
+	width: SizeValue;
+	height: SizeValue;
+	anchor: OverlayAnchor;
 	shell: string;
-	closeKey: string;
+	closeKey: KeyId;
 	holdOnExit: boolean;
 	toggle: boolean;
 	notify: boolean;
@@ -41,11 +42,11 @@ export interface PiTermConfig {
 export interface ResolvedApp {
 	name: string;
 	cmd: string;
-	key?: string;
-	width: string;
-	height: string;
-	anchor: string;
-	closeKey: string;
+	key?: KeyId;
+	width: SizeValue;
+	height: SizeValue;
+	anchor: OverlayAnchor;
+	closeKey: KeyId;
 	cwd?: string;
 	env?: Record<string, string>;
 	shell: string;

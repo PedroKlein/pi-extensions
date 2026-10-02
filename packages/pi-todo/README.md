@@ -101,11 +101,7 @@ Requires a GitHub token discoverable via `gh auth token`, `GITHUB_TOKEN`, or
 
 ## AI task capture
 
-`/todo <text>` uses a three-tier strategy to parse natural language into structured tasks:
-
-1. **BAML** (if `@pedro_klein/pi-baml` is installed) — typed structured extraction
-2. **LLM** — call Pi's current model with a structured prompt
-3. **Heuristics** — keyword matching fallback (always available)
+`/todo <text>` uses Pi's current model to parse natural language into a structured task, with keyword matching as a fallback.
 
 The parsed task shows in a preview modal where you can edit fields before saving.
 Relative dates ("next Friday", "in 2 weeks") are resolved to `YYYY-MM-DD`.
@@ -174,13 +170,6 @@ automatically from the PR URL host.
 ## Configuration
 
 No required configuration — works out of the box with git repos.
-
-**Optional integrations:**
-
-- `@pedro_klein/pi-baml` — enables BAML tier for AI task capture and PR review summaries. Install separately:
-  ```bash
-  pi install npm:@pedro_klein/pi-baml
-  ```
 
 ## Development
 

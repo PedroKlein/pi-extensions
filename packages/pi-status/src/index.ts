@@ -226,10 +226,7 @@ export default function piStatus(pi: ExtensionAPI): void {
 	function updateTitle(ctx: ExtensionContext): void {
 		const model = shortModel(ctx.model);
 		const branch = gitBranch ? ` - ${gitBranch}` : "";
-		// Mode segment provides mode name via title event if available
-		const modeLabel = (segments.get("mode") as any)?._titleLabel ?? "";
-		const modePrefix = modeLabel ? `${modeLabel} - ` : "";
-		ctx.ui.setTitle(`pi - ${modePrefix}${model}${branch}`);
+		ctx.ui.setTitle(`pi - ${model}${branch}`);
 	}
 
 	// ─── Footer ────────────────────────────────────────────────────────
@@ -244,7 +241,6 @@ export default function piStatus(pi: ExtensionAPI): void {
 					const sep = theme.fg("dim", " │ ");
 					const parts: string[] = [];
 					parts.push(theme.fg("muted", ctx.cwd));
-					parts.push(theme.fg("dim", "C-M-M") + theme.fg("muted", " mode"));
 					parts.push(theme.fg("dim", "S-Tab") + theme.fg("muted", " think"));
 					parts.push(theme.fg("dim", "C-L") + theme.fg("muted", " model"));
 
@@ -287,11 +283,5 @@ export default function piStatus(pi: ExtensionAPI): void {
 		latestCtx = ctx;
 		refresh();
 		updateTitle(ctx);
-	});
-
-	// Listen for mode changes to update title
-	pi.events.on("pi-modes:changed", () => {
-		if (!latestCtx) return;
-		updateTitle(latestCtx);
 	});
 }

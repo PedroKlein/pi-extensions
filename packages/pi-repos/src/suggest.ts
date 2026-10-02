@@ -4,10 +4,10 @@
  * Reads TL;DRs of all group members and uses LLM to suggest
  * directional relationships between them.
  */
-import { spawn } from "node:child_process";
 import type { ReposConfig, Connection, ConnectionSuggestion } from "./types.js";
 import { loadIndex, resolveRepo, repoId, repoMetaDir, readSummary } from "./storage.js";
 import { getGroupInfo } from "./group.js";
+import type { ModelCall } from "./model-call.js";
 
 // ─── Prompt ──────────────────────────────────────────────────────────────────
 
@@ -73,49 +73,6 @@ Output ONLY valid JSON array of objects with fields: from, to, relationship, des
 No markdown fencing, no preamble.`;
 }
 
-// ─── LLM Call ────────────────────────────────────────────────────────────────
-
-async function runPiPrint(model: string | undefined, prompt: string): Promise<string | null> {
-  const args = [
-    "--print",
-    "--no-extensions",
-    "--system-prompt", "You are a code architecture analyst. Output only valid JSON.",
-  ];
-  if (model) {
-    args.push("--model", model);
-  }
-  args.push(prompt);
-
-  return new Promise(resolve => {
-    let out = "";
-    let resolved = false;
-    let child: ReturnType<typeof spawn>;
-    try {
-      child = spawn("pi", args, { stdio: ["ignore", "pipe", "ignore"] });
-    } catch {
-      resolve(null);
-      return;
-    }
-
-    const done = (result: string | null) => {
-      if (resolved) return;
-      resolved = true;
-      resolve(result);
-    };
-
-    child.stdout!.on("data", (d: Buffer) => { out += d.toString(); });
-    child.on("close", code => done(code === 0 && out.trim().length > 0 ? out.trim() : null));
-    child.on("error", () => done(null));
-
-    const timer = setTimeout(() => {
-      try { child.kill("SIGKILL"); } catch {}
-      done(null);
-    }, 120_000);
-
-    child.on("close", () => clearTimeout(timer));
-  });
-}
-
 // ─── Public API ──────────────────────────────────────────────────────────────
 
 /**
@@ -125,6 +82,8 @@ async function runPiPrint(model: string | undefined, prompt: string): Promise<st
 export async function suggestConnections(
   config: ReposConfig,
   groupName: string,
+  modelCall: ModelCall,
+  signal?: AbortSignal,
 ): Promise<ConnectionSuggestion[]> {
   const group = getGroupInfo(config, groupName);
   const index = loadIndex(config);
@@ -153,7 +112,21 @@ export async function suggestConnections(
     group.connections,
   );
 
-  const raw = await runPiPrint(config.summaryModel, prompt);
+  let raw: string | null;
+  try {
+    raw = await modelCall({
+      model: config.summaryModel,
+      systemPrompt: "You are a code architecture analyst. Output only valid JSON.",
+      prompt,
+      operation: "group-suggest",
+      trigger: "user",
+      signal,
+      timeoutMs: 120_000,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") throw error;
+    return [];
+  }
   if (!raw) return [];
 
   // Parse JSON response (handle possible markdown code fencing)

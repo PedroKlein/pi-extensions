@@ -86,8 +86,8 @@ describe("registerGatewayProvider — happy path", () => {
 	});
 });
 
-describe("registerGatewayProvider — provider dispatch fallback", () => {
-	it("still registers routes when the provider enrichment lookup throws", async () => {
+describe("registerGatewayProvider — registered provider dispatch", () => {
+	it("does not register an unusable global-API fallback when provider lookup fails", async () => {
 		const aliases: AliasesConfig = {
 			fallbackChain: ["openrouter"],
 			backends: {
@@ -112,26 +112,17 @@ describe("registerGatewayProvider — provider dispatch fallback", () => {
 		};
 		const register = vi.fn();
 		const setRoutes = vi.fn();
-		const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
-		try {
-			await expect(registerGatewayProvider({
-				aliases,
-				state: emptyState(),
-				registry,
-				register,
-				setRoutes,
-			})).resolves.toMatchObject({ modelsRegistered: 1 });
+		await expect(registerGatewayProvider({
+			aliases,
+			state: emptyState(),
+			registry,
+			register,
+			setRoutes,
+		})).rejects.toThrow("registry temporarily unavailable");
 
-			expect(register).toHaveBeenCalledTimes(1);
-			const target = setRoutes.mock.calls[0][0]["heavy-1"];
-			expect(target.realProvider).toBeUndefined();
-			expect(warn).toHaveBeenCalledWith(
-				expect.stringContaining("provider lookup failed: registry temporarily unavailable"),
-			);
-		} finally {
-			warn.mockRestore();
-		}
+		expect(register).not.toHaveBeenCalled();
+		expect(setRoutes).not.toHaveBeenCalled();
 	});
 });
 

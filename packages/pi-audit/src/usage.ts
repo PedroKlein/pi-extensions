@@ -11,6 +11,7 @@ export interface UsageEvent {
   cacheWrite: number;
   output: number;
   reasoning: number;
+  cost?: number;
   durationMs: number;
   trigger: UsageTrigger;
   status: UsageStatus;
@@ -49,6 +50,12 @@ export function parseUsageEvent(value: unknown): UsageEvent | undefined {
     return undefined;
   }
   if (
+    event.cost !== undefined &&
+    (typeof event.cost !== "number" || !Number.isFinite(event.cost) || event.cost < 0)
+  ) {
+    return undefined;
+  }
+  if (
     event.retryLayer !== undefined &&
     event.retryLayer !== "core" &&
     event.retryLayer !== "gateway" &&
@@ -67,7 +74,7 @@ export function parseUsageEvent(value: unknown): UsageEvent | undefined {
   if (event.route !== undefined && typeof event.route !== "string") {
     return undefined;
   }
-  return { ...event } as unknown as UsageEvent;
+  return { ...event, cost: event.cost ?? 0 } as unknown as UsageEvent;
 }
 
 export interface UsageAggregate {
@@ -77,6 +84,7 @@ export interface UsageAggregate {
   cacheWrite: number;
   output: number;
   reasoning: number;
+  cost: number;
   durationMs: number;
 }
 
@@ -98,6 +106,7 @@ const emptyTotals = (): Omit<UsageAggregate, "eventCount"> => ({
   cacheWrite: 0,
   output: 0,
   reasoning: 0,
+  cost: 0,
   durationMs: 0,
 });
 
@@ -110,6 +119,7 @@ function addUsage(
   total.cacheWrite += event.cacheWrite;
   total.output += event.output;
   total.reasoning += event.reasoning;
+  total.cost += event.cost ?? 0;
   total.durationMs += event.durationMs;
 }
 

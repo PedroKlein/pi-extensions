@@ -209,7 +209,10 @@ export default function sshSessionExtension(pi: ExtensionAPI): void {
       "Use timeout=0 unless the user requested a finite operation timeout. An explicit timeout closes the connection so an unknown remote command cannot corrupt the shared shell.",
     ],
     parameters: Parameters,
+    exposure: "model-only",
     executionMode: "sequential",
+    constrainedSampling: { type: "json_schema", strict: "prefer" },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
 
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       validate(params);

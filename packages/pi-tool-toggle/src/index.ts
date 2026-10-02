@@ -21,11 +21,18 @@ type ToolToggleSettings = ReturnType<SettingsManager["getGlobalSettings"]> & {
 
 export default function toolToggle(pi: ExtensionAPI): void {
   let disabledTools = new Set<string>();
+  let maskedTools = new Set<string>();
 
   function applyMask(): void {
-    pi.setActiveTools(
-      pi.getActiveTools().filter((name) => !disabledTools.has(name)),
-    );
+    const active = pi.getActiveTools();
+    const registered = new Map(pi.getAllTools().map((tool) => [tool.name, tool]));
+    for (const name of active) {
+      const exposure = registered.get(name)?.exposure;
+      if (disabledTools.has(name) && (exposure === "direct" || exposure === "model-only")) {
+        maskedTools.add(name);
+      }
+    }
+    pi.setActiveTools(active.filter((name) => !disabledTools.has(name)));
   }
 
   function persist(): void {
@@ -35,19 +42,22 @@ export default function toolToggle(pi: ExtensionAPI): void {
   }
 
   function restore(ctx: ExtensionContext): void {
-    const previouslyDisabled = disabledTools;
     const saved = findSavedState(ctx);
     disabledTools = new Set(saved ?? readDefaultDisabled(ctx));
 
     const available = new Set(pi.getActiveTools());
-    const registered = new Set(pi.getAllTools().map((tool) => tool.name));
-    for (const name of previouslyDisabled) {
-      if (registered.has(name)) available.add(name);
+    const registered = new Map(pi.getAllTools().map((tool) => [tool.name, tool]));
+    for (const name of maskedTools) {
+      if (!disabledTools.has(name) && registered.get(name)?.exposure !== "hidden") {
+        available.add(name);
+      }
+    }
+    maskedTools = new Set([...maskedTools].filter((name) => disabledTools.has(name)));
+    for (const name of available) {
+      if (disabledTools.has(name)) maskedTools.add(name);
     }
 
-    pi.setActiveTools(
-      [...available].filter((name) => !disabledTools.has(name)),
-    );
+    pi.setActiveTools([...available].filter((name) => !disabledTools.has(name)));
   }
 
   function setDisabled(name: string, disabled: boolean): void {
@@ -56,6 +66,7 @@ export default function toolToggle(pi: ExtensionAPI): void {
       applyMask();
     } else {
       disabledTools.delete(name);
+      maskedTools.delete(name);
       pi.setActiveTools([...new Set([...pi.getActiveTools(), name])]);
     }
     persist();
@@ -69,12 +80,23 @@ export default function toolToggle(pi: ExtensionAPI): void {
         return;
       }
 
-      const items: SettingItem[] = pi.getAllTools().map((tool) => ({
-        id: tool.name,
-        label: tool.name,
-        currentValue: disabledTools.has(tool.name) ? "disabled" : "enabled",
-        values: ["enabled", "disabled"],
-      }));
+      const active = new Set(pi.getActiveTools());
+      const items: SettingItem[] = pi.getAllTools().map((tool) => {
+        const currentValue = disabledTools.has(tool.name)
+          ? "disabled"
+          : exposureState(tool.exposure, active.has(tool.name));
+        return {
+          id: tool.name,
+          label: tool.name,
+          description: `${tool.exposure} exposure`,
+          currentValue,
+          values: tool.exposure === "hidden"
+            ? undefined
+            : [currentValue, activeState(tool.exposure), "disabled"].filter(
+              (value, index, values) => values.indexOf(value) === index,
+            ),
+        };
+      });
 
       await ctx.ui.custom((_tui, _theme, _keybindings, done) =>
         new SettingsList(
@@ -92,6 +114,22 @@ export default function toolToggle(pi: ExtensionAPI): void {
   pi.on("session_start", (_event, ctx) => restore(ctx));
   pi.on("session_tree", (_event, ctx) => restore(ctx));
   pi.on("input", () => applyMask());
+}
+
+function activeState(
+  exposure: "direct" | "model-only" | "codemode" | "deferred" | "hidden",
+): string {
+  return exposure === "model-only" ? "declared" : "declared, callable";
+}
+
+function exposureState(
+  exposure: "direct" | "model-only" | "codemode" | "deferred" | "hidden",
+  active: boolean,
+): string {
+  if (active) return activeState(exposure);
+  if (exposure === "codemode") return "callable";
+  if (exposure === "deferred") return "deferred, callable";
+  return "registered";
 }
 
 function findSavedState(ctx: ExtensionContext): string[] | undefined {

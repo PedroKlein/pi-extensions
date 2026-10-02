@@ -38,45 +38,75 @@ describe("isJsonParseError", () => {
   });
 });
 
-describe("usage attribution", () => {
-  it("attributes malformed-tool retry start and completion", async () => {
-    const handlers = new Map<string, (event: any, ctx: any) => Promise<void> | void>();
-    const emit = vi.fn();
-    const sendUserMessage = vi.fn();
-    autoRetry({
-      on: (name: string, handler: (event: any, ctx: any) => Promise<void> | void) => {
-        handlers.set(name, handler);
-      },
-      events: { emit },
-      sendUserMessage,
-    } as any);
-    const ctx = {
-      model: { provider: "custom-provider", id: "example-model" },
-      ui: {
-        theme: { fg: (_color: string, text: string) => text },
-        notify: vi.fn(),
-      },
-    };
-
-    await handlers.get("agent_end")?.(
+function harness() {
+  const handlers = new Map<string, (event: any, ctx: any) => Promise<any> | any>();
+  const emit = vi.fn();
+  const notify = vi.fn();
+  autoRetry({
+    on: (name: string, handler: (event: any, ctx: any) => Promise<any> | any) => {
+      handlers.set(name, handler);
+    },
+    events: { emit },
+  } as any);
+  const ctx = {
+    model: { provider: "custom-provider", id: "example-model" },
+    ui: {
+      theme: { fg: (_color: string, text: string) => text },
+      notify,
+    },
+  };
+  const end = (message: Record<string, unknown>) =>
+    handlers.get("agent_end")?.({ messages: [message] }, ctx);
+  const turnEnd = (message: Record<string, unknown>) =>
+    handlers.get("turn_end")?.({ message }, ctx);
+  const settle = (canContinue = true) =>
+    handlers.get("agent_before_settle")?.(
       {
-        messages: [
-          {
-            role: "assistant",
-            stopReason: "error",
-            errorMessage: "Unexpected token in JSON at position 42",
-          },
-        ],
+        outcome: "error",
+        entries: [],
+        continue: false,
+        context: {
+          contextEntries: [],
+          contextMessages: [],
+          llmMessages: [],
+          pendingMessages: [],
+          canContinue,
+        },
       },
       ctx,
     );
+  return { handlers, emit, notify, ctx, end, turnEnd, settle };
+}
 
-    expect(sendUserMessage).toHaveBeenCalledOnce();
-    expect(emit).toHaveBeenCalledWith(
+describe("settlement retry", () => {
+  it("adds one hidden retry instruction and continues without a user message", async () => {
+    const h = harness();
+
+    await h.end({
+      role: "assistant",
+      stopReason: "error",
+      errorMessage: "Unexpected token in JSON at position 42",
+    });
+    const result = await h.settle();
+    const duplicate = await h.settle();
+
+    expect(result).toEqual({
+      entries: [
+        {
+          type: "custom_message",
+          customType: "pi-auto-retry",
+          content: RETRY_MESSAGE,
+          display: false,
+        },
+      ],
+      continue: true,
+    });
+    expect(duplicate).toBeUndefined();
+    expect(h.emit).toHaveBeenCalledWith(
       "pi-audit:retry-scheduled",
       expect.objectContaining({ retryLayer: "malformed-tool", attempt: 1 }),
     );
-    expect(emit).toHaveBeenCalledWith(
+    expect(h.emit).toHaveBeenCalledWith(
       "pi-audit:usage",
       expect.objectContaining({
         source: "pi-auto-retry",
@@ -89,30 +119,34 @@ describe("usage attribution", () => {
         route: "custom-provider/example-model",
       }),
     );
+  });
 
-    await handlers.get("agent_end")?.(
-      {
-        messages: [
-          {
-            role: "assistant",
-            stopReason: "stop",
-            usage: {
-              input: 10,
-              cacheRead: 20,
-              cacheWrite: 2,
-              output: 5,
-              reasoning: 1,
-            },
-          },
-        ],
+  it("records success, resets the limit, and ignores unrelated errors", async () => {
+    const h = harness();
+    await h.end({
+      role: "assistant",
+      stopReason: "error",
+      errorMessage: "Unexpected token in JSON at position 42",
+    });
+    await h.settle();
+    const success = {
+      role: "assistant",
+      stopReason: "stop",
+      usage: {
+        input: 10,
+        cacheRead: 20,
+        cacheWrite: 2,
+        output: 5,
+        reasoning: 1,
       },
-      ctx,
-    );
+    };
+    await h.turnEnd(success);
+    await h.end(success);
 
-    expect(emit).toHaveBeenCalledWith(
+    expect(await h.settle()).toBeUndefined();
+    expect(h.emit).toHaveBeenCalledWith(
       "pi-audit:usage",
       expect.objectContaining({
-        source: "pi-auto-retry",
         operation: "retry-complete",
         input: 10,
         cacheRead: 20,
@@ -120,9 +154,65 @@ describe("usage attribution", () => {
         output: 5,
         reasoning: 1,
         status: "complete",
-        retryLayer: "malformed-tool",
         attempt: 1,
       }),
+    );
+
+    await h.end({
+      role: "assistant",
+      stopReason: "error",
+      errorMessage: "Network timeout",
+    });
+    expect(await h.settle()).toBeUndefined();
+
+    await h.end({
+      role: "assistant",
+      stopReason: "error",
+      errorMessage: "JSON parse error",
+    });
+    expect(await h.settle()).toMatchObject({ continue: true });
+    expect(h.emit).toHaveBeenLastCalledWith(
+      "pi-audit:usage",
+      expect.objectContaining({ attempt: 1 }),
+    );
+  });
+
+  it("does not request a continuation when the boundary cannot continue", async () => {
+    const h = harness();
+    await h.end({
+      role: "assistant",
+      stopReason: "error",
+      errorMessage: "JSON parse error",
+    });
+
+    expect(await h.settle(false)).toBeUndefined();
+    expect(h.emit).not.toHaveBeenCalledWith(
+      "pi-audit:retry-scheduled",
+      expect.anything(),
+    );
+  });
+
+  it("stops after the retry limit", async () => {
+    const h = harness();
+
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt += 1) {
+      await h.end({
+        role: "assistant",
+        stopReason: "error",
+        errorMessage: "JSON parse error",
+      });
+      expect(await h.settle()).toMatchObject({ continue: true });
+    }
+    await h.end({
+      role: "assistant",
+      stopReason: "error",
+      errorMessage: "JSON parse error",
+    });
+
+    expect(await h.settle()).toBeUndefined();
+    expect(h.notify).toHaveBeenCalledWith(
+      expect.stringContaining(`gave up after ${MAX_RETRIES} attempts`),
+      "error",
     );
   });
 });

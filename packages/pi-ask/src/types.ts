@@ -1,13 +1,5 @@
 /** Shared types for the pi-ask extension */
 
-/** Action to execute when an option with this action is selected and submitted */
-export interface OptionAction {
-	/** Action type. Currently only 'mode-switch' is supported. */
-	type: "mode-switch";
-	/** Target mode for mode-switch actions */
-	mode: string;
-}
-
 export interface QuestionOption {
 	value: string;
 	label: string;
@@ -15,8 +7,6 @@ export interface QuestionOption {
 	description?: string;
 	/** Marks this option as agent-recommended (★ badge) */
 	recommended?: boolean;
-	/** Optional action to execute when this option is selected and submitted */
-	action?: OptionAction;
 }
 
 export interface Question {

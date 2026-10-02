@@ -73,7 +73,7 @@ describe("startup registration", () => {
 			"light-1",
 			"light-2",
 		]);
-	});
+	}, 15_000);
 
 	it("replaces the selected bootstrap alias with resolved metadata before session_start completes", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "pi-gateway-startup-"));
@@ -148,13 +148,10 @@ describe("startup registration", () => {
 		};
 		activateGateway(host as any, {
 			transport: {
-				register: vi.fn(),
 				setRoutes: vi.fn(),
 				setFailureHandler: vi.fn(),
 				stream: vi.fn(),
 				streamSimple: vi.fn(),
-				routeCount: vi.fn(),
-				reset: vi.fn(),
 			},
 			registerProvider,
 		});

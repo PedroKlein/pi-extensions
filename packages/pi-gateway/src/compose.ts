@@ -9,9 +9,9 @@
  * form `<slot>-N`, routing to the first healthy backend in `fallbackChain` that
  * has that tier. Examples: `heavy-1`, `medium-1`, `light-1`.
  *
- * Each entry is registered with `api: GATEWAY_API` (see transport.ts) so pi
- * routes its requests to the gateway transport, which maps the alias to the
- * real backend model and delegates. The composer also returns a `targets` map
+ * Each entry is registered with `api: GATEWAY_API` (see transport.ts) so the
+ * provider's custom stream maps the alias to the real backend model and
+ * delegates. The composer also returns a `targets` map
  * (alias id → real backend model/api/baseUrl) that the session publishes to
  * that transport.
  *
@@ -56,7 +56,7 @@ const CAPABILITY_FIELDS = [
  * auth resolves. So the session registers a single provider-level `apiKey` for
  * the effective backend and lets pi's native transport apply it. Each entry
  * still carries `baseUrl`/`api` (per-model overrides) identifying where it
- * routes; the transport is resolved from the global api registry by `api`.
+ * routes; the gateway stream is registered directly on the provider.
  */
 export interface GatewayModelEntry {
 	id: string;

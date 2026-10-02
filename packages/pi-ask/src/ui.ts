@@ -3,8 +3,7 @@
  * Split-panel layout with tabs, multi/single/text, annotations, and ephemeral LLM explain.
  */
 
-import { type Api, type Model } from "@earendil-works/pi-ai";
-import { complete } from "@earendil-works/pi-ai/compat";
+import { type Api, type AssistantMessage, type Model } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { Input, Key, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { TUI } from "@earendil-works/pi-tui";
@@ -39,10 +38,11 @@ export interface AskUserUIOptions {
 	questions: NormalizedQuestion[];
 	model: Model<Api> | null;
 	modelRegistry: ModelRegistry;
+	onResponse?: (response: AssistantMessage, durationMs: number) => void;
 }
 
 export function createAskUserUI(opts: AskUserUIOptions) {
-	const { tui, theme, done, questions, model, modelRegistry } = opts;
+	const { tui, theme, done, questions, model, modelRegistry, onResponse } = opts;
 	const isMulti = questions.length > 1;
 	const totalTabs = questions.length + 1; // +1 for Submit tab
 
@@ -249,17 +249,16 @@ export function createAskUserUI(opts: AskUserUIOptions) {
 		refresh();
 
 		try {
-			const auth = await modelRegistry.getApiKeyAndHeaders(model);
-			if (!auth.ok || !auth.apiKey) throw new Error("No API key");
-
-			const response = await complete(
+			const startedAt = Date.now();
+			const response = await modelRegistry.streamSimple(
 				model,
 				{
 					systemPrompt: "You explain options for decision-making. Be concise and practical. No markdown formatting.",
 					messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() }],
 				},
-				{ apiKey: auth.apiKey, headers: auth.headers, signal: explainAbort.signal },
-			);
+				{ signal: explainAbort.signal },
+			).result();
+			onResponse?.(response, Date.now() - startedAt);
 
 			if (response.stopReason === "aborted") return;
 
@@ -711,17 +710,10 @@ export function createAskUserUI(opts: AskUserUIOptions) {
 					: (highlighted ? theme.fg("accent", " [ ] ") : theme.fg("dim", " [ ] "));
 			}
 
-			// Action badge for mode-switch options
-			const hasAction = !isOther && opt.action?.type === "mode-switch";
-			const actionMode = hasAction ? (opt.action as { mode: string }).mode : null;
-			const actionBadge = actionMode
-				? theme.fg("success", ` → /${actionMode}`)
-				: "";
-
-			const labelColor = highlighted ? "accent" : (selected ? "text" : (hasAction ? "success" : "text"));
+			const labelColor = highlighted ? "accent" : "text";
 			const recBadge = !isOther && opt.recommended ? theme.fg("warning", " ★") : "";
 			const customBadge = (opt as any).isCustom ? theme.fg("dim", " (custom)") : "";
-			let optLine = prefix + theme.fg(labelColor, opt.label) + actionBadge + recBadge + customBadge;
+			let optLine = prefix + theme.fg(labelColor, opt.label) + recBadge + customBadge;
 			if (highlighted) optLine = theme.bold(optLine);
 			leftLines.push(truncateToWidth(optLine, leftWidth));
 

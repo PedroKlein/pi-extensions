@@ -177,13 +177,13 @@ describe("audit observability wiring", () => {
     expect(hookResult).toBeUndefined();
     expect(registerTool).not.toHaveBeenCalled();
 
-    busListeners.get("pi-modes:changed")?.({
-      mode: "build",
-      previousMode: "ask",
-    });
-    await beforeAgentStart?.({ systemPrompt: "build contract" }, ctx);
+    expect([...busListeners.keys()].sort()).toEqual([
+      "pi-audit:retry-scheduled",
+      "pi-audit:usage",
+    ]);
+    await beforeAgentStart?.({ systemPrompt: "stable contract" }, ctx);
     await beforeAgentStart?.(
-      { systemPrompt: "build contract\nmutable telemetry" },
+      { systemPrompt: "stable contract\nmutable telemetry" },
       ctx,
     );
 
@@ -222,14 +222,14 @@ describe("audit observability wiring", () => {
       sequence: 3,
       classification: "unexpected",
       likelySource: "prompt",
-      mode: "build",
     });
+    expect(fingerprintReport.current).not.toHaveProperty("mode");
     expect(fingerprintReport.previous).toMatchObject({
       sequence: 2,
-      classification: "expected",
-      likelySource: "mode-switch",
-      mode: "build",
+      classification: "unexpected",
+      likelySource: "prompt",
     });
+    expect(fingerprintReport.previous).not.toHaveProperty("mode");
     expect(usageReport).toMatchObject({
       eventCount: 1,
       totals: {
@@ -241,7 +241,7 @@ describe("audit observability wiring", () => {
         durationMs: 250,
       },
     });
-    expect(notify).toHaveBeenCalledTimes(4);
+    expect(notify).toHaveBeenCalledTimes(5);
     expect(notify).toHaveBeenCalledWith(
       expect.stringContaining("Unexplained prompt fingerprint change"),
       "warning",
@@ -271,13 +271,89 @@ describe("audit observability wiring", () => {
 
     await commands.get("audit-ignore-drift")?.handler("", ctx);
     await beforeAgentStart?.(
-      { systemPrompt: "build contract\nanother third-party delta" },
+      { systemPrompt: "stable contract\nanother third-party delta" },
       ctx,
     );
     const warnings = notify.mock.calls.filter((call) => call[1] === "warning");
-    expect(warnings).toHaveLength(1);
+    expect(warnings).toHaveLength(2);
 
     log.mockRestore();
+  });
+
+  it("classifies reload and resource changes without retired event publishers", async () => {
+    const listeners = new Map<string, (event: any, ctx: any) => unknown>();
+    const busListeners = new Map<string, (data: unknown) => void>();
+    const entries: Array<{ type: string; customType: string; data: unknown }> = [];
+    let toolActive = false;
+    const pi = {
+      registerCommand: vi.fn(),
+      appendEntry: (customType: string, data: unknown) => {
+        entries.push({ type: "custom", customType, data });
+      },
+      on: (name: string, handler: (event: any, ctx: any) => unknown) =>
+        listeners.set(name, handler),
+      events: {
+        on: (name: string, handler: (data: unknown) => void) =>
+          busListeners.set(name, handler),
+      },
+      getActiveTools: () => (toolActive ? ["example_tool"] : []),
+      getAllTools: () => [
+        {
+          name: "example_tool",
+          description: "Example tool",
+          parameters: { type: "object", properties: {} },
+        },
+      ],
+    } as unknown as ExtensionAPI;
+    const notify = vi.fn();
+    const ctx = {
+      getContextUsage: () => ({ tokens: 0 }),
+      sessionManager: { getBranch: () => entries },
+      ui: { notify },
+    } as unknown as ExtensionCommandContext;
+
+    piAudit(pi);
+    expect([...busListeners.keys()].sort()).toEqual([
+      "pi-audit:retry-scheduled",
+      "pi-audit:usage",
+    ]);
+
+    await listeners.get("session_start")?.({ reason: "new" }, ctx);
+    await listeners.get("before_agent_start")?.(
+      { systemPrompt: "stable prompt" },
+      ctx,
+    );
+    await listeners.get("resources_discover")?.({ reason: "reload" }, ctx);
+    toolActive = true;
+    await listeners.get("before_agent_start")?.(
+      { systemPrompt: "resource prompt" },
+      ctx,
+    );
+    await listeners.get("session_start")?.({ reason: "reload" }, ctx);
+    await listeners.get("before_agent_start")?.(
+      { systemPrompt: "reloaded prompt" },
+      ctx,
+    );
+
+    expect(entries.map((entry) => entry.data)).toEqual([
+      expect.objectContaining({ classification: "initial" }),
+      expect.objectContaining({
+        classification: "expected",
+        likelySource: "resource-change",
+        promptChanged: true,
+        toolsChanged: true,
+      }),
+      expect.objectContaining({
+        classification: "expected",
+        likelySource: "reload",
+        promptChanged: true,
+        toolsChanged: false,
+      }),
+    ]);
+    expect(notify).not.toHaveBeenCalledWith(
+      expect.stringContaining("Unexplained"),
+      "warning",
+    );
   });
 });
 

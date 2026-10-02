@@ -1,62 +1,22 @@
 /**
  * AI-powered task capture from natural language.
  * Uses Pi's current LLM provider, with a heuristic fallback.
- * Optional BAML tier when pi-baml is available.
  */
 
-import { readFileSync } from "node:fs";
-import { complete, type Model } from "@earendil-works/pi-ai";
+import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
+import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { Task, TaskType, TaskPriority } from "./model.js";
 import { TASK_TYPES, TASK_PRIORITIES } from "./model.js";
-
-// Load BAML code at module level — non-fatal if file is missing
-let PARSE_TASK_BAML: string | null = null;
-try {
-	PARSE_TASK_BAML = readFileSync(new URL('./parse_task.baml', import.meta.url).pathname, 'utf-8');
-} catch {
-	// BAML file unavailable — parseTaskWithBaml will be a no-op
-}
-
-/**
- * Parse a task from natural language using BAML (typed structured output).
- * Returns null if BAML code is unavailable or the call fails — caller should fall back.
- */
-export async function parseTaskWithBaml(
-	text: string,
-	baml: any,
-	modelRegistry: any,
-): Promise<Partial<Task> | null> {
-	if (!PARSE_TASK_BAML) return null;
-
-	const now = new Date();
-	const current_date = `${now.toLocaleDateString('en-US', { weekday: 'long' })}, ${now.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })} (${now.toISOString().split('T')[0]})`;
-
-	const raw = await baml.execBaml(
-		PARSE_TASK_BAML,
-		'ParseTask',
-		{ text, current_date },
-		modelRegistry,
-		'light',
-	);
-
-	const result: Partial<Task> = {};
-	if (typeof raw.title === 'string') result.title = raw.title;
-	if (typeof raw.type === 'string' && (TASK_TYPES as readonly string[]).includes(raw.type)) result.type = raw.type as TaskType;
-	if (typeof raw.priority === 'string' && (TASK_PRIORITIES as readonly string[]).includes(raw.priority)) result.priority = raw.priority as TaskPriority;
-	if (typeof raw.due_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw.due_date)) result.dueDate = raw.due_date;
-	if (typeof raw.description === 'string') result.description = raw.description;
-
-	return Object.keys(result).length > 0 ? result : null;
-}
 
 /**
  * Parse a task from natural language using the LLM.
  */
 export async function parseTaskWithLLM(
 	text: string,
-	model: Model,
-	apiKey: string,
-	headers?: Record<string, string>
+	model: Model<Api>,
+	modelRegistry: ModelRegistry,
+	signal?: AbortSignal,
+	onResponse?: (response: AssistantMessage, durationMs: number) => void,
 ): Promise<Partial<Task>> {
 	// Build current date context from local time
 	const now = new Date();
@@ -97,7 +57,9 @@ Rules:
 		},
 	];
 
-	const response = await complete(model, { messages }, { apiKey, headers });
+	const startedAt = Date.now();
+	const response = await modelRegistry.streamSimple(model, { messages }, signal ? { signal } : {}).result();
+	onResponse?.(response, Date.now() - startedAt);
 
 	const responseText = response.content
 		.filter((c): c is { type: "text"; text: string } => c.type === "text")

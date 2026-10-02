@@ -3,18 +3,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayModelEntry } from "../src/compose.js";
 
 // Capture calls into the mocked oh-my-pi/pi-ai so we can assert the gateway
-// transport registers a custom api and delegates the swapped-in real model to
-// the top-level dispatcher.
+// delegates the swapped-in real model to the top-level dispatcher.
 const calls = vi.hoisted(() => ({
-	registerCustomApi: [] as Array<{ api: string; streamSimple: any; sourceId?: string; stream?: any }>,
 	stream: [] as Array<{ model: any; context: any; options: any }>,
 	streamSimple: [] as Array<{ model: any; context: any; options: any }>,
 }));
 
 vi.mock("@oh-my-pi/pi-ai", () => ({
-	registerCustomApi: (api: string, streamSimple: any, sourceId?: string, stream?: any) => {
-		calls.registerCustomApi.push({ api, streamSimple, sourceId, stream });
-	},
 	stream: (model: any, context: any, options: any) => {
 		calls.stream.push({ model, context, options });
 		return "STREAM_RESULT";
@@ -29,7 +24,6 @@ import { adaptOmpRegistry, createOmpGatewayTransport, ompRegisterProvider, toOmp
 import { resolveBackends } from "../src/resolver.js";
 
 beforeEach(() => {
-	calls.registerCustomApi.length = 0;
 	calls.stream.length = 0;
 	calls.streamSimple.length = 0;
 });
@@ -49,13 +43,6 @@ const route = {
 };
 
 describe("createOmpGatewayTransport", () => {
-	it("register() is a no-op (custom api registered via registerProvider instead)", () => {
-		const t = createOmpGatewayTransport();
-		t.register();
-		t.register(); // idempotent
-		expect(calls.registerCustomApi).toHaveLength(0);
-	});
-
 	it("delegates streamSimple with the REAL model id/api/baseUrl (not the alias)", () => {
 		const t = createOmpGatewayTransport();
 		t.setRoutes(route);

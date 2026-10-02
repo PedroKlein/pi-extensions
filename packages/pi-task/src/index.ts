@@ -285,6 +285,10 @@ export default function piTask(pi: ExtensionAPI): void {
 			"Use 'freeze' to lock acceptance criteria before implementation. Frozen criteria cannot be modified until 'unfreeze'. First `start` also freezes the plan implicitly.",
 			"Include references per task: skills to load, files to read, repos/docs/memory for context.",
 		],
+		exposure: "model-only",
+		executionMode: "sequential",
+		constrainedSampling: { type: "json_schema", strict: "prefer" },
+		annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
 		parameters: Type.Object({
 			action: StringEnum(["create", "add", "update", "status", "expand", "add-subtasks", "get", "start",
 				"complete", "skip", "bulk-complete", "bulk-skip",

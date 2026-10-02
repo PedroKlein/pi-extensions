@@ -78,7 +78,7 @@ provider-registration and request-transport seams differ per harness:
 | | pi | oh-my-pi |
 |---|---|---|
 | Provider registration | `registerProvider(name, { models, apiKey })` (per-model `api`/`baseUrl`) | `registerProvider(name, { api, baseUrl, apiKey, models })` (provider-level `baseUrl`) |
-| Request dispatch | Registered backend provider (preserves its transport + resolved auth); global api fallback | `@oh-my-pi/pi-ai` top-level `stream`/`streamSimple` |
+| Request dispatch | Registered backend provider (preserves its transport + resolved auth) | `@oh-my-pi/pi-ai` top-level `stream`/`streamSimple` |
 | Credential (`apiKey`) | escaped for pi's config-value `$`/`!` syntax | passed literally |
 
 oh-my-pi caveats:
@@ -313,22 +313,27 @@ are ignored once provider auth resolves, so the gateway does **not** bake them.)
 The resolved secret is escaped for pi's config-value resolver (`$`→`$$`, leading
 `!`), so opaque bearer tokens and JSON service keys pass through intact.
 
-**Request routing (why a custom transport).** pi sends `model.id` verbatim as
-the wire model name — every builtin transport does `model: model.id`. A neutral
+**Request routing (why a custom transport).** Native virtual models can choose a
+physical model for a retry, but Pi intentionally classifies quota and billing
+failures as non-retryable, so their route callback is not invoked again for a
+configured cap failure. The gateway therefore keeps its bounded pre-output
+retry transport to provide transparent same-turn 402/quota failover.
+
+Pi sends `model.id` verbatim as the wire model name — every builtin transport
+does `model: model.id`. A neutral
 alias like `heavy-1` is *not* a real model name, so registering gateway models
 under a builtin api makes the backend reject the request
-(`Model name 'heavy-1' is not supported`). To fix this the gateway registers its
-own api (`gateway`) in pi's **global** api registry and registers its models
-with `api: "gateway"`. At request time pi resolves the provider credential into
-`options.apiKey` and calls the gateway transport, which looks up the alias in a
+(`Model name 'heavy-1' is not supported`). To fix this the gateway registers a
+custom stream directly on its `gateway` provider and registers its models with
+`api: "gateway"`. At request time pi resolves the provider credential into
+`options.apiKey` and calls the gateway stream, which looks up the alias in a
 live routing map, swaps in the **real** backend model (real wire id, api, and
 baseUrl — captured at compose time), and delegates through that backend's
 registered provider with the backend's own resolved API key, headers, base URL,
 and environment. This is the same provider path used by a direct request, so
 native streaming and provider-specific authentication or custom transport
-behavior are preserved. The routing map is
-replaced on every re-register, so failover transparently reroutes in-flight
-aliases without re-registering the api.
+behavior are preserved. The routing map is replaced on every re-register, so
+failover transparently reroutes in-flight aliases.
 
 **Single effective backend per registration.** Because one provider carries one
 credential, all emitted aliases must resolve to a single backend at any moment.
@@ -341,9 +346,8 @@ backends. Force or reorder to switch which backend is served.
 **Custom-transport backends.** The gateway dispatches through the registered
 backend provider rather than looking up only its `api` id. Providers created
 with `createProvider` therefore work without separately exposing their custom
-transport in pi's global api registry. A global-api lookup remains as a
-compatibility fallback when an older registry cannot expose provider/auth
-objects.
+transport in a process-global registry. Pi 1.0's
+`ModelRegistry.getProvider()` is the required dispatch surface.
 
 **Token freshness.** Two mechanisms keep the provider-level credential fresh:
 
@@ -369,7 +373,7 @@ providers (see `pi --list-models`).
 ## Development
 
 ```bash
-pnpm test           # run tests (200 tests, 21 files)
+pnpm test           # run tests
 pnpm build          # build for publish
 pnpm typecheck      # type-check without emitting
 ```

@@ -62,10 +62,7 @@ If nothing worth extracting: { "semantic": [], "lessons": [] }`;
 
 export const MEMORY_REFINER_PROMPT = `You are a memory refinement system. Your job is to evolve a user's persistent memory — not just accumulate, but deduplicate, merge, and sharpen it.
 
-You have access to tools: read, ls, grep, find. USE THEM to verify before acting:
-- ls ~/.agents/skills/ to see which skills actually exist before suggesting new ones
-- read a skill file to check if content already covers a candidate
-- grep across the current-memory.json for duplicate keys or overlapping values
+The prompt includes the current memory state and the relevant skill contents. Verify decisions against that supplied context before acting.
 
 You receive:
 1. **Newly extracted candidates** — raw facts/lessons from recent sessions
@@ -116,7 +113,7 @@ When old and new memories disagree, prefer the most recent signal. Delete the st
 
 ## Output format
 
-After using tools to verify your decisions, respond with ONLY valid JSON:
+After reviewing the supplied context, respond with ONLY valid JSON:
 {
   "operations": [
     { "type": "add", "key": "pref.x", "value": "...", "confidence": 0.9, "reason": "new from 3 sessions, not in any skill" },
@@ -137,7 +134,7 @@ Rules:
 - Don't delete something unless you're certain it's stale, redundant, or skill-covered
 - When sharpening, preserve the original intent — don't change meaning
 - If nothing needs changing, return: { "operations": [] }
-- Verify skills exist on disk before citing them in reasons`;
+- Cite only skills included in the supplied skills context`;
 
 // ─── Stage 3: Workflow Advisor ───────────────────────────────────────
 
@@ -195,7 +192,6 @@ ${sessionContent}`;
 /**
  * Build the full prompt for the memory refiner (Stage 2).
  * Includes extracted candidates, current memory, skills, and recent changes.
- * REFINE has access to tools (read, ls, grep, find) for verification.
  */
 export function buildRefinerPrompt(
   extractedCandidates: string,
@@ -221,7 +217,7 @@ ${skills}`;
     prompt += `\n\n## Recent Dream changes (already applied — do NOT re-process these):\n\n${recentChanges}`;
   }
 
-  prompt += `\n\n## Instructions\n\n1. First, use \`ls ~/.agents/skills/\` to see all available skills\n2. Use \`grep\` on the current memory JSON if you need to find duplicate patterns\n3. Then produce your final JSON operations block\n\nProduce the JSON operations now.`;
+  prompt += `\n\n## Instructions\n\nReview the supplied memory and skills context, then produce the final JSON operations block.\n\nProduce the JSON operations now.`;
 
   return prompt;
 }

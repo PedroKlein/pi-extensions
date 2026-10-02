@@ -119,33 +119,16 @@ export async function registerGatewayProvider(
 		resolveApiKey: (b) => tokenByBackend.get(b.name),
 		now: input.now,
 	});
-	const providerDispatchWarnings: string[] = [];
 	for (const [id, target] of Object.entries(targets)) {
 		const backend = routing[id];
-		const auth = authByBackend.get(backend) ?? {
+		target.realAuth = authByBackend.get(backend) ?? {
 			auth: {
 				apiKey: tokenByBackend.get(backend),
 				baseUrl: target.realBaseUrl,
 			},
 		};
-		target.realAuth = auth;
-		try {
-			const getProvider = (registry as Partial<ResolverModelRegistry>).getProvider;
-			const provider = typeof getProvider === "function"
-				? getProvider.call(registry, backend) as GatewayRouteTarget["realProvider"]
-				: undefined;
-			if (provider && typeof provider.stream === "function" && typeof provider.streamSimple === "function") {
-				target.realProvider = provider;
-			} else if (!provider) {
-				providerDispatchWarnings.push(
-					`backend '${backend}' provider is unavailable for direct dispatch — using global api fallback`,
-				);
-			}
-		} catch (err) {
-			providerDispatchWarnings.push(
-				`backend '${backend}' provider lookup failed: ${(err as Error).message} — using global api fallback`,
-			);
-		}
+		const provider = registry.getProvider(backend);
+		if (isStreamProvider(provider)) target.realProvider = provider;
 	}
 
 	// 4. Determine the effective backend and register with PROVIDER-LEVEL auth.
@@ -204,15 +187,12 @@ export async function registerGatewayProvider(
 		for (const w of resolverWarnings) notify(`[gateway] ${w.message}`, "warning");
 		for (const w of composeWarnings) notify(`[gateway] ${w.message}`, "warning");
 		for (const m of multiBackendWarnings) notify(`[gateway] ${m}`, "warning");
-		for (const m of new Set(providerDispatchWarnings)) notify(`[gateway] ${m}`, "warning");
 		if (modelsToRegister.length > 0 && !token) {
 			notify(
 				`[gateway] no credential resolved for backend '${effective}' — gateway aliases will not be selectable until it is authenticated.`,
 				"warning",
 			);
 		}
-	} else {
-		for (const m of new Set(providerDispatchWarnings)) console.warn(`[gateway] ${m}`);
 	}
 
 	return {
@@ -221,4 +201,10 @@ export async function registerGatewayProvider(
 		composeWarnings,
 		routing,
 	};
+}
+
+function isStreamProvider(value: unknown): value is NonNullable<GatewayRouteTarget["realProvider"]> {
+	if (!value || typeof value !== "object") return false;
+	const provider = value as Partial<NonNullable<GatewayRouteTarget["realProvider"]>>;
+	return typeof provider.stream === "function" && typeof provider.streamSimple === "function";
 }

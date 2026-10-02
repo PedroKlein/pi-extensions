@@ -1,7 +1,56 @@
-import { describe, it, expect } from "vitest";
-import { classifyHeuristic } from "../../src/notes/capture.js";
+import { describe, expect, it, vi } from "vitest";
+import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
+import { classifyHeuristic, classifyNote } from "../../src/notes/capture.js";
 
 describe("capture", () => {
+  it("classifies through ModelRuntime without resolving credentials", async () => {
+    const signal = new AbortController().signal;
+    const model = { provider: "router", id: "auto" } as never;
+    const response = {
+      content: [{ type: "text", text: '{"title":"Auth notes","category":"reference"}' }],
+      provider: "backend-a",
+      model: "physical-model",
+      usage: {
+        input: 10,
+        output: 4,
+        cacheRead: 2,
+        cacheWrite: 1,
+        totalTokens: 17,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+    };
+    const streamSimple = vi.fn().mockReturnValue({
+      result: vi.fn().mockResolvedValue(response),
+    });
+    const getApiKeyAndHeaders = vi.fn(() => {
+      throw new Error("credential lookup must stay inside ModelRuntime");
+    });
+    const onResponse = vi.fn();
+
+    await expect(classifyNote("Auth uses JWT", {
+      model,
+      modelRegistry: { streamSimple, getApiKeyAndHeaders } as unknown as ModelRegistry,
+      signal,
+      onResponse,
+    })).resolves.toEqual({
+      title: "Auth notes",
+      content: "Auth uses JWT",
+      category: "reference",
+    });
+
+    expect(streamSimple).toHaveBeenCalledWith(
+      model,
+      expect.objectContaining({
+        systemPrompt: expect.stringContaining("classifying a quick note"),
+        messages: [expect.objectContaining({ role: "user" })],
+      }),
+      expect.objectContaining({ signal, maxTokens: 150, temperature: 0 }),
+    );
+    expect(onResponse).toHaveBeenCalledWith(response, expect.any(Number));
+    expect(getApiKeyAndHeaders).not.toHaveBeenCalled();
+  });
+
   describe("classifyHeuristic", () => {
     it("defaults to prompt category for action-like text", () => {
       const result = classifyHeuristic("Generate ADRs for decisions");

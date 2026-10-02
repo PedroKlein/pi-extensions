@@ -4,23 +4,20 @@
  * Coordinates: gate checks → lock → session reading → chain prep →
  * chain execution → result application → journal writing → cleanup.
  *
- * All LLM calls use `pi --print` shell-out (no BAML dependency).
- * REFINE stage uses `pi --print --tools` for iterative exploration.
+ * Model stages run through the active session's ModelRuntime.
  */
 import { mkdirSync, readFileSync, writeFileSync, readdirSync, existsSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir, homedir } from "node:os";
-import { encode } from "gpt-tokenizer/encoding/o200k_base";
 import type { MemoryStore } from "../store.js";
 import type { DreamConfig } from "./config.js";
 import { findAllSessionFiles, filterUnprocessed, parseSessionJSONL, type ExtractedSession } from "./session-reader.js";
 import { prepareChainDir, type ChainMeta } from "./chain-prep.js";
 import { buildMinerPrompt, buildRefinerPrompt, buildAdvisorPrompt } from "./prompts.js";
 import { writeDreamJournal, type DreamJournalInput, type WorkflowInsight } from "./journal.js";
+import type { ModelCall } from "../model-call.js";
 
 // ─── Types ───────────────────────────────────────────────────────────
-
-type ExecFn = (command: string, args: string[], options?: { timeout?: number; cwd?: string }) => Promise<{ code: number; stdout: string; stderr: string }>;
 
 interface DreamUI {
   setStatus(key: string, message: string): void;
@@ -141,8 +138,6 @@ interface MemoryOperation {
 // ─── Logging ─────────────────────────────────────────────────────────
 
 const DREAM_LOG_PATH = join(homedir(), ".pi", "memory", "dream.log");
-/** Persistent dir for dream subprocess sessions (kept separate from main sessions) */
-const DREAM_SESSIONS_DIR = join(homedir(), ".pi", "memory", "dream-sessions");
 
 function dreamLog(msg: string): void {
   const ts = new Date().toISOString().slice(0, 19).replace("T", " ");
@@ -197,10 +192,11 @@ export function checkGates(store: MemoryStore, config: DreamConfig): boolean {
 export async function executeDream(
   store: MemoryStore,
   config: DreamConfig,
-  exec: ExecFn,
+  modelCall: ModelCall,
   ui: DreamUI,
   options: {
     manual: boolean;
+    signal?: AbortSignal;
     onUsageEvent?: (event: DreamUsageEvent) => void;
   }
 ): Promise<DreamResult> {
@@ -330,7 +326,6 @@ export async function executeDream(
     ui.setStatus("pi-memory", `🌙 Dream: preparing context...`);
     const chainDir = join(tmpdir(), `pi-dream-${runId.slice(0, 8)}`);
     mkdirSync(chainDir, { recursive: true });
-    mkdirSync(DREAM_SESSIONS_DIR, { recursive: true });
     const meta = prepareChainDir(chainDir, sessions, store, config, runId);
     dreamLog(`PREP chain_dir=${chainDir} skills=selected projects=${meta.projects.join(",")}`);
 
@@ -340,9 +335,9 @@ export async function executeDream(
     const { extracted, minedPaths } = await runMiningStage(
       chainDir,
       config,
-      exec,
-      options.onUsageEvent,
+      modelCall,
       trigger,
+      options.signal,
     );
     dreamLog(`MINE DONE extracted ${extracted.length} chars of raw results, ${minedPaths.length}/${sessions.length} sessions mined successfully`);
 
@@ -370,10 +365,10 @@ export async function executeDream(
     const refinement = await runRefinementStage(
       chainDir,
       config,
-      exec,
+      modelCall,
       config.journalDir,
-      options.onUsageEvent,
       trigger,
+      options.signal,
     );
     const operations = refinement.operations;
     dreamLog(`REFINE DONE ${operations.length} operations produced`);
@@ -384,9 +379,9 @@ export async function executeDream(
     const workflowInsights = await runAdvisorStage(
       chainDir,
       config,
-      exec,
-      options.onUsageEvent,
+      modelCall,
       trigger,
+      options.signal,
     );
     dreamLog(`ADVISE DONE ${typeof workflowInsights === "string" ? workflowInsights.length + " chars" : workflowInsights.length + " insights"}`);
 
@@ -464,11 +459,7 @@ export async function executeDream(
   }
 }
 
-// ─── Stage 1: Mining (pi --print, parallel batches) ──────────────────
-
-function extensionArgs(config: DreamConfig): string[] {
-  return config.extensions.flatMap((extension) => ["--extension", extension]);
-}
+// ─── Stage 1: Mining (parallel batches) ──────────────────────────────
 
 interface MiningResult {
   extracted: string;
@@ -478,9 +469,9 @@ interface MiningResult {
 async function runMiningStage(
   chainDir: string,
   config: DreamConfig,
-  exec: ExecFn,
-  onUsageEvent: ((event: DreamUsageEvent) => void) | undefined,
+  modelCall: ModelCall,
   trigger: "automatic" | "user",
+  signal?: AbortSignal,
 ): Promise<MiningResult> {
   const sessionsDir = join(chainDir, "sessions");
   const batches = readdirSync(sessionsDir).filter((f: string) => f.startsWith("batch-"));
@@ -489,11 +480,8 @@ async function runMiningStage(
 
   // Prepare all batch prompts
   const batchMeta: Array<{
-    index: number;
     entries: { path: string }[];
-    promptFile: string;
-    sizeKB: string;
-    inputTokens: number;
+    prompt: string;
   }> = [];
   for (let i = 0; i < batches.length; i++) {
     const batchContent = readFileSync(join(sessionsDir, batches[i]), "utf-8");
@@ -502,30 +490,27 @@ async function runMiningStage(
     const promptFile = join(chainDir, `miner-prompt-${i}.md`);
     writeFileSync(promptFile, prompt, "utf-8");
     const sizeKB = (batchContent.length / 1024).toFixed(0);
-    batchMeta.push({
-      index: i,
-      entries: batchEntries,
-      promptFile,
-      sizeKB,
-      inputTokens: encode(prompt).length,
-    });
+    batchMeta.push({ entries: batchEntries, prompt });
     dreamLog(`MINE batch ${i + 1}/${batches.length} (${batchEntries.length} sessions, ${sizeKB}KB) -> queued`);
   }
 
-  // Run all batches in parallel
   const startMs = Date.now();
-  const batchResults = await Promise.allSettled(
-    batchMeta.map(({ promptFile }) =>
-      exec("pi", [
-        "--print",
-        "--no-extensions",
-        ...extensionArgs(config),
-        "--session-dir", DREAM_SESSIONS_DIR,
-        "--model", config.minerModel,
-        `@${promptFile}`,
-      ], { timeout: 900_000 })
-    )
-  );
+  const batchResults: PromiseSettledResult<string | null>[] = [];
+  const maxConcurrency = 3;
+  for (let offset = 0; offset < batchMeta.length; offset += maxConcurrency) {
+    const wave = batchMeta.slice(offset, offset + maxConcurrency);
+    batchResults.push(...await Promise.allSettled(
+      wave.map(({ prompt }) => modelCall({
+        model: config.minerModel,
+        systemPrompt: "",
+        prompt,
+        operation: "dream-mine",
+        trigger,
+        signal,
+        timeoutMs: 900_000,
+      })),
+    ));
+  }
   const totalDurationMs = Date.now() - startMs;
   const totalElapsed = (totalDurationMs / 1000).toFixed(1);
 
@@ -538,45 +523,19 @@ async function runMiningStage(
     const meta = batchMeta[i];
 
     if (settled.status === "rejected") {
-      onUsageEvent?.({
-        source: "pi-memory",
-        operation: "dream-mine-error",
-        model: config.minerModel,
-        input: meta.inputTokens,
-        cacheRead: 0,
-        cacheWrite: 0,
-        output: 0,
-        reasoning: 0,
-        durationMs: Math.round(totalDurationMs / Math.max(1, batches.length)),
-        trigger,
-        status: "error",
-      });
       dreamLog(`MINE batch ${i + 1}/${batches.length} REJECTED (${settled.reason}) -- ${meta.entries.length} sessions deferred`);
       continue;
     }
 
     const result = settled.value;
-    onUsageEvent?.({
-      source: "pi-memory",
-      operation: result.code === 0 ? "dream-mine" : "dream-mine-error",
-      model: config.minerModel,
-      input: meta.inputTokens,
-      cacheRead: 0,
-      cacheWrite: 0,
-      output: encode(result.stdout ?? "").length,
-      reasoning: 0,
-      durationMs: Math.round(totalDurationMs / Math.max(1, batches.length)),
-      trigger,
-      status: result.code === 0 ? "complete" : "error",
-    });
-    if (result.code === 0 && result.stdout) {
-      results.push(result.stdout);
+    if (result) {
+      results.push(result);
       for (const entry of meta.entries) {
         minedPaths.push(entry.path);
       }
-      dreamLog(`MINE batch ${i + 1}/${batches.length} done (${result.stdout.length} chars output)`);
+      dreamLog(`MINE batch ${i + 1}/${batches.length} done (${result.length} chars output)`);
     } else {
-      dreamLog(`MINE batch ${i + 1}/${batches.length} FAILED (code=${result.code}, stderr=${result.stderr?.slice(0, 200) || "none"}) -- ${meta.entries.length} sessions deferred`);
+      dreamLog(`MINE batch ${i + 1}/${batches.length} returned no output -- ${meta.entries.length} sessions deferred`);
     }
   }
 
@@ -588,15 +547,15 @@ async function runMiningStage(
   return { extracted: combined, minedPaths };
 }
 
-// ─── Stage 2: Refinement (pi --print --tools, iterative) ─────────────
+// ─── Stage 2: Refinement ─────────────────────────────────────────────
 
 async function runRefinementStage(
   chainDir: string,
   config: DreamConfig,
-  exec: ExecFn,
+  modelCall: ModelCall,
   journalDir: string | undefined,
-  onUsageEvent: ((event: DreamUsageEvent) => void) | undefined,
   trigger: "automatic" | "user",
+  signal?: AbortSignal,
 ): Promise<ParsedRefinement> {
   const extracted = safeReadFile(join(chainDir, "extracted.json"));
   const memory = safeReadFile(join(chainDir, "current-memory.json"));
@@ -609,47 +568,37 @@ async function runRefinementStage(
   );
   dreamLog(`REFINE prompt size: ${(prompt.length / 1024).toFixed(0)}KB`);
 
-  // Write prompt to file to avoid E2BIG (ARG_MAX ~1MB on macOS)
+  // Keep the exact bounded prompt as a diagnostic artifact for this run.
   const promptFile = join(chainDir, "refiner-prompt.md");
   writeFileSync(promptFile, prompt, "utf-8");
 
   const startMs = Date.now();
-  // REFINE uses --tools so the model can search memory, read skills, and verify
-  // before producing operations. This gives it iterative exploration capability.
-  const result = await exec("pi", [
-    "--print",
-    "--tools", "read,ls,grep,find",
-    "--no-extensions",
-    ...extensionArgs(config),
-    "--session-dir", DREAM_SESSIONS_DIR,
-    "--model", config.refinerModel,
-    `@${promptFile}`,
-  ], { timeout: 900_000 });
-
-  const durationMs = Date.now() - startMs;
-  const elapsedS = (durationMs / 1000).toFixed(1);
-  onUsageEvent?.({
-    source: "pi-memory",
-    operation: result.code === 0 ? "dream-refine" : "dream-refine-error",
-    model: config.refinerModel,
-    input: encode(prompt).length,
-    cacheRead: 0,
-    cacheWrite: 0,
-    output: encode(result.stdout ?? "").length,
-    reasoning: 0,
-    durationMs,
-    trigger,
-    status: result.code === 0 ? "complete" : "error",
-  });
-  if (result.code !== 0 || !result.stdout) {
-    dreamLog(`REFINE FAILED (${elapsedS}s, code=${result.code}, stderr=${result.stderr?.slice(0, 300) || "none"})`);
+  let result: string | null;
+  try {
+    result = await modelCall({
+      model: config.refinerModel,
+      systemPrompt: "",
+      prompt,
+      operation: "dream-refine",
+      trigger,
+      signal,
+      timeoutMs: 900_000,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") throw error;
+    dreamLog(`REFINE FAILED (${((Date.now() - startMs) / 1000).toFixed(1)}s, ${error instanceof Error ? error.message : String(error)})`);
+    return { operations: [], pinSuggestions: [] };
+  }
+  const elapsedS = ((Date.now() - startMs) / 1000).toFixed(1);
+  if (!result) {
+    dreamLog(`REFINE returned no output (${elapsedS}s)`);
     return { operations: [], pinSuggestions: [] };
   }
 
-  dreamLog(`REFINE response received (${elapsedS}s, ${result.stdout.length} chars)`);
-  const parsed = parseOperations(result.stdout);
-  if (parsed.operations.length === 0 && result.stdout.length > 50) {
-    dreamLog(`REFINE WARNING: got ${result.stdout.length} chars but parsed 0 operations. First 200 chars: ${result.stdout.slice(0, 200)}`);
+  dreamLog(`REFINE response received (${elapsedS}s, ${result.length} chars)`);
+  const parsed = parseOperations(result);
+  if (parsed.operations.length === 0 && result.length > 50) {
+    dreamLog(`REFINE WARNING: got ${result.length} chars but parsed 0 operations. First 200 chars: ${result.slice(0, 200)}`);
   }
   if (parsed.pinSuggestions.length > 0) {
     dreamLog(`REFINE pin suggestions: ${parsed.pinSuggestions.map(s => s.key).join(", ")}`);
@@ -657,14 +606,14 @@ async function runRefinementStage(
   return parsed;
 }
 
-// ─── Stage 3: Workflow Advisor (pi --print) ──────────────────────────
+// ─── Stage 3: Workflow Advisor ───────────────────────────────────────
 
 async function runAdvisorStage(
   chainDir: string,
   config: DreamConfig,
-  exec: ExecFn,
-  onUsageEvent: ((event: DreamUsageEvent) => void) | undefined,
+  modelCall: ModelCall,
   trigger: "automatic" | "user",
+  signal?: AbortSignal,
 ): Promise<string | WorkflowInsight[]> {
   const memory = safeReadFile(join(chainDir, "current-memory.json"));
   const skills = safeReadFile(join(chainDir, "skills.md"));
@@ -692,41 +641,28 @@ async function runAdvisorStage(
   );
   dreamLog(`ADVISE prompt size: ${(prompt.length / 1024).toFixed(0)}KB`);
 
-  // Write prompt to file to avoid E2BIG (ARG_MAX ~1MB on macOS)
+  // Keep the exact bounded prompt as a diagnostic artifact for this run.
   const promptFile = join(chainDir, "advisor-prompt.md");
   writeFileSync(promptFile, prompt, "utf-8");
 
   const startMs = Date.now();
-  const result = await exec("pi", [
-    "--print",
-    "--no-extensions",
-    ...extensionArgs(config),
-    "--session-dir", DREAM_SESSIONS_DIR,
-    "--model", config.advisorModel,
-    `@${promptFile}`,
-  ], { timeout: 900_000 });
-
-  const durationMs = Date.now() - startMs;
-  const elapsedS = (durationMs / 1000).toFixed(1);
-  onUsageEvent?.({
-    source: "pi-memory",
-    operation: result.code === 0 ? "dream-advise" : "dream-advise-error",
-    model: config.advisorModel,
-    input: encode(prompt).length,
-    cacheRead: 0,
-    cacheWrite: 0,
-    output: encode(result.stdout ?? "").length,
-    reasoning: 0,
-    durationMs,
-    trigger,
-    status: result.code === 0 ? "complete" : "error",
-  });
-  if (result.code !== 0) {
-    dreamLog(`ADVISE FAILED (${elapsedS}s, code=${result.code}, stderr=${result.stderr?.slice(0, 200) || "none"})`);
+  try {
+    const result = await modelCall({
+      model: config.advisorModel,
+      systemPrompt: "",
+      prompt,
+      operation: "dream-advise",
+      trigger,
+      signal,
+      timeoutMs: 900_000,
+    });
+    dreamLog(`ADVISE response received (${((Date.now() - startMs) / 1000).toFixed(1)}s, ${result?.length || 0} chars)`);
+    return result || "";
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") throw error;
+    dreamLog(`ADVISE FAILED (${((Date.now() - startMs) / 1000).toFixed(1)}s, ${error instanceof Error ? error.message : String(error)})`);
     return "";
   }
-  dreamLog(`ADVISE response received (${elapsedS}s, ${result.stdout?.length || 0} chars)`);
-  return result.stdout || "";
 }
 
 // ─── Result Application ──────────────────────────────────────────────

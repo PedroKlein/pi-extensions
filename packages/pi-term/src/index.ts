@@ -48,11 +48,9 @@ export default function (pi: ExtensionAPI) {
 		}
 	}
 
-	function parsePercent(value: string, total: number): number {
-		if (value.endsWith("%")) {
-			return Math.floor((parseInt(value) / 100) * total);
-		}
-		return parseInt(value) || total;
+	function parsePercent(value: ResolvedApp["width"], total: number): number {
+		if (typeof value === "number") return value;
+		return Math.floor((parseInt(value) / 100) * total);
 	}
 
 	function calculateDimensions(
@@ -317,7 +315,7 @@ export default function (pi: ExtensionAPI) {
 
 	// Register message renderer for feedContext messages
 	pi.registerMessageRenderer("pi-term", (message, _options, theme) => {
-		const content = theme.fg("dim", message.content);
+		const content = theme.fg("dim", typeof message.content === "string" ? message.content : "");
 		return new Text(content, 1, 0);
 	});
 

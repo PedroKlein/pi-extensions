@@ -89,18 +89,14 @@ export function toOmpModels(models: GatewayModelEntry[]): OmpModelConfig[] {
 /**
  * oh-my-pi transport: routes alias→real, using an announced extension transport
  * when present and the top-level `stream`/`streamSimple` for built-in APIs.
- * Registration of the `gateway` custom api does NOT
- * happen here — it goes through `registerProvider` (see {@link ompRegisterProvider})
- * so it reaches the host's bundled pi-ai instance. `register()` is therefore a
- * no-op; the transport only owns the routing map + delegates.
+ * Registration of the `gateway` custom api happens through `registerProvider`
+ * (see {@link ompRegisterProvider}) so it reaches the host's bundled pi-ai
+ * instance. The transport only owns the routing map and delegates.
  */
 export function createOmpGatewayTransport(
 	lookupCustomTransport: OmpCustomTransportLookup = () => undefined,
 ): GatewayTransport {
 	return createGatewayTransport({
-		registerApi() {
-			/* no-op: registered via registerProvider(streamSimple) instead */
-		},
 		deliver(kind, realModel, context, options) {
 			const custom = lookupCustomTransport(String(realModel.api));
 			if (custom) {

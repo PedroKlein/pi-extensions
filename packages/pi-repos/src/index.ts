@@ -2,7 +2,7 @@
  * pi-repos — Repo management + orchestration layer for pi.
  *
  * Manages cloned and registered repos with summarization and hooks.
- * Provides 8 tools for repo lifecycle, search, annotations, groups, and sync.
+ * Provides 9 tools for repo lifecycle, search, annotations, groups, and sync.
  *
  * Tools:
  * - repos_add:      Clone URL or register local path
@@ -12,13 +12,14 @@
  * - repos_search:   Ripgrep across repos
  * - repos_annotate: Append knowledge notes (architecture/pattern/bug/decision/cross-cutting)
  * - repos_group:    Group CRUD + connections + docs + sync
+ * - repos_reference: Manage repository and group references
  * - repos_sync:     Fetch updates + re-index if stale
  *
  * Lifecycle:
  * - session_start:  Load config, detect cwd repo → inject connections/references into LLM context
  * - tool_result:    Detect reads in managed paths → auto-inject TL;DR (once per repo per session)
  */
-import type { ExtensionAPI, AgentToolResult } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, AgentToolResult, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -34,8 +35,9 @@ import { ensureStorageDirs, loadIndex, saveIndex, resolveRepo, repoId, repoMetaD
 import { cloneRepo, registerLocal, removeRepo, syncRepo, listRepos } from "./clone.js";
 import { searchRepos } from "./search.js";
 import { createGroup, addToGroup, removeFromGroup, getGroupInfo, connectRepos, manageDocs, syncGroup, addGroupReference, removeGroupReference, listGroups } from "./group.js";
-import { getRepoInfo, generateGroupDocs } from "./summarize.js";
+import { generateTldr, getRepoInfo, generateGroupDocs } from "./summarize.js";
 import { suggestConnections } from "./suggest.js";
+import { createModelCall } from "./model-call.js";
 import type {
   ReposConfig,
   AddOutput,
@@ -48,22 +50,140 @@ import type {
 } from "./types.js";
 
 type ToolResult = AgentToolResult<unknown>;
+type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
-function ok(text: string): ToolResult {
-  return { content: [{ type: "text", text }], details: {} };
+const MAX_RESULT_STRING = 16_384;
+const MAX_RESULT_ITEMS = 100;
+const MAX_RESULT_PROPERTIES = 100;
+const MAX_RESULT_DEPTH = 8;
+
+const jsonValueRef = { $ref: "#/$defs/JsonValue" };
+const BoundedJsonSchema = Type.Unsafe<JsonValue>({
+  $defs: {
+    JsonValue: {
+      anyOf: [
+        { type: "null" },
+        { type: "boolean" },
+        { type: "number" },
+        { type: "string", maxLength: MAX_RESULT_STRING },
+        { type: "array", items: jsonValueRef, maxItems: MAX_RESULT_ITEMS },
+        { type: "object", additionalProperties: jsonValueRef, maxProperties: MAX_RESULT_PROPERTIES },
+      ],
+    },
+  },
+  $ref: "#/$defs/JsonValue",
+});
+const ReposOutputSchema = Type.Object({
+  ok: Type.Boolean(),
+  data: Type.Optional(BoundedJsonSchema),
+  error: Type.Optional(Type.String({ maxLength: 4096 })),
+  truncated: Type.Boolean(),
+});
+const REPOS_NAMESPACE = {
+  name: "repos",
+  description: "Local repository registry, metadata, search, groups, references, annotations, and synchronization.",
+  instructions: "Use searchTools(query, { namespace: 'repos' }) to discover repository operations and describeNamespace('repos') to list them. Call tools.repos_* from codemode. Results are { ok, data?, error?, truncated }; refine the query or filters when truncated.",
+};
+const REPOS_TOOL_CONTRACT = {
+  exposure: "deferred" as const,
+  namespace: REPOS_NAMESPACE,
+  executionMode: "sequential" as const,
+  constrainedSampling: { type: "json_schema" as const, strict: "prefer" as const },
+  outputSchema: ReposOutputSchema,
+};
+
+function boundJson(
+  value: unknown,
+  depth = 0,
+  budget = { nodes: 1_000, characters: 30_000 },
+): { value: JsonValue; truncated: boolean } {
+  if (budget.nodes-- <= 0) return { value: "[truncated]", truncated: true };
+  if (value === null || typeof value === "boolean" || typeof value === "number") {
+    return { value, truncated: false };
+  }
+  if (typeof value === "string") {
+    const limit = Math.max(0, Math.min(MAX_RESULT_STRING, budget.characters));
+    const bounded = value.slice(0, limit);
+    budget.characters -= bounded.length;
+    return { value: bounded, truncated: bounded.length !== value.length };
+  }
+  if (depth >= MAX_RESULT_DEPTH) return { value: "[truncated]", truncated: true };
+  if (Array.isArray(value)) {
+    let truncated = value.length > MAX_RESULT_ITEMS;
+    const items: JsonValue[] = [];
+    for (const item of value.slice(0, MAX_RESULT_ITEMS)) {
+      if (budget.nodes <= 0 || budget.characters <= 0) {
+        truncated = true;
+        break;
+      }
+      const bounded = boundJson(item, depth + 1, budget);
+      truncated ||= bounded.truncated;
+      items.push(bounded.value);
+    }
+    return { value: items, truncated };
+  }
+  if (typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, item]) => item !== undefined);
+    let truncated = entries.length > MAX_RESULT_PROPERTIES;
+    const data: Record<string, JsonValue> = {};
+    for (const [rawKey, item] of entries.slice(0, MAX_RESULT_PROPERTIES)) {
+      if (budget.nodes <= 0 || budget.characters <= 0) {
+        truncated = true;
+        break;
+      }
+      const key = rawKey.slice(0, Math.min(256, budget.characters));
+      budget.characters -= key.length;
+      const bounded = boundJson(item, depth + 1, budget);
+      truncated ||= key !== rawKey || bounded.truncated;
+      data[key] = bounded.value;
+    }
+    return { value: data, truncated };
+  }
+  return { value: String(value).slice(0, MAX_RESULT_STRING), truncated: true };
 }
 
+function ok(data: unknown, truncated = false): ToolResult {
+  const bounded = boundJson(data);
+  const structuredContent = { ok: true, data: bounded.value, truncated: truncated || bounded.truncated };
+  return {
+    content: [{ type: "text", text: JSON.stringify(bounded.value, null, 2) }],
+    details: {},
+    structuredContent,
+  };
+}
 
+function fail(message: string): ToolResult {
+  const error = message.slice(0, 4096);
+  const structuredContent = { ok: false, error, truncated: error !== message };
+  return {
+    content: [{ type: "text", text: error }],
+    details: {},
+    structuredContent,
+    isError: true,
+  };
+}
 
 export default function piRepos(pi: ExtensionAPI): void {
   let config: ReposConfig = loadConfig();
   // Active-branch scoped: repos that already had TL;DR injected.
   const injectedRepos = new Set<string>();
   let cwdRepoId: string | null = null;
+  let sessionAbort = new AbortController();
+  const backgroundTasks = new Set<Promise<void>>();
+  const modelCall = (ctx: Pick<ExtensionContext, "model" | "modelRegistry">) =>
+    createModelCall(ctx, (event) => pi.events.emit("pi-audit:usage", event));
+  const schedule = (work: Promise<unknown>): void => {
+    const observed = work.then(() => undefined, () => undefined);
+    backgroundTasks.add(observed);
+    void observed.finally(() => backgroundTasks.delete(observed));
+  };
 
   // ─── Lifecycle ────────────────────────────────────────────────────────────
 
   pi.on("session_start", async (_event, ctx) => {
+    sessionAbort.abort();
+    sessionAbort = new AbortController();
     try {
       config = loadConfig();
       ensureStorageDirs(config);
@@ -182,7 +302,7 @@ export default function piRepos(pi: ExtensionAPI): void {
             "",
             `You are working in \`${cwdId}\`. The repos below are locally available and connected to this project.`,
             "Use \`read\` / \`grep\` directly on the listed paths — no need to clone or fetch.",
-            "For deeper context (full summaries, annotations), use \`repos_info\` or \`repos_group info\`.",
+            "For deeper context, use codemode with `searchTools(query, { namespace: 'repos' })` or `describeNamespace('repos')`, then call the matching `tools.repos_*` operation.",
             "Group docs (architecture.md, roles.md, etc.) are at the workspace path — read them when you need system-level understanding.",
             "",
           ].join("\n");
@@ -198,6 +318,11 @@ export default function piRepos(pi: ExtensionAPI): void {
     } catch (err: any) {
       ctx.ui.notify(`pi-repos: init failed: ${err.message}`, "warning");
     }
+  });
+
+  pi.on("session_shutdown", async () => {
+    sessionAbort.abort();
+    await Promise.allSettled([...backgroundTasks]);
   });
 
   // Auto-inject TL;DR when agent reads files inside a managed repo (once per repo per session)
@@ -252,6 +377,8 @@ export default function piRepos(pi: ExtensionAPI): void {
       "Clone a repository by URL or register a local path. " +
       "Accepts tags, group assignment, and starred flag.",
     promptSnippet: "repos_add — clone URL or register local repo",
+    ...REPOS_TOOL_CONTRACT,
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     parameters: Type.Object({
       url:     Type.Optional(Type.String({ description: "Clone URL (https:// or git@)" })),
       local:   Type.Optional(Type.String({ description: "Absolute path to existing local repo" })),
@@ -260,15 +387,22 @@ export default function piRepos(pi: ExtensionAPI): void {
       starred: Type.Optional(Type.Boolean({ description: "Pin as starred" })),
       tag:     Type.Optional(Type.String({ description: "Clone at a specific tag or ref (creates detached worktree)" })),
     }) as any,
-    async execute(_id, params, _signal, _update, _ctx): Promise<ToolResult> {
+    async execute(_id, params, _signal, _update, ctx): Promise<ToolResult> {
       const p = params as any;
       if (!p.url && !p.local) {
-        return ok("repos_add: must provide either 'url' or 'local'");
+        return fail("repos_add: must provide either 'url' or 'local'");
       }
       try {
         const entry = p.url
           ? await cloneRepo(config, p.url, p.tags, p.starred, p.tag)
           : await registerLocal(config, p.local, p.tags, p.starred);
+        schedule(generateTldr(
+          config,
+          entry,
+          repoMetaDir(config, entry),
+          modelCall(ctx),
+          sessionAbort.signal,
+        ));
         const out: AddOutput = {
           repo:            repoId(entry),
           type:            entry.type,
@@ -278,9 +412,9 @@ export default function piRepos(pi: ExtensionAPI): void {
           message:         `Added ${repoId(entry)} (${entry.type})${entry.pinnedRef ? ` @${entry.pinnedRef}` : ''}`,
           ...(entry.pinnedRef ? { pinnedRef: entry.pinnedRef } : {}),
         };
-        return ok(JSON.stringify(out, null, 2));
+        return ok(out);
       } catch (err: any) {
-        return ok(`repos_add failed: ${err.message}`);
+        return fail(`repos_add failed: ${err.message}`);
       }
     },
   });
@@ -293,17 +427,19 @@ export default function piRepos(pi: ExtensionAPI): void {
       "and freshness (commits behind, last sync). " +
       "Pass regenerate:true to re-generate the TL;DR.",
     promptSnippet: "repos_info — full details + TL;DR for a repo",
+    ...REPOS_TOOL_CONTRACT,
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     parameters: Type.Object({
       repo:       Type.String({ description: "Repo identifier: owner/repo or host/owner/repo" }),
       regenerate: Type.Optional(Type.Boolean({ description: "Re-generate TL;DR even if cached" })),
     }) as any,
-    async execute(_id, params, _signal, _update, _ctx): Promise<ToolResult> {
+    async execute(_id, params, signal, _update, ctx): Promise<ToolResult> {
       const p = params as any;
       try {
-        const info = await getRepoInfo(config, p.repo, p.regenerate ?? false);
-        return ok(JSON.stringify(info, null, 2));
+        const info = await getRepoInfo(config, p.repo, p.regenerate ?? false, modelCall(ctx), signal);
+        return ok(info);
       } catch (err: any) {
-        return ok(`repos_info failed: ${err.message}`);
+        return fail(`repos_info failed: ${err.message}`);
       }
     },
   });
@@ -315,6 +451,8 @@ export default function piRepos(pi: ExtensionAPI): void {
       "List all managed repos with freshness indicators (last sync, commits behind, index staleness). " +
       "Filter by group, tag, starred, or query. Default output is compact (id + path only); use verbose for full details.",
     promptSnippet: "repos_list — all repos with freshness",
+    ...REPOS_TOOL_CONTRACT,
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     parameters: Type.Object({
       group:   Type.Optional(Type.String({ description: "Filter by group name" })),
       tag:     Type.Optional(Type.String({ description: "Filter by tag" })),
@@ -333,9 +471,9 @@ export default function piRepos(pi: ExtensionAPI): void {
           verbose: p.verbose,
         });
         const out: ListOutput = { repos, total: repos.length } as ListOutput;
-        return ok(JSON.stringify(out, null, 2));
+        return ok(out);
       } catch (err: any) {
-        return ok(`repos_list failed: ${err.message}`);
+        return fail(`repos_list failed: ${err.message}`);
       }
     },
   });
@@ -348,6 +486,8 @@ export default function piRepos(pi: ExtensionAPI): void {
       "Cloned repos: deletes the storage directory. " +
       "Local repos: removes only the index entry — the actual directory is NEVER deleted.",
     promptSnippet: "repos_remove — remove repo from index",
+    ...REPOS_TOOL_CONTRACT,
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
     parameters: Type.Object({
       repo: Type.String({ description: "Repo identifier: owner/repo or host/owner/repo" }),
     }) as any,
@@ -361,9 +501,9 @@ export default function piRepos(pi: ExtensionAPI): void {
             ? `Removed ${result.removed} and deleted cloned storage`
             : `Removed ${result.removed} from index (local directory preserved)`,
         };
-        return ok(JSON.stringify(out, null, 2));
+        return ok(out);
       } catch (err: any) {
-        return ok(`repos_remove failed: ${err.message}`);
+        return fail(`repos_remove failed: ${err.message}`);
       }
     },
   });
@@ -374,6 +514,8 @@ export default function piRepos(pi: ExtensionAPI): void {
     description:
       "Search repo contents with ripgrep. Scope to a specific repo or group.",
     promptSnippet: "repos_search — ripgrep across repos",
+    ...REPOS_TOOL_CONTRACT,
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     parameters: Type.Object({
       pattern:       Type.String({ description: "Search pattern (regex)" }),
       repo:          Type.Optional(Type.String({ description: "Scope to owner/repo" })),
@@ -385,16 +527,17 @@ export default function piRepos(pi: ExtensionAPI): void {
     async execute(_id, params, _signal, _update, _ctx): Promise<ToolResult> {
       const p = params as any;
       try {
+        const limit = p.limit ?? 50;
         const out = await searchRepos(config, p.pattern, {
           repo:          p.repo,
           group:         p.group,
           glob:          p.glob,
           caseSensitive: p.caseSensitive,
-          limit:         p.limit,
+          limit,
         });
-        return ok(JSON.stringify(out, null, 2));
+        return ok(out, out.matches.length >= limit);
       } catch (err: any) {
-        return ok(`repos_search failed: ${err.message}`);
+        return fail(`repos_search failed: ${err.message}`);
       }
     },
   });
@@ -412,6 +555,8 @@ export default function piRepos(pi: ExtensionAPI): void {
       "- cross-cutting: observations spanning multiple repos or modules\n" +
       "Exactly one of repo or group must be specified.",
     promptSnippet: "repos_annotate — append knowledge note to repo or group",
+    ...REPOS_TOOL_CONTRACT,
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     parameters: Type.Object({
       repo:     Type.Optional(Type.String({ description: "Target repo (owner/repo)" })),
       group:    Type.Optional(Type.String({ description: "Target group name" })),
@@ -421,8 +566,8 @@ export default function piRepos(pi: ExtensionAPI): void {
     }) as any,
     async execute(_id, params, _signal, _update, _ctx): Promise<ToolResult> {
       const p = params as any;
-      if (!p.repo && !p.group) return ok("repos_annotate: must specify exactly one of 'repo' or 'group'");
-      if (p.repo && p.group)  return ok("repos_annotate: cannot specify both 'repo' and 'group'");
+      if (!p.repo && !p.group) return fail("repos_annotate: must specify exactly one of 'repo' or 'group'");
+      if (p.repo && p.group)  return fail("repos_annotate: cannot specify both 'repo' and 'group'");
       try {
         let notesPath: string;
         let target: string;
@@ -447,9 +592,9 @@ export default function piRepos(pi: ExtensionAPI): void {
           category: p.category,
           message: `Annotation added to ${target}`,
         };
-        return ok(JSON.stringify(out, null, 2));
+        return ok(out);
       } catch (err: any) {
-        return ok(`repos_annotate failed: ${err.message}`);
+        return fail(`repos_annotate failed: ${err.message}`);
       }
     },
   });
@@ -468,6 +613,8 @@ export default function piRepos(pi: ExtensionAPI): void {
       "- docs: list/read/write group-level documentation files\n" +
       "- sync: fetch all member repos",
     promptSnippet: "repos_group — group CRUD, connections, docs, sync",
+    ...REPOS_TOOL_CONTRACT,
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     parameters: Type.Object({
       action:      Type.String({ description: "create | add | remove | info | connect | suggest | docs | sync" }),
       name:        Type.String({ description: "Group name" }),
@@ -481,7 +628,7 @@ export default function piRepos(pi: ExtensionAPI): void {
       docPath:     Type.Optional(Type.String({ description: "Doc filename (for docs)" })),
       docContent:  Type.Optional(Type.String({ description: "Doc content (for docs write)" })),
     }) as any,
-    async execute(_id, params, _signal, _update, _ctx): Promise<ToolResult> {
+    async execute(_id, params, signal, _update, ctx): Promise<ToolResult> {
       const p = params as any;
       try {
         switch (p.action) {
@@ -489,15 +636,15 @@ export default function piRepos(pi: ExtensionAPI): void {
             const group = createGroup(config, p.name, p.description, p.repos);
             // Fire-and-forget: generate group docs if members were provided
             if (p.repos && p.repos.length > 0) {
-              generateGroupDocs(config, p.name).catch(() => {});
+              schedule(generateGroupDocs(config, p.name, modelCall(ctx), sessionAbort.signal));
             }
             const out: GroupOutput = { action: "create", group, message: `Group "${p.name}" created` };
-            return ok(JSON.stringify(out, null, 2));
+            return ok(out);
           }
           case "add": {
             const group = addToGroup(config, p.name, p.repo);
             const out: GroupOutput = { action: "add", group, message: `Added ${p.repo} to group "${p.name}"` };
-            return ok(JSON.stringify(out, null, 2));
+            return ok(out);
           }
           case "remove": {
             const result = await removeFromGroup(config, p.name, p.repo);
@@ -508,28 +655,28 @@ export default function piRepos(pi: ExtensionAPI): void {
                 ? `Group "${p.name}" deleted`
                 : `Removed ${p.repo} from group "${p.name}"`,
             };
-            return ok(JSON.stringify(out, null, 2));
+            return ok(out);
           }
           case "info": {
             const group = getGroupInfo(config, p.name);
             const out: GroupOutput = { action: "info", group, message: `Group "${p.name}"` };
-            return ok(JSON.stringify(out, null, 2));
+            return ok(out);
           }
           case "connect": {
             const group = connectRepos(config, p.name, p.from, p.to, p.relationship, p.description);
             // Fire-and-forget: regenerate group docs on connection change
-            generateGroupDocs(config, p.name).catch(() => {});
+            schedule(generateGroupDocs(config, p.name, modelCall(ctx), sessionAbort.signal));
             const out: GroupOutput = {
               action: "connect",
               group,
               message: `Connected ${p.from} --[${p.relationship}]--> ${p.to} in group "${p.name}"`,
             };
-            return ok(JSON.stringify(out, null, 2));
+            return ok(out);
           }
           case "docs": {
             if (p.docAction === "regenerate") {
-              const result = await generateGroupDocs(config, p.name);
-              return ok(JSON.stringify({
+              const result = await generateGroupDocs(config, p.name, modelCall(ctx), signal, "user");
+              return ok({
                 action: "docs",
                 group: null,
                 message: result.generated.length > 0
@@ -537,7 +684,7 @@ export default function piRepos(pi: ExtensionAPI): void {
                   : `No docs generated for group "${p.name}"`,
                 docs: result.generated,
                 errors: result.errors.length > 0 ? result.errors : undefined,
-              }, null, 2));
+              });
             }
             const result = manageDocs(config, p.name, p.docAction ?? "list", p.docPath, p.docContent);
             const out: GroupOutput = {
@@ -547,7 +694,7 @@ export default function piRepos(pi: ExtensionAPI): void {
               docContent: result.content,
               docs: result.docs,
             };
-            return ok(JSON.stringify(out, null, 2));
+            return ok(out);
           }
           case "sync": {
             const synced = await syncGroup(config, p.name);
@@ -556,24 +703,24 @@ export default function piRepos(pi: ExtensionAPI): void {
               group: null,
               message: `Synced ${synced.length} repo(s) in group "${p.name}"`,
             };
-            return ok(JSON.stringify(out, null, 2));
+            return ok(out);
           }
           case "suggest": {
-            const suggestions = await suggestConnections(config, p.name);
-            return ok(JSON.stringify({
+            const suggestions = await suggestConnections(config, p.name, modelCall(ctx), signal);
+            return ok({
               action: "suggest",
               group: p.name,
               suggestions,
               message: suggestions.length > 0
                 ? `${suggestions.length} connection(s) suggested for group "${p.name}". Review and confirm with repos_group connect.`
                 : `No new connections suggested for group "${p.name}".`,
-            }, null, 2));
+            });
           }
           default:
-            return ok(`repos_group: unknown action "${p.action}". Valid: create|add|remove|info|connect|docs|sync`);
+            return fail(`repos_group: unknown action "${p.action}". Valid: create|add|remove|info|connect|suggest|docs|sync`);
         }
       } catch (err: any) {
-        return ok(`repos_group failed: ${err.message}`);
+        return fail(`repos_group failed: ${err.message}`);
       }
     },
   });
@@ -589,6 +736,8 @@ export default function piRepos(pi: ExtensionAPI): void {
       "Actions: add (add a reference), remove (remove a reference), list (show references).\n" +
       "Referenced repos must exist in the pi-repos index.",
     promptSnippet: "repos_reference — manage context references on repos/groups",
+    ...REPOS_TOOL_CONTRACT,
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
     parameters: Type.Object({
       action:  Type.String({ description: "add | remove | list" }),
       repo:    Type.Optional(Type.String({ description: "Target repo to manage references on" })),
@@ -599,23 +748,23 @@ export default function piRepos(pi: ExtensionAPI): void {
     }) as any,
     async execute(_id, params, _signal, _update, _ctx): Promise<ToolResult> {
       const p = params as any;
-      if (!p.repo && !p.group) return ok("repos_reference: must specify either 'repo' or 'group'");
-      if (p.repo && p.group)  return ok("repos_reference: cannot specify both 'repo' and 'group'");
+      if (!p.repo && !p.group) return fail("repos_reference: must specify either 'repo' or 'group'");
+      if (p.repo && p.group)  return fail("repos_reference: cannot specify both 'repo' and 'group'");
 
       try {
         if (p.action === "list") {
           if (p.repo) {
             const index = loadIndex(config);
             const entry = resolveRepo(index, p.repo);
-            return ok(JSON.stringify({ repo: repoId(entry), references: entry.references ?? [] }, null, 2));
+            return ok({ repo: repoId(entry), references: entry.references ?? [] });
           } else {
             const group = getGroupInfo(config, p.group);
-            return ok(JSON.stringify({ group: group.name, references: group.references ?? [] }, null, 2));
+            return ok({ group: group.name, references: group.references ?? [] });
           }
         }
 
         if (p.action === "add") {
-          if (!p.target) return ok("repos_reference add: 'target' is required");
+          if (!p.target) return fail("repos_reference add: 'target' is required");
           const ref: Reference = { repo: p.target };
           if (p.tag) ref.tag = p.tag;
           if (p.reason) ref.reason = p.reason;
@@ -625,45 +774,45 @@ export default function piRepos(pi: ExtensionAPI): void {
             const entry = resolveRepo(index, p.repo);
             addReference(index, entry, ref);
             saveIndex(config, index);
-            return ok(JSON.stringify({
+            return ok({
               message: `Reference to ${p.target} added on ${repoId(entry)}`,
               references: entry.references,
-            }, null, 2));
+            });
           } else {
             const group = addGroupReference(config, p.group, ref);
-            return ok(JSON.stringify({
+            return ok({
               message: `Reference to ${p.target} added on group "${p.group}"`,
               references: group.references,
-            }, null, 2));
+            });
           }
         }
 
         if (p.action === "remove") {
-          if (!p.target) return ok("repos_reference remove: 'target' is required");
+          if (!p.target) return fail("repos_reference remove: 'target' is required");
 
           if (p.repo) {
             const index = loadIndex(config);
             const entry = resolveRepo(index, p.repo);
             const removed = removeReference(entry, p.target);
             if (removed) saveIndex(config, index);
-            return ok(JSON.stringify({
+            return ok({
               message: removed
                 ? `Reference to ${p.target} removed from ${repoId(entry)}`
                 : `No reference to ${p.target} found on ${repoId(entry)}`,
               references: entry.references ?? [],
-            }, null, 2));
+            });
           } else {
             const group = removeGroupReference(config, p.group, p.target);
-            return ok(JSON.stringify({
+            return ok({
               message: `Reference to ${p.target} removed from group "${p.group}"`,
               references: group.references ?? [],
-            }, null, 2));
+            });
           }
         }
 
-        return ok(`repos_reference: unknown action "${p.action}". Valid: add|remove|list`);
+        return fail(`repos_reference: unknown action "${p.action}". Valid: add|remove|list`);
       } catch (err: any) {
-        return ok(`repos_reference failed: ${err.message}`);
+        return fail(`repos_reference failed: ${err.message}`);
       }
     },
   });
@@ -675,6 +824,8 @@ export default function piRepos(pi: ExtensionAPI): void {
       "Fetch latest changes and update freshness. " +
       "Scope to a specific repo, a group, or all managed repos.",
     promptSnippet: "repos_sync — fetch latest changes",
+    ...REPOS_TOOL_CONTRACT,
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     parameters: Type.Object({
       repo:  Type.Optional(Type.String({ description: "Sync a specific repo" })),
       group: Type.Optional(Type.String({ description: "Sync all repos in a group" })),
@@ -690,7 +841,7 @@ export default function piRepos(pi: ExtensionAPI): void {
         } else if (p.group) {
           const groupJson = join(getPaths(config).groups, p.group, "group.json");
           if (!existsSync(groupJson)) {
-            return ok(`repos_sync: group not found: ${p.group}`);
+            return fail(`repos_sync: group not found: ${p.group}`);
           }
           const group = JSON.parse(readFileSync(groupJson, "utf-8"));
           targets = (group.repos ?? []).flatMap((id: string) => {
@@ -699,20 +850,19 @@ export default function piRepos(pi: ExtensionAPI): void {
         } else {
           targets = index.repos;
         }
-        const synced = await Promise.all(
-          targets.map(async (entry: any) => {
-            const r = await syncRepo(config, entry);
-            return { repo: repoId(entry), ...r };
-          }),
-        );
+        const synced = [];
+        for (const entry of targets) {
+          const result = await syncRepo(config, entry);
+          synced.push({ repo: repoId(entry), ...result });
+        }
         const out: SyncOutput = {
           synced,
           total:   synced.length,
           message: `Synced ${synced.length} repo(s)`,
         };
-        return ok(JSON.stringify(out, null, 2));
+        return ok(out);
       } catch (err: any) {
-        return ok(`repos_sync failed: ${err.message}`);
+        return fail(`repos_sync failed: ${err.message}`);
       }
     },
   });

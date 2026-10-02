@@ -3,7 +3,7 @@
  *
  * Features:
  *   - Session-scoped sticky notes (prompt/reminder/reference categories)
- *   - AI-assisted note capture with BAML/LLM/heuristic fallback
+ *   - AI-assisted note capture with LLM/heuristic fallback
  *   - Two-column notes TUI viewer with vim navigation
  *   - Side-chat overlay (full btw replacement)
  *   - Turn-count reminders (status bar + toast)
@@ -21,6 +21,7 @@
  *   Ctrl+Alt+B      — Open side-chat
  */
 
+import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { BorderedLoader } from "@earendil-works/pi-coding-agent";
 import { Key, Text } from "@earendil-works/pi-tui";
@@ -38,12 +39,33 @@ import { createChatTUI } from "./chat/tui.js";
 import { onTurnEnd, updateStatus } from "./reminders/tracker.js";
 import { createShutdownOverlay } from "./reminders/shutdown.js";
 
+function reportNestedUsage(
+  pi: ExtensionAPI,
+  operation: string,
+  selectedModel: Model<Api>,
+  response: AssistantMessage,
+  durationMs: number,
+): void {
+  pi.events.emit("pi-audit:usage", {
+    source: "pi-adhd",
+    operation,
+    model: `${selectedModel.provider}/${selectedModel.id}`,
+    input: response.usage.input,
+    cacheRead: response.usage.cacheRead,
+    cacheWrite: response.usage.cacheWrite,
+    output: response.usage.output,
+    reasoning: response.usage.reasoning ?? 0,
+    durationMs,
+    trigger: "user",
+    status: response.stopReason === "error" || response.stopReason === "aborted" ? "error" : "complete",
+    route: `${response.provider}/${response.model}`,
+  });
+}
+
 export default function piAdhd(pi: ExtensionAPI) {
   let config: AdhDConfig;
   let store: NotesStore;
   let repoSlug = "global";
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let baml: any = null;
 
   // ── Init ──────────────────────────────────────────────────────────────
 
@@ -62,13 +84,6 @@ export default function piAdhd(pi: ExtensionAPI) {
   }
 
   store = new NotesStore();
-
-  // ── BAML discovery (optional) ─────────────────────────────────────────
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  pi.events.on("pi-baml:ready", (lib: any) => {
-    baml = lib;
-  });
 
   // ── Lifecycle events ──────────────────────────────────────────────────
 
@@ -253,7 +268,7 @@ export default function piAdhd(pi: ExtensionAPI) {
   // ── Note Capture ──────────────────────────────────────────────────────
 
   async function captureNote(text: string, ctx: ExtensionContext) {
-    // AI classification with spinner
+    // Classification with spinner
     const classified = await ctx.ui.custom<Awaited<ReturnType<typeof classifyNote>> | null>(
       (_tui, theme, _kb, done) => {
         const loader = new BorderedLoader(_tui, theme, `Classifying: "${text.slice(0, 40)}${text.length > 40 ? "..." : ""}"`);
@@ -263,22 +278,13 @@ export default function piAdhd(pi: ExtensionAPI) {
           try {
             const options: ClassifyOptions = {};
 
-            // Tier 1: BAML
-            if (baml?.available) {
-              options.baml = baml;
-            }
-
-            // Tier 2: LLM
             if (ctx.model) {
-              const auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model);
-              if (auth.ok && auth.apiKey) {
-                options.model = {
-                  id: ctx.model.id,
-                  apiKey: auth.apiKey,
-                  baseUrl: ctx.model.baseUrl,
-                  ...(auth.headers ? { headers: auth.headers } : {}),
-                };
-              }
+              const model = ctx.model;
+              options.model = model;
+              options.modelRegistry = ctx.modelRegistry;
+              options.signal = loader.signal;
+              options.onResponse = (response, durationMs) =>
+                reportNestedUsage(pi, "note-capture", model, response, durationMs);
             }
 
             const result = await classifyNote(text, options);
@@ -325,9 +331,6 @@ export default function piAdhd(pi: ExtensionAPI) {
     const model = ctx.model;
     if (!model) return undefined;
 
-    const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-    if (!auth.ok || !auth.apiKey) return undefined;
-
     // Get recent session entries for summarization
     const entries = ctx.sessionManager.getEntries();
     if (entries.length === 0) return undefined;
@@ -356,8 +359,8 @@ export default function piAdhd(pi: ExtensionAPI) {
 
     if (lines.length === 0) return undefined;
 
-    const { complete } = await import("@earendil-works/pi-ai");
-    const result = await complete(
+    const startedAt = Date.now();
+    const result = await ctx.modelRegistry.streamSimple(
       model,
       {
         systemPrompt: "Summarize coding conversations concisely. Include: task, approach, current state, key decisions.",
@@ -366,11 +369,12 @@ export default function piAdhd(pi: ExtensionAPI) {
             role: "user",
             content: [{ type: "text", text: `Summarize this conversation context:\n\n${lines.join("\n\n").slice(0, 30000)}` }],
             timestamp: Date.now(),
-          } as import("@earendil-works/pi-ai").Message,
+          },
         ],
       },
-      { apiKey: auth.apiKey, ...(auth.headers ? { headers: auth.headers } : {}) },
-    );
+      { ...(ctx.signal ? { signal: ctx.signal } : {}) },
+    ).result();
+    reportNestedUsage(pi, "main-context-summary", model, result, Date.now() - startedAt);
 
     const summary = result.content
       .filter((c): c is { type: "text"; text: string } => c.type === "text")
@@ -394,7 +398,13 @@ export default function piAdhd(pi: ExtensionAPI) {
     }
 
     await createChatTUI(
-      { ctx, extraContext, initialMessage },
+      {
+        ctx,
+        extraContext,
+        initialMessage,
+        onResponse: (response, durationMs, model) =>
+          reportNestedUsage(pi, "side-chat", model, response, durationMs),
+      },
       {
         onExit: async (result) => {
           if (!result) return; // discard
