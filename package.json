@@ -11,6 +11,7 @@
       "packages/pi-ask/src/index.ts",
       "packages/pi-focus/src/index.ts",
       "packages/pi-games/src/index.ts",
+      "packages/pi-github/src/index.ts",
       "packages/pi-memory/src/index.ts",
       "packages/pi-readonly-bash/src/index.ts",
       "packages/pi-repos/src/index.ts",
