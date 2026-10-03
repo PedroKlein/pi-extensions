@@ -17,6 +17,11 @@ export interface AuthoritySelections {
   deleteRemoteBranch?: boolean;
 }
 
+interface Choice<T extends string> {
+  value: T;
+  label: string;
+}
+
 export function grantFromSelections(
   identity: AuthorityIdentity,
   selections: AuthoritySelections,
@@ -63,16 +68,33 @@ export function registerAuthorityCommand(
       if (!ctx.hasUI) throw new Error("GitHub authority requires interactive approval.");
 
       const identity = await options.resolveIdentity(ctx);
-      const mode = await select(ctx, "GitHub authority mode", ["read-only", "collaboration", "autonomous"] as const);
+      const mode = await choose(ctx, "Question 1 — Authority mode (up to 5 follow-ups)", [
+        { value: "read-only", label: "Read-only — inspect GitHub; no writes; finishes now" },
+        { value: "collaboration", label: "Collaboration — confirmed writes to existing PRs/issues; finishes now" },
+        { value: "autonomous", label: "Autonomous — owned branch, PR, issue, CI, and merge workflows; 5 questions remain" },
+      ] as const);
       let selections: AuthoritySelections = { mode };
       if (mode === "autonomous") {
         selections = {
           mode,
-          mergeMethod: await select(ctx, "Merge method", ["squash", "rebase", "merge"] as const),
-          allowNoChecks: await yesNo(ctx, "Allow merge when no CI checks are discovered?", false),
-          blockOptionalFailures: await yesNo(ctx, "Should failing optional checks block merge?", true),
-          branchMode: await select(ctx, "Branch acquisition", ["create", "adopt"] as const),
-          deleteRemoteBranch: await yesNo(ctx, "Delete the owned remote branch after merge?", true),
+          mergeMethod: await choose(ctx, "Question 2 of 6 — Merge method (4 remain)", [
+            { value: "squash", label: "Squash (default) — one commit per PR" },
+            { value: "rebase", label: "Rebase — replay every PR commit onto the base" },
+            { value: "merge", label: "Merge commit — preserve branch topology" },
+          ] as const),
+          allowNoChecks: await yesNo(ctx, "Question 3 of 6 — Allow merge when no CI checks are discovered? (3 remain)", false,
+            "Allows a locally verified PR to merge with zero GitHub checks.",
+            "Blocks merge until at least one GitHub check completes successfully."),
+          blockOptionalFailures: await yesNo(ctx, "Question 4 of 6 — Should failing optional checks block merge? (2 remain)", true,
+            "Treats every failed check as blocking, including optional checks.",
+            "Only required failed checks block merging."),
+          branchMode: await choose(ctx, "Question 5 of 6 — Branch acquisition (1 remains)", [
+            { value: "create", label: "Create (default) — publish HEAD to a new conventional branch" },
+            { value: "adopt", label: "Adopt — use the current non-default branch only when it has no PR" },
+          ] as const),
+          deleteRemoteBranch: await yesNo(ctx, "Question 6 of 6 — Delete owned remote branch after merge? (final question)", true,
+            "Deletes only the extension-owned remote branch; keeps the local branch.",
+            "Retains both remote and local branches after merge."),
         };
       }
       const grant = grantFromSelections(identity, selections);
@@ -83,18 +105,31 @@ export function registerAuthorityCommand(
   });
 }
 
-async function select<T extends string>(
+async function choose<T extends string>(
   ctx: ExtensionCommandContext,
   title: string,
-  values: readonly T[],
+  choices: readonly Choice<T>[],
 ): Promise<T> {
-  const selected = await ctx.ui.select(title, [...values]);
-  if (!selected || !values.includes(selected as T)) throw new Error("GitHub authority was not approved.");
-  return selected as T;
+  const selected = await ctx.ui.select(title, choices.map((choice) => choice.label));
+  const choice = choices.find((candidate) => candidate.label === selected);
+  if (!choice) throw new Error("GitHub authority was not approved.");
+  return choice.value;
 }
 
-async function yesNo(ctx: ExtensionCommandContext, title: string, defaultYes: boolean): Promise<boolean> {
-  const yes = defaultYes ? "Yes (default)" : "Yes";
-  const no = defaultYes ? "No" : "No (default)";
-  return (await select(ctx, title, [defaultYes ? yes : no, defaultYes ? no : yes] as const)).startsWith("Yes");
+async function yesNo(
+  ctx: ExtensionCommandContext,
+  title: string,
+  defaultYes: boolean,
+  yesDescription: string,
+  noDescription: string,
+): Promise<boolean> {
+  return (await choose(ctx, title, defaultYes
+    ? [
+        { value: "yes", label: `Yes (default) — ${yesDescription}` },
+        { value: "no", label: `No — ${noDescription}` },
+      ]
+    : [
+        { value: "no", label: `No (default) — ${noDescription}` },
+        { value: "yes", label: `Yes — ${yesDescription}` },
+      ])) === "yes";
 }

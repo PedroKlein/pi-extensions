@@ -50,7 +50,11 @@ export class GitHubShipPort implements ShipPort {
     return { currentBranch: branch, defaultBranch: this.repository.defaultBranch, headSha: head, remoteSha, clean: status === "", hasLocalCommits: Number(commits) > 0, existingPullRequest: (JSON.parse(prs) as unknown[]).length > 0 };
   }
   async ancestors(sha: string, signal?: AbortSignal): Promise<Set<string>> { return new Set((await this.git(["rev-list", sha], signal)).trim().split("\n").filter(Boolean)); }
-  async createBranch(branch: string, sha: string, signal?: AbortSignal): Promise<void> { await this.git(["branch", branch, sha], signal); }
+  async createBranch(branch: string, sha: string, signal?: AbortSignal): Promise<void> {
+    const existing = await this.adapter.runGit(["show-ref", "--verify", "--quiet", `refs/heads/${branch}`], { signal });
+    if (existing.outcome === "success") return;
+    await this.git(["branch", branch, sha], signal);
+  }
   async push(branch: string, _expected: string | undefined, signal?: AbortSignal): Promise<{ remoteSha: string }> {
     const result = await this.adapter.runGit(["push", "origin", `HEAD:refs/heads/${branch}`], { mutation: true, signal });
     const remoteSha = await this.remoteSha(branch, signal);
