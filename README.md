@@ -15,6 +15,7 @@ or steal ideas.
 | [`@pedro_klein/pi-focus`](packages/pi-focus) | Persistent semantic focus + safe execution telemetry |
 | [`@pedro_klein/pi-games`](packages/pi-games) | Snake & Flappy Bird while the agent works |
 | [`@pedro_klein/pi-gateway`](packages/pi-gateway) | Tier alias provider (`heavy-1`, `medium-1`, ...) with 402/429 failover |
+| [`@pedro_klein/pi-github`](packages/pi-github) | Structured checks, PRs, issues, and authorized delivery workflows |
 | [`@pedro_klein/pi-memory`](packages/pi-memory) | Persistent memory with Dream async session mining |
 | [`@pedro_klein/pi-readonly-bash`](packages/pi-readonly-bash) | Bash policy enforcement — read-only shell for restricted agents |
 | [`@pedro_klein/pi-repos`](packages/pi-repos) | Repo management + orchestration layer |
