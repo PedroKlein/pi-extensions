@@ -37,6 +37,16 @@ describe("GitHub authority", () => {
     expect(state.grant).toBeNull();
   });
 
+  it("releases a fully identified owned pull request", () => {
+    const resource = { kind: "pull-request" as const, repository: "org/repo", number: 4, branch: "feature/checks", headSha: "a".repeat(40) };
+    const store = createAuthorityStore("session-a", () => undefined);
+    store.grant(grant);
+    store.own(resource);
+    store.release({ kind: "pull-request", repository: "org/repo", number: 4, branch: "feature/checks" });
+
+    expect(store.current().ownership).toEqual([]);
+  });
+
   it("appends transitions without tokens or visible marker fields", () => {
     const appended: unknown[] = [];
     const store = createAuthorityStore("session-a", (transition) => appended.push(transition));
