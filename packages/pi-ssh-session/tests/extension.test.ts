@@ -40,8 +40,13 @@ function context(
   } as unknown as ExtensionContext;
 }
 
-async function call(tool: any, params: Record<string, unknown>, ctx = context()) {
-  return tool.execute("test-call", params, undefined, undefined, ctx);
+async function call(
+  tool: any,
+  params: Record<string, unknown>,
+  ctx = context(),
+  onUpdate?: (result: any) => void,
+) {
+  return tool.execute("test-call", params, undefined, onUpdate, ctx);
 }
 
 let fakeSSH: FakeSSH;
@@ -323,6 +328,33 @@ describe("ssh_session extension", () => {
     });
   });
 
+  it("streams remote output while a command is running", async () => {
+    const { tools } = registerExtension();
+    const [tool] = tools;
+    await call(tool, { action: "connect", host: "stream-host" });
+    const updates: any[] = [];
+
+    const operation = call(
+      tool,
+      { action: "execute", command: "printf first; sleep 0.5; printf second" },
+      context(),
+      (update) => updates.push(structuredClone(update)),
+    );
+    await waitFor(
+      async () => updates.map((update) => update.content[0]?.text ?? ""),
+      "first",
+    );
+
+    expect(updates.at(-1)).toMatchObject({
+      content: [{ type: "text", text: "first" }],
+      details: { action: "execute", host: "stream-host" },
+    });
+    expect(updates.every((update) => !JSON.stringify(update).includes("PI_SSH_DONE_"))).toBe(true);
+    await expect(operation).resolves.toMatchObject({
+      content: [{ type: "text", text: "firstsecond" }],
+    });
+  });
+
   it("truncates large command output and saves the exact full output owner-only", async () => {
     const { tools } = registerExtension();
     const [tool] = tools;
@@ -357,6 +389,7 @@ describe("ssh_session extension", () => {
     ]);
 
     expect(tool.promptGuidelines.join(" ")).toContain("Prefer ssh_session");
+    expect(tool.promptGuidelines.join(" ")).toContain("do not detach work");
     const theme = {
       fg: (_color: string, text: string) => text,
       bold: (text: string) => text,
@@ -364,6 +397,20 @@ describe("ssh_session extension", () => {
     expect(tool.renderCall({ action: "execute", command: "pwd" }, theme).render(120)[0].trimEnd()).toBe(
       "ssh execute pwd",
     );
+    expect(
+      tool.renderResult(
+        { content: [{ type: "text", text: "building crate" }], details: { action: "execute" } },
+        { isPartial: true },
+        theme,
+      ).render(120).map((line: string) => line.trimEnd()),
+    ).toEqual(["Working...", "building crate"]);
+    expect(
+      tool.renderResult(
+        { content: [{ type: "text", text: "build complete" }], details: { action: "execute" } },
+        { expanded: false, isPartial: false },
+        theme,
+      ).render(120).map((line: string) => line.trimEnd()),
+    ).toEqual(["Done", "build complete"]);
     expect(
       tool.renderResult({ content: [], details: { action: "execute" } }, { isPartial: false }, theme).render(120)[0].trimEnd(),
     ).toBe("Done");

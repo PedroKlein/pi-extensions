@@ -79,8 +79,13 @@ function registerExtension(): RegisteredExtension {
   };
 }
 
-async function call(tool: any, params: Record<string, unknown>, ctx = context()) {
-  return tool.execute("sudo-test", params, undefined, undefined, ctx);
+async function call(
+  tool: any,
+  params: Record<string, unknown>,
+  ctx = context(),
+  onUpdate?: (result: any) => void,
+) {
+  return tool.execute("sudo-test", params, undefined, onUpdate, ctx);
 }
 
 let fakeSSH: FakeSSH;
@@ -123,6 +128,29 @@ describe("ssh_session sudo", () => {
       call(extension.tool, { action: "execute", command: "  sudo printf bypass" }),
     ).rejects.toThrow("Use action=sudo instead.");
     expect(await fakeSSH.commands()).toBe(commandsBeforeBypass);
+  });
+
+  it("streams sudo output while the command is running", async () => {
+    await call(extension.tool, { action: "connect", host: "sudo-cached" });
+    const updates: any[] = [];
+
+    const operation = call(
+      extension.tool,
+      { action: "sudo", command: "printf first; sleep 0.5; printf second" },
+      context(),
+      (update) => updates.push(structuredClone(update)),
+    );
+    for (let attempt = 0; attempt < 100 && !updates.some((update) => update.content[0]?.text === "first"); attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    expect(updates.at(-1)).toMatchObject({
+      content: [{ type: "text", text: "first" }],
+      details: { action: "sudo", host: "sudo-cached" },
+    });
+    await expect(operation).resolves.toMatchObject({
+      content: [{ type: "text", text: "firstsecond" }],
+    });
   });
 
   it("prompts once, masks input, and relies on the remote sudo timestamp afterward", async () => {

@@ -49,6 +49,8 @@ interface PendingCommand {
   id: string;
   resolve: (result: CommandResult) => void;
   reject: (error: Error) => void;
+  onOutput?: (output: string) => void;
+  lastOutput?: string;
 }
 
 export function validateSSHOptions(options: string[]): void {
@@ -151,8 +153,9 @@ export class SSHSession {
     command: string,
     timeout?: number,
     signal?: AbortSignal,
+    onOutput?: (output: string) => void,
   ): Promise<CommandResult> {
-    return this.enqueue(command, timeout, signal);
+    return this.enqueue(command, timeout, signal, undefined, onOutput);
   }
 
   executeWithInputLine(
@@ -185,11 +188,12 @@ export class SSHSession {
     timeout?: number,
     signal?: AbortSignal,
     input?: string | Uint8Array,
+    onOutput?: (output: string) => void,
   ): Promise<CommandResult> {
     const child = this.process;
     const operation = this.queue.then(() => {
       if (this.process !== child) throw new Error("SSH session changed before command execution.");
-      const result = this.run(command, timeout, signal, input);
+      const result = this.run(command, timeout, signal, input, onOutput);
       input = undefined;
       return result;
     });
@@ -205,6 +209,7 @@ export class SSHSession {
     timeout?: number,
     signal?: AbortSignal,
     input?: string | Uint8Array,
+    onOutput?: (output: string) => void,
   ): Promise<CommandResult> {
     const child = this.process;
     if (!child || child.exitCode !== null || child.killed) {
@@ -240,6 +245,7 @@ export class SSHSession {
         id,
         resolve: (result) => finish(resolve, result),
         reject: (error) => finish(reject, error),
+        onOutput,
       };
       signal?.addEventListener("abort", abort, { once: true });
       child.stdin.write(`{\n${command}\n} 2>&1\n`);
@@ -261,14 +267,36 @@ export class SSHSession {
 
     const marker = `${MARKER_PREFIX}${pending.id}:`;
     const start = this.stdout.indexOf(marker);
-    if (start < 0) return;
+    if (start < 0) {
+      this.emitOutput(pending, this.outputBeforePartialMarker(pending));
+      return;
+    }
     const end = this.stdout.indexOf(MARKER_SUFFIX, start + marker.length);
-    if (end < 0) return;
+    if (end < 0) {
+      this.emitOutput(pending, this.stdout.slice(0, start));
+      return;
+    }
 
     const exitCode = Number.parseInt(this.stdout.slice(start + marker.length, end), 10);
     const output = this.stdout.slice(0, start).trim();
     this.stdout = this.stdout.slice(end + MARKER_SUFFIX.length).replace(/^\r?\n/, "");
     pending.resolve({ output, exitCode });
+  }
+
+  private outputBeforePartialMarker(pending: PendingCommand): string {
+    const start = this.stdout.lastIndexOf("\x1e");
+    if (start < 0) return this.stdout;
+
+    const suffix = this.stdout.slice(start);
+    const marker = `${MARKER_PREFIX}${pending.id}:`;
+    return marker.startsWith(suffix) ? this.stdout.slice(0, start) : this.stdout;
+  }
+
+  private emitOutput(pending: PendingCommand, output: string): void {
+    const trimmed = output.trim();
+    if (trimmed === pending.lastOutput) return;
+    pending.lastOutput = trimmed;
+    pending.onOutput?.(trimmed);
   }
 
   private fail(child: ChildProcessWithoutNullStreams, error: Error): void {

@@ -15,10 +15,10 @@ The local machine must provide OpenSSH. Authentication uses configured SSH keys 
 | Action | Parameters | Behavior |
 |--------|------------|----------|
 | `connect` | `host`; optional `connection`, `options`, `cacheSudoPassword` | Asks the user to choose prompt or YOLO mode, then starts one `ssh -T` process and a persistent remote `bash -l` shell. `connection` names the shell and defaults to `default`; reconnecting replaces only that name. `cacheSudoPassword` applies only when YOLO is chosen. |
-| `execute` | `command`; optional `connection`, `timeout` | Runs a command in the selected shell. Working directory and exported environment changes persist. Commands beginning with `sudo` are rejected; use `sudo` instead. |
+| `execute` | `command`; optional `connection`, `timeout` | Runs a command in the selected shell and streams its combined stdout/stderr while it is active. Working directory and exported environment changes persist. Commands beginning with `sudo` are rejected; use `sudo` instead. |
 | `status` | optional `connection` | Reports the selected connection, or lists every active connection when no name is supplied. A lone default connection retains the original status output. |
 | `disconnect` | optional `connection` | Terminates the selected SSH process. |
-| `sudo` | `command`; optional `connection`, `timeout` | Runs the command through non-interactive `sudo` after checking or acquiring a remote sudo timestamp. |
+| `sudo` | `command`; optional `connection`, `timeout` | Runs the command through non-interactive `sudo` after checking or acquiring a remote sudo timestamp, streaming its combined stdout/stderr while active. |
 | `upload` | `localPath` and `remotePath`, or `files`; optional `connection`, `timeout` | Transfers one or more local files to the selected host. `files` is an array of `{ localPath, remotePath }` pairs. Relative local paths resolve against Pi's current working directory. |
 | `download` | `remotePath` and `localPath`, or `files`; optional `connection`, `timeout` | Transfers one or more remote files to the local machine. `files` is an array of `{ localPath, remotePath }` pairs. Relative local paths resolve against Pi's current working directory. |
 
@@ -74,7 +74,7 @@ The retained buffer is cleared on disconnect, connection replacement, timeout, a
 - No PTY and no interactive remote programs or TUI applications.
 - No SSH password, key-passphrase, or keyboard-interactive authentication.
 - No support for remote sudo policies that require a TTY (`requiretty`).
-- No recursive transfer, directory synchronization, resume, compression, or progress reporting.
+- No recursive transfer, directory synchronization, resume, compression, or transfer progress reporting.
 - Remote commands require `bash`; file transfers require a compatible `base64` command.
 
 ## Development

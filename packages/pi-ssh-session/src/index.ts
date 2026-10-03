@@ -1,7 +1,11 @@
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+  AgentToolUpdateCallback,
+  ExtensionAPI,
+  ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import {
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_LINES,
@@ -15,6 +19,8 @@ import { Type } from "typebox";
 import { promptSudoPassword } from "./password-prompt.js";
 import { SSHSession, type CommandResult, validateSSHOptions } from "./session.js";
 import { download, shellQuote, upload } from "./transfers.js";
+
+const OUTPUT_UPDATE_THROTTLE_MS = 100;
 
 const Parameters = Type.Object({
   action: Type.Union([
@@ -76,6 +82,50 @@ interface Details {
   bytes?: number;
   files?: Array<TransferFile & { bytes: number }>;
   mode?: ConnectionMode;
+}
+
+function createOutputPublisher(
+  onUpdate: AgentToolUpdateCallback<Details> | undefined,
+  details: Details,
+) {
+  let output = "";
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let lastUpdateAt = 0;
+  const emit = () => {
+    timer = undefined;
+    lastUpdateAt = Date.now();
+    const truncation = truncateTail(output, {
+      maxLines: DEFAULT_MAX_LINES,
+      maxBytes: DEFAULT_MAX_BYTES,
+    });
+    onUpdate?.({
+      content: [{ type: "text", text: truncation.content }],
+      details: {
+        ...details,
+        truncation: truncation.truncated ? truncation : undefined,
+      },
+    });
+  };
+
+  return {
+    start() {
+      onUpdate?.({ content: [], details });
+    },
+    update(nextOutput: string) {
+      if (!onUpdate) return;
+      output = nextOutput;
+      const delay = OUTPUT_UPDATE_THROTTLE_MS - (Date.now() - lastUpdateAt);
+      if (delay <= 0) {
+        if (timer) clearTimeout(timer);
+        emit();
+      } else {
+        timer ??= setTimeout(emit, delay);
+      }
+    },
+    stop() {
+      if (timer) clearTimeout(timer);
+    },
+  };
 }
 
 function validate(params: Parameters): void {
@@ -218,7 +268,7 @@ export default function sshSessionExtension(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "ssh_session",
     label: "SSH session",
-    description: `Manage persistent non-interactive SSH shells. Actions: connect, execute, status, disconnect, sudo, upload, download. Use connection to keep multiple named shells alive; omitting it uses the default connection. Shell state persists between calls. Every connection asks the user to choose prompt or YOLO mode. Upload and download accept one path pair or a files array. Commands wait indefinitely unless timeout is set. Output is truncated to ${DEFAULT_MAX_LINES} lines or ${formatSize(DEFAULT_MAX_BYTES)}.`,
+    description: `Manage persistent non-interactive SSH shells. Actions: connect, execute, status, disconnect, sudo, upload, download. Use connection to keep multiple named shells alive; omitting it uses the default connection. Shell state persists between calls. Every connection asks the user to choose prompt or YOLO mode. Execute and sudo stream combined output while running. Upload and download accept one path pair or a files array. Commands wait indefinitely unless timeout is set. Final output is truncated to ${DEFAULT_MAX_LINES} lines or ${formatSize(DEFAULT_MAX_BYTES)}.`,
     promptSnippet: "Connect to and run commands in persistent remote SSH shells",
     promptGuidelines: [
       "Prefer ssh_session over local bash when the requested work targets a remote host.",
@@ -226,6 +276,7 @@ export default function sshSessionExtension(pi: ExtensionAPI): void {
       "Use ssh_session status before assuming a connection exists; connect explicitly when needed.",
       "Use action=sudo for commands requiring elevated privileges; do not prefix action=execute commands with sudo.",
       "Use upload and download to transfer files over the active SSH session; prefer files for multiple path pairs.",
+      "Run long commands directly with execute so their output remains visible; do not detach work merely to poll it with local sleep commands.",
       "Use timeout=0 unless the user requested a finite operation timeout. An explicit timeout closes the connection so an unknown remote command cannot corrupt the shared shell.",
     ],
     parameters: Parameters,
@@ -234,7 +285,7 @@ export default function sshSessionExtension(pi: ExtensionAPI): void {
     constrainedSampling: { type: "json_schema", strict: "prefer" },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
 
-    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+    async execute(_toolCallId, params, signal, onUpdate, ctx) {
       validate(params);
       const connectionName = params.connection?.trim() || "default";
       let connection = connections.get(connectionName);
@@ -390,6 +441,7 @@ export default function sshSessionExtension(pi: ExtensionAPI): void {
       }
 
       const command = params.command!;
+      const outputPublisher = createOutputPublisher(onUpdate, details);
       if (params.action === "execute" && /^\s*sudo(?:\s|$)/.test(command)) {
         throw new Error("Direct sudo commands are not allowed through action=execute. Use action=sudo instead.");
       }
@@ -431,13 +483,30 @@ export default function sshSessionExtension(pi: ExtensionAPI): void {
             }
           }
         }
-        const result = await session.execute(`sudo -n -- bash -c ${shellQuote(command)}`, timeout, signal);
+        outputPublisher.start();
+        let result: CommandResult;
+        try {
+          result = await session.execute(
+            `sudo -n -- bash -c ${shellQuote(command)}`,
+            timeout,
+            signal,
+            outputPublisher.update,
+          );
+        } finally {
+          outputPublisher.stop();
+        }
         const text = await formatOutput(result, details);
         if (result.exitCode !== 0) throw new Error(`${text}\n\nCommand exited with code ${result.exitCode}.`);
         return { content: [{ type: "text" as const, text }], details };
       }
 
-      const result = await session.execute(command, timeout, signal);
+      outputPublisher.start();
+      let result: CommandResult;
+      try {
+        result = await session.execute(command, timeout, signal, outputPublisher.update);
+      } finally {
+        outputPublisher.stop();
+      }
       const text = await formatOutput(result, details);
       if (result.exitCode !== 0) throw new Error(`${text}\n\nCommand exited with code ${result.exitCode}.`);
       return { content: [{ type: "text" as const, text }], details };
@@ -459,11 +528,19 @@ export default function sshSessionExtension(pi: ExtensionAPI): void {
       return new Text(theme.fg("toolTitle", theme.bold(`ssh${connectionLabel} ${args.action}${suffix}`)), 0, 0);
     },
 
-    renderResult(result, { isPartial }, theme) {
-      if (isPartial) return new Text(theme.fg("warning", "Working..."), 0, 0);
+    renderResult(result, { expanded, isPartial }, theme) {
+      const output = result.content[0]?.type === "text" ? result.content[0].text : "";
+      const preview = expanded ? output : output.split("\n").slice(-5).join("\n");
       const details = result.details as Details | undefined;
-      const summary = details?.truncation?.truncated ? "Done (output truncated)" : "Done";
-      return new Text(theme.fg("success", summary), 0, 0);
+      const summary = isPartial
+        ? "Working..."
+        : details?.truncation?.truncated
+          ? "Done (output truncated)"
+          : "Done";
+      return new Text([
+        theme.fg(isPartial ? "warning" : "success", summary),
+        preview ? theme.fg("toolOutput", preview) : "",
+      ].filter(Boolean).join("\n"), 0, 0);
     },
   });
 
