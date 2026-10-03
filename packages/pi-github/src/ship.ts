@@ -107,7 +107,12 @@ export function registerGitHubShip(
         if (!dependencies.isOwned?.({ kind: "pull-request", repository: grant.repository, number: params.number })) throw new Error("The pull request is not internally owned.");
         const receipt = await completeDelivery(dependencies.merge, grant, params.number, signal);
         if (receipt.state === "merged") {
-          dependencies.release?.({ kind: "pull-request", repository: grant.repository, number: params.number });
+          dependencies.release?.({
+            kind: "pull-request",
+            repository: grant.repository,
+            number: params.number,
+            branch: "branch" in receipt ? receipt.branch : undefined,
+          });
           if ("branch" in receipt && receipt.branch) dependencies.release?.({ kind: "branch", repository: grant.repository, branch: receipt.branch });
         }
         return { content: [{ type: "text" as const, text: JSON.stringify(receipt, null, 2) }], details: receipt };
