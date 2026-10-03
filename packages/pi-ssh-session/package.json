@@ -1,7 +1,7 @@
 {
   "name": "@pedro_klein/pi-ssh-session",
   "version": "0.1.0",
-  "description": "Approved commands and file transfers over one persistent SSH shell for Pi",
+  "description": "Approved commands and file transfers over persistent named SSH shells for Pi",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

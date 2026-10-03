@@ -72,6 +72,7 @@ describe("ssh_session extension", () => {
     const [tool] = tools;
     expect(tool.name).toBe("ssh_session");
     expect(tool.parameters.properties).toHaveProperty("cacheSudoPassword");
+    expect(tool.parameters.properties).toHaveProperty("connection");
     expect(tool.parameters.properties).not.toHaveProperty("mode");
     expect(tool.parameters.properties).not.toHaveProperty("password");
 
@@ -122,6 +123,7 @@ describe("ssh_session extension", () => {
     const { tools } = registerExtension();
     const [tool] = tools;
     const wrapperParams = {
+      connection: "",
       host: "",
       options: [],
       command: "",
@@ -258,6 +260,69 @@ describe("ssh_session extension", () => {
     });
   });
 
+  it("keeps multiple named connections alive with independent shell state", async () => {
+    const { tools } = registerExtension();
+    const [tool] = tools;
+
+    await call(tool, { action: "connect", connection: "app", host: "app-host" });
+    await call(tool, { action: "execute", connection: "app", command: "export ROLE=app" });
+    await call(tool, { action: "connect", connection: "db", host: "db-host" });
+    await call(tool, { action: "execute", connection: "db", command: "export ROLE=db" });
+
+    await expect(call(tool, {
+      action: "execute",
+      connection: "app",
+      command: 'printf "%s" "$ROLE"',
+    })).resolves.toMatchObject({ content: [{ text: "app" }] });
+    await expect(call(tool, {
+      action: "execute",
+      connection: "db",
+      command: 'printf "%s" "$ROLE"',
+    })).resolves.toMatchObject({ content: [{ text: "db" }] });
+    await expect(call(tool, { action: "status" })).resolves.toMatchObject({
+      content: [{ text: "Active SSH sessions:\n- app: app-host (prompt mode)\n- db: db-host (prompt mode)" }],
+      details: {
+        connections: [
+          { connection: "app", host: "app-host", mode: "prompt" },
+          { connection: "db", host: "db-host", mode: "prompt" },
+        ],
+      },
+    });
+
+    await call(tool, { action: "disconnect", connection: "db" });
+    await expect(call(tool, { action: "status", connection: "app" })).resolves.toMatchObject({
+      content: [{ text: 'Connection "app" is connected to app-host (prompt mode).' }],
+      details: { connection: "app", host: "app-host", mode: "prompt" },
+    });
+    await expect(call(tool, { action: "status", connection: "db" })).resolves.toMatchObject({
+      content: [{ text: 'No active SSH session named "db".' }],
+      details: { connection: "db", host: undefined, mode: undefined },
+    });
+  });
+
+  it("keeps other named connections alive when one times out", async () => {
+    const { tools } = registerExtension();
+    const [tool] = tools;
+
+    await call(tool, { action: "connect", connection: "app", host: "app-host" });
+    await call(tool, { action: "connect", connection: "worker", host: "worker-host" });
+    await expect(call(tool, {
+      action: "execute",
+      connection: "worker",
+      command: "sleep 10",
+      timeout: 25,
+    })).rejects.toThrow("timed out");
+
+    await expect(call(tool, {
+      action: "execute",
+      connection: "app",
+      command: "printf alive",
+    })).resolves.toMatchObject({ content: [{ text: "alive" }] });
+    await expect(call(tool, { action: "status", connection: "worker" })).resolves.toMatchObject({
+      content: [{ text: 'No active SSH session named "worker".' }],
+    });
+  });
+
   it("truncates large command output and saves the exact full output owner-only", async () => {
     const { tools } = registerExtension();
     const [tool] = tools;
@@ -281,11 +346,15 @@ describe("ssh_session extension", () => {
     const { tools, handlers } = registerExtension();
     const [tool] = tools;
     await call(tool, { action: "connect", host: "shutdown-host" });
+    await call(tool, { action: "connect", connection: "worker", host: "shutdown-worker" });
 
     const shutdown = handlers.get("session_shutdown")?.[0];
     expect(shutdown).toBeTypeOf("function");
     await shutdown?.({ type: "session_shutdown", reason: "quit" }, context());
-    await waitFor(fakeSSH.exits, "shutdown-host");
+    await Promise.all([
+      waitFor(fakeSSH.exits, "shutdown-host"),
+      waitFor(fakeSSH.exits, "shutdown-worker"),
+    ]);
 
     expect(tool.promptGuidelines.join(" ")).toContain("Prefer ssh_session");
     const theme = {

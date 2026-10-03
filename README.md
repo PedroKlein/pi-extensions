@@ -34,7 +34,7 @@ pi install npm:@pedro_klein/pi-repos
 pi install npm:@pedro_klein/pi-ssh-session
 ```
 
-`pi-ssh-session` uses key or agent authentication, verifies unknown hosts with OpenSSH's `accept-new` policy, and asks the user to choose prompt or connection-scoped YOLO mode for every connection. It supports single or batched uploads and downloads. Command output is bounded, sudo passwords use a masked prompt and are not persisted, and interactive SSH/password/TTY sessions are unsupported. See the [package reference](packages/pi-ssh-session/README.md).
+`pi-ssh-session` uses key or agent authentication, verifies unknown hosts with OpenSSH's `accept-new` policy, and asks the user to choose prompt or connection-scoped YOLO mode for every connection. It supports multiple persistent named connections plus single or batched uploads and downloads. Command output is bounded, sudo passwords use a masked prompt and are not persisted, and interactive SSH/password/TTY sessions are unsupported. See the [package reference](packages/pi-ssh-session/README.md).
 
 All extensions (local git install):
 

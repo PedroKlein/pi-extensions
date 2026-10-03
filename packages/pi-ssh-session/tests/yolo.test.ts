@@ -374,6 +374,7 @@ describe("ssh_session YOLO mode", () => {
       async () => PROMPT_MODE,
     );
     const wrapper = {
+      connection: "",
       host: "",
       options: [],
       command: "",

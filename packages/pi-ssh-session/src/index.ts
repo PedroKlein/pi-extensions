@@ -26,6 +26,7 @@ const Parameters = Type.Object({
     Type.Literal("upload"),
     Type.Literal("download"),
   ]),
+  connection: Type.Optional(Type.String({ description: 'Connection name; defaults to "default"' })),
   host: Type.Optional(Type.String({ description: "SSH host for connect, such as user@example.com" })),
   options: Type.Optional(Type.Array(Type.String({ description: "Supported OpenSSH option tokens" }))),
   command: Type.Optional(Type.String({ description: "Remote shell command for execute or sudo" })),
@@ -41,6 +42,7 @@ const Parameters = Type.Object({
 
 type Parameters = {
   action: "connect" | "execute" | "status" | "disconnect" | "sudo" | "upload" | "download";
+  connection?: string;
   host?: string;
   options?: string[];
   command?: string;
@@ -63,6 +65,8 @@ const YOLO_MODE = "YOLO — run commands, sudo, uploads, and downloads without f
 
 interface Details {
   action: Parameters["action"];
+  connection?: string;
+  connections?: Array<{ connection: string; host: string; mode: ConnectionMode }>;
   host?: string;
   exitCode?: number;
   truncation?: ReturnType<typeof truncateTail>;
@@ -79,17 +83,20 @@ function validate(params: Parameters): void {
     throw new Error('action must be one of "connect", "execute", "status", "disconnect", "sudo", "upload", or "download".');
   }
   const allowed: Record<Parameters["action"], Set<keyof Parameters>> = {
-    connect: new Set(["action", "host", "options", "timeout", "cacheSudoPassword"]),
-    execute: new Set(["action", "command", "timeout"]),
-    status: new Set(["action", "timeout"]),
-    disconnect: new Set(["action", "timeout"]),
-    sudo: new Set(["action", "command", "timeout"]),
-    upload: new Set(["action", "localPath", "remotePath", "files", "timeout"]),
-    download: new Set(["action", "localPath", "remotePath", "files", "timeout"]),
+    connect: new Set(["action", "connection", "host", "options", "timeout", "cacheSudoPassword"]),
+    execute: new Set(["action", "connection", "command", "timeout"]),
+    status: new Set(["action", "connection", "timeout"]),
+    disconnect: new Set(["action", "connection", "timeout"]),
+    sudo: new Set(["action", "connection", "command", "timeout"]),
+    upload: new Set(["action", "connection", "localPath", "remotePath", "files", "timeout"]),
+    download: new Set(["action", "connection", "localPath", "remotePath", "files", "timeout"]),
   };
   const required = params.action === "connect" ? "host" : ["execute", "sudo"].includes(params.action) ? "command" : undefined;
   if (required && (typeof params[required] !== "string" || !params[required].trim())) {
     throw new Error(`Action "${params.action}" requires a non-empty ${required}.`);
+  }
+  if (params.connection !== undefined && (typeof params.connection !== "string" || (params.connection !== "" && !params.connection.trim()))) {
+    throw new Error("connection must be a non-empty string.");
   }
   if (params.cacheSudoPassword !== undefined && typeof params.cacheSudoPassword !== "boolean") {
     throw new Error("cacheSudoPassword must be a boolean.");
@@ -187,22 +194,35 @@ async function formatOutput(result: CommandResult, details: Details) {
 }
 
 export default function sshSessionExtension(pi: ExtensionAPI): void {
-  let cachedSudoPassword: Buffer | undefined;
-  const clearSudoPassword = () => {
-    cachedSudoPassword?.fill(0);
-    cachedSudoPassword = undefined;
+  interface Connection {
+    session: SSHSession;
+    host?: string;
+    mode?: ConnectionMode;
+    cachedSudoPassword?: Buffer;
+  }
+
+  const connections = new Map<string, Connection>();
+  const createConnection = (name: string) => {
+    let connection: Connection;
+    const session = new SSHSession("ssh", () => {
+      connection.cachedSudoPassword?.fill(0);
+      connection.cachedSudoPassword = undefined;
+      connection.host = undefined;
+      connection.mode = undefined;
+      if (connections.get(name) === connection) connections.delete(name);
+    });
+    connection = { session };
+    return connection;
   };
-  const session = new SSHSession("ssh", clearSudoPassword);
-  let host: string | undefined;
-  let connectionMode: ConnectionMode | undefined;
 
   pi.registerTool({
     name: "ssh_session",
     label: "SSH session",
-    description: `Manage one persistent non-interactive SSH shell. Actions: connect, execute, status, disconnect, sudo, upload, download. Shell state persists between calls. Every connection asks the user to choose prompt or YOLO mode. Upload and download accept one path pair or a files array. Commands wait indefinitely unless timeout is set. Output is truncated to ${DEFAULT_MAX_LINES} lines or ${formatSize(DEFAULT_MAX_BYTES)}.`,
-    promptSnippet: "Connect to and run commands in one persistent remote SSH shell",
+    description: `Manage persistent non-interactive SSH shells. Actions: connect, execute, status, disconnect, sudo, upload, download. Use connection to keep multiple named shells alive; omitting it uses the default connection. Shell state persists between calls. Every connection asks the user to choose prompt or YOLO mode. Upload and download accept one path pair or a files array. Commands wait indefinitely unless timeout is set. Output is truncated to ${DEFAULT_MAX_LINES} lines or ${formatSize(DEFAULT_MAX_BYTES)}.`,
+    promptSnippet: "Connect to and run commands in persistent remote SSH shells",
     promptGuidelines: [
       "Prefer ssh_session over local bash when the requested work targets a remote host.",
+      "Use distinct connection names when multiple SSH shells must remain alive; omit connection to use the backward-compatible default shell.",
       "Use ssh_session status before assuming a connection exists; connect explicitly when needed.",
       "Use action=sudo for commands requiring elevated privileges; do not prefix action=execute commands with sudo.",
       "Use upload and download to transfer files over the active SSH session; prefer files for multiple path pairs.",
@@ -216,14 +236,13 @@ export default function sshSessionExtension(pi: ExtensionAPI): void {
 
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       validate(params);
-      if (!session.connected) {
-        host = undefined;
-        connectionMode = undefined;
-      }
+      const connectionName = params.connection?.trim() || "default";
+      let connection = connections.get(connectionName);
       const details: Details = {
         action: params.action,
-        host,
-        mode: connectionMode,
+        connection: params.connection ? connectionName : undefined,
+        host: connection?.host,
+        mode: connection?.mode,
       };
       const timeout = params.timeout && params.timeout > 0 ? params.timeout : undefined;
 
@@ -231,54 +250,89 @@ export default function sshSessionExtension(pi: ExtensionAPI): void {
         const target = params.host!.trim();
         const options = [...(params.options ?? [])];
         validateSSHOptions(options);
-        const connection = `Host: ${JSON.stringify(target)}${options.length === 0 ? "" : `\nOptions: ${options.map((option) => JSON.stringify(option)).join(" ")}`}`;
-        const requestedMode = await chooseConnectionMode(ctx, connection);
-        host = undefined;
-        connectionMode = undefined;
-        await session.connect(target, options, signal);
-        host = target;
-        connectionMode = requestedMode;
-        details.host = target;
-        details.mode = requestedMode;
-        if (requestedMode === "yolo" && params.cacheSudoPassword) {
-          let password: Buffer | null = null;
-          try {
-            password = await promptSudoPassword(ctx);
-            if (password === null) throw new Error("Sudo authentication was cancelled.");
-            await authenticateSudo(session, password, timeout, signal);
-            cachedSudoPassword = password;
-            password = null;
-          } catch (error) {
-            password?.fill(0);
-            await session.disconnect();
-            host = undefined;
-            connectionMode = undefined;
-            throw error;
+        const description = `${params.connection ? `Connection: ${JSON.stringify(connectionName)}\n` : ""}Host: ${JSON.stringify(target)}${options.length === 0 ? "" : `\nOptions: ${options.map((option) => JSON.stringify(option)).join(" ")}`}`;
+        const requestedMode = await chooseConnectionMode(ctx, description);
+        connection ??= createConnection(connectionName);
+        try {
+          await connection.session.connect(target, options, signal);
+          connection.host = target;
+          connection.mode = requestedMode;
+          connections.set(connectionName, connection);
+          details.host = target;
+          details.mode = requestedMode;
+          if (requestedMode === "yolo" && params.cacheSudoPassword) {
+            let password: Buffer | null = null;
+            try {
+              password = await promptSudoPassword(ctx);
+              if (password === null) throw new Error("Sudo authentication was cancelled.");
+              await authenticateSudo(connection.session, password, timeout, signal);
+              connection.cachedSudoPassword = password;
+              password = null;
+            } catch (error) {
+              password?.fill(0);
+              await connection.session.disconnect();
+              throw error;
+            }
           }
+        } catch (error) {
+          if (!connection.session.connected) connections.delete(connectionName);
+          throw error;
         }
-        const text = requestedMode === "yolo"
-          ? `Connected to ${target} in YOLO mode.`
-          : `Connected to ${target}.`;
+        const subject = params.connection ? `Connection ${JSON.stringify(connectionName)} connected to ${target}` : `Connected to ${target}`;
+        const text = requestedMode === "yolo" ? `${subject} in YOLO mode.` : `${subject}.`;
         return { content: [{ type: "text" as const, text }], details };
       }
 
       if (params.action === "status") {
-        const text = session.connected && host && connectionMode
-          ? `Connected to ${host} (${connectionMode === "yolo" ? "YOLO" : "prompt"} mode).`
-          : "No active SSH session.";
+        if (params.connection) {
+          const text = connection?.session.connected && connection.host && connection.mode
+            ? `Connection ${JSON.stringify(connectionName)} is connected to ${connection.host} (${connection.mode === "yolo" ? "YOLO" : "prompt"} mode).`
+            : `No active SSH session named ${JSON.stringify(connectionName)}.`;
+          return { content: [{ type: "text" as const, text }], details };
+        }
+        const active = [...connections.entries()]
+          .filter(([, item]) => item.session.connected && item.host && item.mode)
+          .map(([name, item]) => ({ connection: name, host: item.host!, mode: item.mode! }));
+        if (active.length === 0) {
+          return { content: [{ type: "text" as const, text: "No active SSH session." }], details };
+        }
+        if (active.length === 1 && active[0].connection === "default") {
+          const item = active[0];
+          details.host = item.host;
+          details.mode = item.mode;
+          return {
+            content: [{ type: "text" as const, text: `Connected to ${item.host} (${item.mode === "yolo" ? "YOLO" : "prompt"} mode).` }],
+            details,
+          };
+        }
+        details.connections = active;
+        const text = `Active SSH sessions:\n${active.map((item) => `- ${item.connection}: ${item.host} (${item.mode === "yolo" ? "YOLO" : "prompt"} mode)`).join("\n")}`;
         return { content: [{ type: "text" as const, text }], details };
       }
 
       if (params.action === "disconnect") {
-        const disconnectedHost = session.connected ? host : undefined;
-        await session.disconnect();
-        host = undefined;
-        connectionMode = undefined;
-        const text = disconnectedHost ? `Disconnected from ${disconnectedHost}.` : "No active SSH session.";
-        return { content: [{ type: "text" as const, text }], details: { action: params.action, host: disconnectedHost } };
+        const disconnectedHost = connection?.session.connected ? connection.host : undefined;
+        await connection?.session.disconnect();
+        connections.delete(connectionName);
+        const text = disconnectedHost
+          ? params.connection
+            ? `Disconnected connection ${JSON.stringify(connectionName)} from ${disconnectedHost}.`
+            : `Disconnected from ${disconnectedHost}.`
+          : params.connection
+            ? `No active SSH session named ${JSON.stringify(connectionName)}.`
+            : "No active SSH session.";
+        return {
+          content: [{ type: "text" as const, text }],
+          details: { action: params.action, connection: params.connection ? connectionName : undefined, host: disconnectedHost },
+        };
       }
 
-      if (!session.connected || !host) throw new Error("No active SSH session. Use action=connect first.");
+      if (!connection?.session.connected || !connection.host) {
+        throw new Error(params.connection
+          ? `No active SSH session named ${JSON.stringify(connectionName)}. Use action=connect first.`
+          : "No active SSH session. Use action=connect first.");
+      }
+      const { session, host, mode: connectionMode } = connection;
       if (params.action === "upload" || params.action === "download") {
         const isBatch = (params.files?.length ?? 0) > 0;
         const files = (isBatch ? params.files! : [{ localPath: params.localPath!, remotePath: params.remotePath! }])
@@ -356,13 +410,14 @@ export default function sshSessionExtension(pi: ExtensionAPI): void {
             throw new Error(`Sudo is unavailable: ${preflight.output || `exit code ${preflight.exitCode}`}`);
           }
           if (connectionMode === "yolo") {
-            if (!cachedSudoPassword) {
+            if (!connection.cachedSudoPassword) {
               throw new Error("Sudo authentication is required, but this YOLO connection has no cached sudo password.");
             }
             try {
-              await authenticateSudo(session, cachedSudoPassword, timeout, signal);
+              await authenticateSudo(session, connection.cachedSudoPassword, timeout, signal);
             } catch (error) {
-              clearSudoPassword();
+              connection.cachedSudoPassword?.fill(0);
+              connection.cachedSudoPassword = undefined;
               throw error;
             }
           } else {
@@ -400,7 +455,8 @@ export default function sshSessionExtension(pi: ExtensionAPI): void {
             : undefined;
       const preview = target ? truncateLine(target.replace(/\s+/g, " ").trim(), 120).text : "";
       const suffix = preview ? ` ${preview}` : "";
-      return new Text(theme.fg("toolTitle", theme.bold(`ssh ${args.action}${suffix}`)), 0, 0);
+      const connectionLabel = args.connection ? ` [${args.connection}]` : "";
+      return new Text(theme.fg("toolTitle", theme.bold(`ssh${connectionLabel} ${args.action}${suffix}`)), 0, 0);
     },
 
     renderResult(result, { isPartial }, theme) {
@@ -412,9 +468,8 @@ export default function sshSessionExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("session_shutdown", async () => {
-    await session.disconnect();
-    host = undefined;
-    connectionMode = undefined;
+    await Promise.all([...connections.values()].map(({ session }) => session.disconnect()));
+    connections.clear();
   });
 }
 

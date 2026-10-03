@@ -1,6 +1,6 @@
 # pi-ssh-session
 
-Provides one `ssh_session` tool for approved work through a persistent, non-interactive SSH shell.
+Provides one `ssh_session` tool for approved work through persistent, non-interactive SSH shells. Connections can be named so multiple remote shells stay alive at once; omitting the name uses a backward-compatible default connection.
 
 ## Install
 
@@ -14,13 +14,13 @@ The local machine must provide OpenSSH. Authentication uses configured SSH keys 
 
 | Action | Parameters | Behavior |
 |--------|------------|----------|
-| `connect` | `host`, optional `options`, `cacheSudoPassword` | Asks the user to choose prompt or YOLO mode, then starts one `ssh -T` process and a persistent remote `bash -l` shell. `cacheSudoPassword` applies only when YOLO is chosen. Replaces any active connection after validation and approval. |
-| `execute` | `command`, optional `timeout` | Runs a command in the active shell. Working directory and exported environment changes persist. Commands beginning with `sudo` are rejected; use `sudo` instead. |
-| `status` | none | Reports the active host and approval mode, or that no session is connected. |
-| `disconnect` | none | Terminates the active SSH process. |
-| `sudo` | `command`, optional `timeout` | Runs the command through non-interactive `sudo` after checking or acquiring a remote sudo timestamp. |
-| `upload` | `localPath` and `remotePath`, or `files`; optional `timeout` | Transfers one or more local files to the active host. `files` is an array of `{ localPath, remotePath }` pairs. Relative local paths resolve against Pi's current working directory. |
-| `download` | `remotePath` and `localPath`, or `files`; optional `timeout` | Transfers one or more remote files to the local machine. `files` is an array of `{ localPath, remotePath }` pairs. Relative local paths resolve against Pi's current working directory. |
+| `connect` | `host`; optional `connection`, `options`, `cacheSudoPassword` | Asks the user to choose prompt or YOLO mode, then starts one `ssh -T` process and a persistent remote `bash -l` shell. `connection` names the shell and defaults to `default`; reconnecting replaces only that name. `cacheSudoPassword` applies only when YOLO is chosen. |
+| `execute` | `command`; optional `connection`, `timeout` | Runs a command in the selected shell. Working directory and exported environment changes persist. Commands beginning with `sudo` are rejected; use `sudo` instead. |
+| `status` | optional `connection` | Reports the selected connection, or lists every active connection when no name is supplied. A lone default connection retains the original status output. |
+| `disconnect` | optional `connection` | Terminates the selected SSH process. |
+| `sudo` | `command`; optional `connection`, `timeout` | Runs the command through non-interactive `sudo` after checking or acquiring a remote sudo timestamp. |
+| `upload` | `localPath` and `remotePath`, or `files`; optional `connection`, `timeout` | Transfers one or more local files to the selected host. `files` is an array of `{ localPath, remotePath }` pairs. Relative local paths resolve against Pi's current working directory. |
+| `download` | `remotePath` and `localPath`, or `files`; optional `connection`, `timeout` | Transfers one or more remote files to the local machine. `files` is an array of `{ localPath, remotePath }` pairs. Relative local paths resolve against Pi's current working directory. |
 
 `timeout` is an optional limit in milliseconds. Commands and transfers wait indefinitely when it is omitted or set to `0`. An explicit positive timeout closes the SSH connection because the remote shell may still be running the timed-out operation and cannot safely accept another command. Connection setup always has a 30,000 ms timeout.
 
@@ -53,7 +53,7 @@ Connections use these OpenSSH defaults:
 
 `accept-new` records previously unseen host keys through the user's normal OpenSSH configuration and rejects changed host keys. `connect.options` accepts complete tokens for `-4`, `-6`, `-a`, `-b`, `-C`, `-c`, `-i`, `-J`, `-l`, `-m`, `-o`, `-p`, `-q`, `-T`, `-v`, and `-x`. Positional arguments and options that enable forwarding, local command execution, control sockets, password authentication, a PTY, or a different remote session are rejected. Option parsing ends before `host`, so a host beginning with `-` remains a host argument.
 
-One SSH process and one remote shell exist per Pi session. Remote commands and transfers are serialized through that shell. Disconnecting, replacing the host, timing out, aborting, losing the stream, or ending the Pi session closes it. Connection state is not restored after reload or resume.
+Each name owns its SSH process, remote shell state, approval mode, command queue, and optional cached sudo password. Each connection serializes its own remote commands and transfers. Disconnecting, replacing, timing out, aborting, or losing one connection does not close the others. Pi shutdown closes every connection. Connection state is not restored after reload or resume.
 
 ## Output and files
 
@@ -71,7 +71,6 @@ The retained buffer is cleared on disconnect, connection replacement, timeout, a
 
 ## Limitations
 
-- One remote host per Pi session.
 - No PTY and no interactive remote programs or TUI applications.
 - No SSH password, key-passphrase, or keyboard-interactive authentication.
 - No support for remote sudo policies that require a TTY (`requiretty`).

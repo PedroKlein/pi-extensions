@@ -28,6 +28,7 @@ describe("package", () => {
 
     expect(tools.map(({ name }) => name)).toEqual(["ssh_session"]);
     expect(tools[0].parameters.properties).not.toHaveProperty("mode");
+    expect(tools[0].parameters.properties).toHaveProperty("connection");
     expect(tools[0].parameters.properties).toHaveProperty("cacheSudoPassword");
     expect(tools[0].parameters.properties).toHaveProperty("files");
     expect(tools[0].parameters.properties).not.toHaveProperty("password");
