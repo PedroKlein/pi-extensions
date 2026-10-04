@@ -17,9 +17,10 @@ afterEach(() => {
 
 function harness(options?: {
   pinned?: { key: string; value: string };
-  lesson?: { rule: string; category: string };
+  facts?: Array<{ key: string; value: string }>;
+  cwd?: string;
 }) {
-  const cwd = mkdtempSync(join(tmpdir(), "pi-memory-extension-"));
+  const cwd = options?.cwd ?? mkdtempSync(join(tmpdir(), "pi-memory-extension-"));
   tempDirs.push(cwd);
   const memoryDir = join(cwd, "memory");
   mkdirSync(join(cwd, ".pi"), { recursive: true });
@@ -27,26 +28,26 @@ function harness(options?: {
     join(cwd, ".pi", "settings.json"),
     JSON.stringify({
       "pi-memory": { localPath: memoryDir },
-      memory: { dream: { enabled: false } },
     }),
   );
-  if (options?.pinned || options?.lesson) {
+  if (options?.pinned || options?.facts?.length) {
     const store = new MemoryStore(join(memoryDir, "memory.db"));
     if (options.pinned) {
       store.setSemantic(options.pinned.key, options.pinned.value, 1, "user");
       store.pin(options.pinned.key);
     }
-    if (options.lesson) {
-      store.addLesson(options.lesson.rule, options.lesson.category, "user", false);
+    for (const fact of options.facts ?? []) {
+      store.setSemantic(fact.key, fact.value, 1, "user");
     }
     store.close();
   }
 
   const listeners = new Map<string, (event: any, ctx: any) => any>();
   const tools = new Map<string, ToolDefinition>();
+  const registerCommand = vi.fn();
   const pi = {
     registerTool: (tool: ToolDefinition) => tools.set(tool.name, tool),
-    registerCommand: vi.fn(),
+    registerCommand,
     registerMessageRenderer: vi.fn(),
     sendMessage: vi.fn(),
     exec: vi.fn(),
@@ -65,6 +66,7 @@ function harness(options?: {
   return {
     ctx,
     tools,
+    registerCommand,
     toolNames: [...tools.keys()],
     start: () => listeners.get("session_start")?.({ reason: "startup" }, ctx),
     shutdown: () => listeners.get("session_shutdown")?.({}, ctx),
@@ -87,10 +89,10 @@ describe("pi-memory extension surface", () => {
       "memory_search",
       "memory_remember",
       "memory_forget",
-      "memory_lessons",
       "memory_stats",
       "memory_pin",
     ]);
+    expect(h.registerCommand).not.toHaveBeenCalled();
   });
 
   it("updates only the named memory section and leaves stable sections unchanged", async () => {
@@ -120,13 +122,11 @@ describe("pi-memory extension surface", () => {
   it("returns schema-valid structured data from every memory query tool", async () => {
     const h = harness({
       pinned: { key: "pref.editor", value: "x".repeat(5_000) },
-      lesson: { rule: "Run focused tests first", category: "testing" },
     });
     await h.start();
 
     for (const [name, params] of [
       ["memory_search", { query: "editor", limit: 10 }],
-      ["memory_lessons", { category: "testing", limit: 10 }],
       ["memory_stats", {}],
     ] as const) {
       const tool = h.tools.get(name)!;
@@ -146,10 +146,141 @@ describe("pi-memory extension surface", () => {
     await h.shutdown();
   });
 
+  it("scopes search and listing to global plus the current managed worktree by default", async () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-memory-worktree-"));
+    tempDirs.push(root);
+    const repo = join(root, "alpha");
+    const cwd = join(repo, "main");
+    mkdirSync(join(repo, ".bare"), { recursive: true });
+    mkdirSync(join(cwd, ".git"), { recursive: true });
+
+    const h = harness({
+      cwd,
+      facts: [
+        { key: "pref.editor", value: "shared editor" },
+        { key: "project.alpha.editor", value: "alpha editor" },
+        { key: "project.beta.editor", value: "beta editor" },
+      ],
+    });
+    await h.start();
+
+    const search = await h.tools.get("memory_search")!.execute(
+      "call",
+      { query: "editor", limit: 10 },
+      undefined,
+      undefined,
+      h.ctx as never,
+    );
+    expect(search.structuredContent).toMatchObject({
+      scope: "current",
+      project: "alpha",
+      count: 2,
+    });
+    expect((search.structuredContent as any).results.map((result: any) => result.key)).toEqual([
+      "pref.editor",
+      "project.alpha.editor",
+    ]);
+
+    const listAll = await h.tools.get("memory_search")!.execute(
+      "call",
+      { scope: "all", limit: 2, offset: 0 },
+      undefined,
+      undefined,
+      h.ctx as never,
+    );
+    expect(listAll.structuredContent).toMatchObject({
+      scope: "all",
+      offset: 0,
+      count: 2,
+      truncated: true,
+      nextOffset: 2,
+    });
+    await h.shutdown();
+  });
+
+  it("rejects credential-shaped facts without echoing or persisting the value", async () => {
+    const h = harness();
+    await h.start();
+    const secret = "tvly-abcdefghijklmnopqrstuvwxyz123456";
+
+    await expect(h.tools.get("memory_remember")!.execute(
+      "call",
+      { key: "pref.secret", value: secret },
+      undefined,
+      undefined,
+      h.ctx as never,
+    )).rejects.toThrow("credential");
+
+    const search = await h.tools.get("memory_search")!.execute(
+      "call",
+      { query: "secret", scope: "all" },
+      undefined,
+      undefined,
+      h.ctx as never,
+    );
+    expect(search.content).not.toContain(secret);
+    expect(search.structuredContent).toMatchObject({ count: 0 });
+    await h.shutdown();
+  });
+
+  it("rejects project facts for a different repository", async () => {
+    const h = harness();
+    await h.start();
+
+    await expect(h.tools.get("memory_remember")!.execute(
+      "call",
+      { key: "project.other.workflow", value: "wrong scope" },
+      undefined,
+      undefined,
+      h.ctx as never,
+    )).rejects.toThrow("current repository slug");
+    await expect(h.tools.get("memory_forget")!.execute(
+      "call",
+      { key: "project.other.workflow" },
+      undefined,
+      undefined,
+      h.ctx as never,
+    )).rejects.toThrow("current repository slug");
+    await expect(h.tools.get("memory_pin")!.execute(
+      "call",
+      { action: "pin", key: "project.other.workflow" },
+      undefined,
+      undefined,
+      h.ctx as never,
+    )).rejects.toThrow("current repository slug");
+    await h.shutdown();
+  });
+
+  it("refreshes pinned context after mutations in the same session", async () => {
+    const h = harness();
+    await h.start();
+
+    await h.tools.get("memory_remember")!.execute(
+      "call",
+      { key: "pref.editor", value: "Use Neovim", pinned: true },
+      undefined,
+      undefined,
+      h.ctx as never,
+    );
+    const withPin = await h.applyPrompt({ rules: "stable" });
+    expect(withPin.sections.memory).toContain("pref.editor: Use Neovim");
+
+    await h.tools.get("memory_pin")!.execute(
+      "call",
+      { action: "unpin", key: "pref.editor" },
+      undefined,
+      undefined,
+      h.ctx as never,
+    );
+    const withoutPin = await h.applyPrompt({ ...withPin.sections });
+    expect(withoutPin.sections).toEqual({ rules: "stable" });
+    await h.shutdown();
+  });
+
   it("serializes every memory tool and labels queries separately from mutations", () => {
     const h = harness();
 
-    for (const name of ["memory_search", "memory_lessons", "memory_stats"]) {
+    for (const name of ["memory_search", "memory_stats"]) {
       expect(h.tools.get(name)).toMatchObject({
         exposure: "direct",
         executionMode: "sequential",

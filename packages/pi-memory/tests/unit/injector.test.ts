@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { buildDeterministicBlock } from "../../src/injector.js";
+import { buildDeterministicBlock, projectSlug } from "../../src/injector.js";
 import { MemoryStore } from "../../src/store.js";
 
 let tmpDir: string;
@@ -32,7 +32,6 @@ describe("buildDeterministicBlock", () => {
     const block = buildDeterministicBlock(
       store,
       "/workspace/alpha",
-      { _always: [] },
     );
 
     expect(block.factKeys).toEqual([
@@ -47,6 +46,17 @@ describe("buildDeterministicBlock", () => {
     expect(block.text).not.toMatch(/facts|lessons|memory_search|BEFORE starting/i);
   });
 
+  it("resolves the repository name for a managed main worktree", () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-memory-worktree-"));
+    const repo = join(root, "alpha");
+    const cwd = join(repo, "main");
+    mkdirSync(join(repo, ".bare"), { recursive: true });
+    mkdirSync(join(cwd, ".git"), { recursive: true });
+
+    expect(projectSlug(cwd)).toBe("alpha");
+    rmSync(root, { recursive: true, force: true });
+  });
+
   it("caps at 500 tokens in stable key order and emits a visible warning", () => {
     for (let index = 0; index < 12; index += 1) {
       rememberPinned(
@@ -59,13 +69,11 @@ describe("buildDeterministicBlock", () => {
     const first = buildDeterministicBlock(
       store,
       "/workspace/alpha",
-      { _always: [] },
       { onBudgetExceeded: warning },
     );
     const second = buildDeterministicBlock(
       store,
       "/workspace/alpha",
-      { _always: [] },
       { onBudgetExceeded: vi.fn() },
     );
 

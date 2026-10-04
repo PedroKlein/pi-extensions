@@ -1,5 +1,15 @@
 # @pedro_klein/pi-memory
 
+## Unreleased
+
+### Major Changes
+
+- Replace automatic session mining with an explicit curated fact store.
+- Scope searches to global plus current-repository facts by default, with opt-in cross-repository search and pagination.
+- Reject credential-shaped values before persistence.
+- Inject only pinned global and current-project facts.
+- Remove Dream, session consolidation, lesson tools, category-map behavior, and nested model calls. Legacy database tables remain untouched during upgrades.
+
 ## 0.2.1
 
 ### Patch Changes

@@ -1,7 +1,7 @@
 {
   "name": "@pedro_klein/pi-memory",
   "version": "0.2.1",
-  "description": "Persistent memory for Pi with Dream async session mining",
+  "description": "Curated persistent memory for Pi with scoped search and pinned context",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./dist/index.d.ts",
@@ -32,8 +32,7 @@
     "pi",
     "memory",
     "persistent",
-    "dream",
-    "session-mining",
+    "curated",
     "coding-agent"
   ],
   "license": "MIT",

@@ -1,8 +1,8 @@
 # pi-memory
 
-Persistent memory for [Pi](https://pi.dev) — learns preferences, corrections, and patterns across sessions and injects relevant context into every conversation.
+Curated persistent memory for [Pi](https://pi.dev).
 
-I built this because I was tired of re-explaining my project conventions and personal preferences every session. The memory persists across reboots, projects, and model switches.
+`pi-memory` stores durable facts that are useful across sessions. It does not mine conversations or infer new memories automatically. The user or agent must explicitly save each fact.
 
 ## Install
 
@@ -10,131 +10,79 @@ I built this because I was tired of re-explaining my project conventions and per
 pi install npm:@pedro_klein/pi-memory
 ```
 
-## What it provides
-
-**Tools:**
+## Tools
 
 | Tool | Description |
-|------|-------------|
-| `memory_search` | Full-text search across all stored facts (FTS5 when available, substring fallback) |
-| `memory_remember` | Store a fact (`type: "fact"`) or correction (`type: "lesson"`) |
-| `memory_forget` | Remove a fact by key or a lesson by ID |
-| `memory_lessons` | List learned corrections, optionally filtered by category |
-| `memory_stats` | Count of facts, lessons, and logged events; shows DB path |
+|---|---|
+| `memory_search` | Search facts or list them with pagination |
+| `memory_remember` | Store one durable fact or preference |
+| `memory_forget` | Remove one fact by key |
+| `memory_stats` | Show fact, pin, and event counts plus the database path |
+| `memory_pin` | Pin, unpin, or list facts used for automatic prompt injection |
 
-**Commands:**
+## Store a fact
 
-| Command | Description |
-|---------|-------------|
-| `/dream` | Run Dream manually — mines unprocessed sessions and refines memory |
-| `/memory-consolidate` | Trigger consolidation of the current session's conversation |
+Use dotted keys with a stable scope:
 
-**Events handled:** `session_start`, `before_agent_start`, `agent_end`, `session_before_switch`, `session_shutdown`
+- `pref.*` for preferences that apply across projects
+- `project.<slug>.*` for facts specific to one repository
+- `tool.*` for stable tool behavior
+- `user.*` for durable identity facts
 
-## Memory model
+Keep values concise. Do not store session progress, commit hashes, file contents, facts that can be read from the repository, or credentials. A `project.<slug>.*` write must match the current repository; use the repository's own session to record it.
 
-There are two types of stored memory:
+Credential-shaped values are rejected before they reach SQLite.
 
-**Facts** — key-value pairs with a dotted namespace:
-- `pref.*` — personal coding preferences (`pref.commit_style`, `pref.editor`)
-- `project.<slug>.*` — per-project context (`project.rosie.di`, `project.kms-lite.auth`)
-- `tool.*` — tool-specific patterns (`tool.sed.usage`, `tool.grep.preference`)
-- `user.*` — identity facts (`user.name`, `user.timezone`)
+## Search and list facts
 
-**Lessons** — free-text rules with categories and a negative flag:
-- Positive (`negative: false`): validated approaches ("always draft before publishing")
-- Negative (`negative: true`): corrections to avoid ("don't use echo >> for file insertion")
+`memory_search` accepts an optional query, scope, offset, and limit.
 
-Both types are stored in a SQLite database at `~/.pi/memory/memory.db`.
+| Scope | Result |
+|---|---|
+| `current` | Global facts and facts for the current repository; default |
+| `global` | Facts outside `project.*` |
+| `all` | Every repository; intended for explicit audits |
 
-## System prompt injection
+Omit `query` to list facts in stable key order. Use `offset` and `nextOffset` for pagination.
 
-At `session_start`, pi-memory builds a deterministic context block from the store:
+Repository scope is derived from the Git worktree root. A managed path such as `~/Dev/<host>/<owner>/<repo>/main` resolves to `<repo>`, not `main`.
 
-1. **Facts** — loaded by prefix for the current project, preferences, and tools
-2. **Lessons** — filtered by `~/.pi/memory/category-map.json` (project slug → categories)
+## Pinned facts
 
-The block is cached once per session and injected via `before_agent_start` every turn. No LLM is involved in injection — it's a fast prefix lookup. The context block shows as `🧠 project.<slug> | N facts | N lessons [categories]` in the conversation.
+Pinned facts are the only memories injected automatically. Global pins are available everywhere; `project.<slug>.*` pins are injected only in the matching repository.
 
-Facts older than 30 days get a `(Nd ago)` staleness tag; older than 90 days get a warning.
+The injected block has a fixed 500-token budget and stable key order. Facts that do not fit remain searchable.
 
-### Category map
+Pin only behavior that must be present on every turn. Ordinary facts should stay searchable rather than occupying the system prompt.
 
-Control which lesson categories load per project:
+## Storage
 
-```json
-// ~/.pi/memory/category-map.json
-{
-  "_always": ["general", "debugging", "workflow"],
-  "my-project": ["go-dev", "testing", "my-project-architecture"],
-  "pi-extensions": ["pi-memory", "pi-extension", "typescript"]
-}
+The default database is:
+
+```text
+~/.pi/memory/memory.db
 ```
 
-`_always` categories load on every project. Per-project entries add on top.
-
-## Dream
-
-Dream is a background system that mines finished sessions and evolves memory over time. It runs as a 3-stage LLM chain:
-
-1. **Miner** — extracts raw facts and lessons from session batches
-2. **Refiner** — merges, deduplicates, and sharpens the extracted candidates against existing memory and skills
-3. **Advisor** — produces workflow insights (skill gaps, tool usage patterns, efficiency observations)
-
-Dream runs automatically on `session_start` when gates pass (default: every 24 hours with ≥5 unprocessed sessions). Results are written to `~/.pi/memory/dream-journal/`. Run manually with `/dream`.
-
-## Configuration
-
-In `~/.pi/agent/settings.json`:
+To use a project-local store, add this to `<project>/.pi/settings.json`:
 
 ```json
 {
-  "memory": {
-    "consolidationEnabled": false,
-    "consolidationModel": "custom-provider/refiner",
-    "dream": {
-      "enabled": true,
-      "autoTrigger": true,
-      "minHoursSinceDream": 24,
-      "minSessionsSinceDream": 5,
-      "minerModel": "custom-provider/miner",
-      "refinerModel": "custom-provider/refiner",
-      "advisorModel": "custom-provider/advisor",
-      "journalDir": "~/.pi/memory/dream-journal",
-      "sessionsDir": "~/.pi/agent/sessions",
-      "skillsDir": "~/.agents/skills"
-    }
+  "pi-memory": {
+    "localPath": "./.pi/memory"
   }
 }
 ```
 
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `consolidationEnabled` | `false` | Session-end consolidation (Dream does this better) |
-| `consolidationModel` | `defaultModel` from settings | Model for session consolidation |
-| `dream.enabled` | `true` | Enable/disable Dream |
-| `dream.autoTrigger` | `true` | Auto-run Dream on session start |
-| `dream.minHoursSinceDream` | `24` | Minimum hours between Dream runs |
-| `dream.minSessionsSinceDream` | `5` | Minimum unprocessed sessions to trigger Dream |
+Relative paths resolve from the project working directory.
 
-Dream resolves its configured models through the active Pi session, including virtual models and extension-registered providers.
-
-**Local project override** — put `"pi-memory": { "localPath": "./.pi/memory" }` in `.pi/settings.json` to use a project-local database instead of the global one.
-
-## Storage
-
-| Path | Purpose |
-|------|---------|
-| `~/.pi/memory/memory.db` | SQLite database (facts, lessons, events, Dream state) |
-| `~/.pi/memory/category-map.json` | Project → lesson category mapping |
-| `~/.pi/memory/dream-journal/` | Timestamped markdown reports from Dream runs |
+Existing databases remain compatible. Legacy lesson and Dream tables are left untouched but are no longer read or written by the extension.
 
 ## Development
 
 ```bash
-pnpm test           # run tests
-pnpm build          # build for publish
-pnpm typecheck      # type-check without emitting
+pnpm test
+pnpm typecheck
+pnpm build
 ```
 
 ## License
