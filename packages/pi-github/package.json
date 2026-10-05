@@ -1,6 +1,6 @@
 {
   "name": "@pedro_klein/pi-github",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Structured GitHub checks, collaboration, and authorized delivery workflows for Pi",
   "type": "module",
   "main": "./dist/index.js",
