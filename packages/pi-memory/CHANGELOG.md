@@ -1,5 +1,11 @@
 # @pedro_klein/pi-memory
 
+## 1.0.0
+
+### Major Changes
+
+- 1930a43: Replace automatic session mining with a curated fact store featuring scoped search, pinned context, pagination, and credential rejection.
+
 ## Unreleased
 
 ### Major Changes

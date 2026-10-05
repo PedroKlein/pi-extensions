@@ -1,5 +1,11 @@
 # @pedro_klein/pi-adhd
 
+## 0.2.1
+
+### Patch Changes
+
+- c072f6f: Make `p` / `P` a toggle so a pinned note can be unpinned, and clear the previous scope when a note moves between project and global pinning. Pinning was previously a one-way door, and re-pinning left the same note in both `~/.pi/adhd/<repo>.json` and `global.json` — which could be hidden by in-memory deduplication. Both call sites now share one tested `applyPin()` helper, the notes list shows the scope it is pinned to (`📌` project, `🌐` global), and the hint row offers the matching unpin key for the selected note.
+
 ## 0.2.0
 
 ### Minor Changes
