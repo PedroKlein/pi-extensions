@@ -36,11 +36,9 @@ export function applyPin(
 
   const next = nextPinScope(note.pinned, requested);
 
-  // Drop the previous scope first. Otherwise the note stays in both files and
-  // only looks correct because loadPinned() dedupes by id.
-  if (note.pinned) {
-    removePinned(noteId, note.pinned, repoSlug);
-  }
+  // Clear both scopes to repair duplicate entries created by older versions.
+  removePinned(noteId, "project", repoSlug);
+  removePinned(noteId, "global", repoSlug);
 
   store.update(noteId, { pinned: next });
 

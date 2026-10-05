@@ -19,6 +19,7 @@ let createNote: typeof import("../../src/notes/model.js").createNote;
 let applyPin: typeof import("../../src/notes/pin.js").applyPin;
 let nextPinScope: typeof import("../../src/notes/pin.js").nextPinScope;
 let loadPinned: typeof import("../../src/notes/persistence.js").loadPinned;
+let savePinned: typeof import("../../src/notes/persistence.js").savePinned;
 
 beforeAll(async () => {
   vi.stubEnv("HOME", home);
@@ -27,7 +28,7 @@ beforeAll(async () => {
   NotesStore = (await import("../../src/notes/store.js")).NotesStore;
   createNote = (await import("../../src/notes/model.js")).createNote;
   ({ applyPin, nextPinScope } = await import("../../src/notes/pin.js"));
-  loadPinned = (await import("../../src/notes/persistence.js")).loadPinned;
+  ({ loadPinned, savePinned } = await import("../../src/notes/persistence.js"));
 });
 
 beforeEach(() => {
@@ -104,6 +105,21 @@ describe("applyPin", () => {
     expect(loadPinned(SLUG)).toHaveLength(0);
   });
 
+  it("removes legacy duplicate entries from both scopes when unpinning", () => {
+    const note = createNote("Pay rent", "Pay rent", "reminder");
+    savePinned({ ...note, pinned: "project" }, "project", SLUG);
+    savePinned({ ...note, pinned: "global" }, "global", SLUG);
+
+    const store = new NotesStore();
+    store.loadPinned(loadPinned(SLUG));
+
+    expect(store.get(note.id)?.pinned).toBe("project");
+    expect(applyPin(store, note.id, "project", SLUG)).toBeNull();
+    expect(pinnedOnDisk("project")).toBe(0);
+    expect(pinnedOnDisk("global")).toBe(0);
+    expect(loadPinned(SLUG)).toHaveLength(0);
+  });
+
   it("moves between scopes without leaving the old file dirty", () => {
     const note = createNote("Pay rent", "Pay rent", "reminder");
     const store = storeWith(note);
@@ -113,7 +129,7 @@ describe("applyPin", () => {
 
     expect(pinnedOnDisk("project")).toBe(0);
     expect(pinnedOnDisk("global")).toBe(1);
-    // Exactly one note — and not merely because loadPinned() dedupes by id.
+    // Exactly one note — and not merely because the store dedupes by id.
     expect(loadPinned(SLUG)).toHaveLength(1);
   });
 
