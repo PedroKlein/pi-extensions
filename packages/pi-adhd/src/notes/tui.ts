@@ -193,7 +193,7 @@ export async function createNotesTUI(
               const note = notes[i]!;
               const isSelected = i === selectedIndex;
               const cursor = isSelected ? theme.fg("accent", "▸") : " ";
-              const pin = note.pinned ? "📌" : " ";
+              const pin = note.pinned === "project" ? "📌" : note.pinned === "global" ? "🌐" : " ";
               const icon = CATEGORY_ICONS[note.category];
               const titleMaxW = listW - 8; // cursor + pin + icon + spaces
               const title = note.title.length > titleMaxW
@@ -229,8 +229,13 @@ export async function createNotesTUI(
           theme.fg("accent", "┤"),
         );
 
-        // Hints
-        const hints = "j/k nav · Enter inject · e edit · c category · d del · p pin · P global · q close";
+        // Hints — the pin segment follows the selection, so the unpin key is
+        // discoverable instead of hidden behind "press the same key again".
+        const pinnedScope = notes[selectedIndex]?.pinned ?? null;
+        const pinHint = pinnedScope
+          ? `${pinnedScope === "project" ? "p" : "P"} unpin`
+          : "p proj · P glob";
+        const hints = `j/k nav · Enter inject · e edit · c category · d del · ${pinHint} · q close`;
         lines.push(padRow(theme.fg("dim", hints), innerW, theme));
 
         // Bottom border

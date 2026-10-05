@@ -75,8 +75,8 @@ Or add to `~/.pi/agent/settings.json` manually:
 | `e` | Edit note content |
 | `c` | Cycle category |
 | `d` | Delete |
-| `p` | Pin to project (survives sessions) |
-| `P` | Pin globally |
+| `p` | Pin to project — press again to unpin (survives sessions) |
+| `P` | Pin globally — press again to unpin |
 | `Esc` / `q` | Close |
 
 ## Configuration
