@@ -1,6 +1,6 @@
 {
   "name": "@pedro_klein/pi-audit",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Prompt, cache, context, and nested-usage observability for Pi",
   "type": "module",
   "main": "./src/index.ts",

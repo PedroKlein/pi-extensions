@@ -1,5 +1,11 @@
 # @pedro_klein/pi-focus
 
+## 0.2.1
+
+### Patch Changes
+
+- 1c68a81: Include built JavaScript and declaration files in published packages.
+
 ## 0.2.0
 
 ### Minor Changes
