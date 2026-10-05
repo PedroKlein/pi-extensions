@@ -67,6 +67,9 @@ if (host === "slow-connect") {
     env,
   });
   process.stdin.pipe(shell.stdin);
+  shell.stdin.on("error", (error) => {
+    if (error.code !== "EPIPE") throw error;
+  });
   shell.stdout.pipe(process.stdout);
   shell.stderr.pipe(process.stderr);
   const stop = () => {
