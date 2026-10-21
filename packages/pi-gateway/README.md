@@ -264,6 +264,24 @@ Writes are atomic (tmp + rename) and serialized via a same-machine lockfile at
 `~/.pi/agent/gateway-state.json.lock`. Both files are per-machine — gitignore
 them.
 
+## Hosted config
+
+A host extension can own the gateway's config and state instead of
+`aliases.json` and `gateway-state.json`, for example to share health across
+sessions on several machines. It talks to the gateway over `pi.events`:
+
+| Event | Direction | Data |
+|-------|-----------|------|
+| `pi-gateway:request-config` | gateway → host | none; sent when the gateway loads |
+| `pi-gateway:config` | host → gateway | `{ aliases, state? }`: an `aliases.json` body and an optional `gateway-state.json` body |
+| `pi-gateway:state` | gateway → host | the full state after every change |
+
+The host answers `request-config`, and can send `config` again at any time:
+new aliases rebuild the routes, new state reroutes them. Once hosted, the
+gateway reads and writes neither file, and `/gateway` commands that change
+state don't apply. If a session loads two copies of the gateway, the first to
+load serves the provider.
+
 ## How it works
 
 **Failure detection and retry.** Modern Pi and OMP expose provider failures via

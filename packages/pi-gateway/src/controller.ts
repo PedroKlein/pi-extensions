@@ -12,7 +12,7 @@ import type { AliasesConfig } from "./config.js";
 import { applyCapOutcome, classifyCapEvent, type CapEventInput } from "./detect.js";
 import { registerGatewayProvider, type RegisterFn, type RegistryLike } from "./session.js";
 import type { GatewayRouteTarget } from "./compose.js";
-import { emptyState, readState, updateState, type GatewayState } from "./state.js";
+import { fileStateStore, type GatewayState, type GatewayStateStore } from "./state.js";
 import { isBackendUnhealthy } from "./compose.js";
 import { TIER_SLOTS } from "./config.js";
 import type { GatewayFailure } from "./transport-core.js";
@@ -20,6 +20,8 @@ import type { GatewayFailure } from "./transport-core.js";
 export interface ControllerOptions {
 	aliases: AliasesConfig;
 	statePath: string;
+	/** Overrides the state file at `statePath`. */
+	store?: GatewayStateStore;
 	registry: RegistryLike;
 	register: RegisterFn;
 	notify: (msg: string, type?: "info" | "warning" | "error") => void;
@@ -45,8 +47,9 @@ export class GatewayController {
 	/** alias id → backend name from the most recent compose. Cap attribution
 	 * for backend-agnostic indexed aliases relies on this. */
 	private routing: Record<string, string> = {};
+	private readonly store: GatewayStateStore;
 	private readonly opts: Required<
-		Omit<ControllerOptions, "now" | "scheduleMicrotask" | "setRoutes" | "onRegistered">
+		Omit<ControllerOptions, "now" | "scheduleMicrotask" | "setRoutes" | "onRegistered" | "store">
 	> & {
 		now: () => Date;
 		scheduleMicrotask: (fn: () => void) => void;
@@ -66,7 +69,8 @@ export class GatewayController {
 			now: opts.now ?? (() => new Date()),
 			scheduleMicrotask: opts.scheduleMicrotask ?? ((fn) => queueMicrotask(fn)),
 		};
-		this.state = readState(this.opts.statePath);
+		this.store = opts.store ?? fileStateStore(opts.statePath);
+		this.state = this.store.read();
 		this.previousUnhealthy = snapshotUnhealthy(this.state);
 	}
 
@@ -83,7 +87,7 @@ export class GatewayController {
 		const outcome = classifyCapEvent(event, this.opts.aliases, this.opts.now(), this.routing);
 		if (!outcome.capHit || !outcome.backendName || !outcome.entry) return false;
 
-		this.state = updateState(this.opts.statePath, (cur) =>
+		this.state = this.store.update((cur) =>
 			applyCapOutcome(cur, outcome.backendName!, outcome.entry!),
 		);
 		this.scheduleReregister();
@@ -106,7 +110,7 @@ export class GatewayController {
 		);
 		if (!outcome.capHit || !outcome.backendName || !outcome.entry) return false;
 
-		this.state = updateState(this.opts.statePath, (cur) =>
+		this.state = this.store.update((cur) =>
 			applyCapOutcome(cur, outcome.backendName!, outcome.entry!),
 		);
 		await this.reregisterNow();
@@ -127,7 +131,7 @@ export class GatewayController {
 		if (currentlyUnhealthy.length === Object.keys(this.state.unhealthyUntil).length) {
 			return false;
 		}
-		this.state = updateState(this.opts.statePath, (cur) => {
+		this.state = this.store.update((cur) => {
 			const kept: Record<string, GatewayState["unhealthyUntil"][string]> = {};
 			for (const [name, entry] of Object.entries(cur.unhealthyUntil)) {
 				if (Date.parse(entry.until) > now.getTime()) kept[name] = entry;
@@ -154,7 +158,13 @@ export class GatewayController {
 	 * Reload state from disk (e.g. after /gateway reload) and re-register.
 	 */
 	reloadStateFromDisk(): void {
-		this.state = readState(this.opts.statePath);
+		this.state = this.store.read();
+		this.scheduleReregister();
+	}
+
+	/** Take state another process or the host changed, and re-register. */
+	replaceState(state: GatewayState): void {
+		this.state = state;
 		this.scheduleReregister();
 	}
 

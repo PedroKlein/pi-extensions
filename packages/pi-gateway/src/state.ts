@@ -291,3 +291,52 @@ function releaseLock(filePath: string): void {
 		}
 	}
 }
+
+// ---------- Stores ----------
+
+/** Where the controller keeps its state: the state file, or memory fed by a host. */
+export interface GatewayStateStore {
+	read(): GatewayState;
+	update(mutate: (current: GatewayState) => GatewayState): GatewayState;
+}
+
+export function fileStateStore(filePath: string): GatewayStateStore {
+	return {
+		read: () => readState(filePath),
+		update: (mutate) => updateState(filePath, mutate),
+	};
+}
+
+/**
+ * State held in memory. `onChange` sees every update, so a host can keep the
+ * state somewhere shared instead of in gateway-state.json.
+ */
+export function memoryStateStore(
+	initial: GatewayState,
+	onChange: (state: GatewayState) => void,
+): GatewayStateStore & { replace(state: GatewayState): void } {
+	let state = initial;
+	return {
+		read: () => state,
+		update: (mutate) => {
+			state = { ...mutate(state), version: STATE_FILE_VERSION };
+			onChange(state);
+			return state;
+		},
+		replace: (next) => {
+			state = next;
+		},
+	};
+}
+
+/** Validate state handed over by a host rather than read from a file. */
+export function parseState(value: unknown, source: string): GatewayState {
+	if (!Value.Check(GatewayStateSchema, value)) {
+		const first = [...Value.Errors(GatewayStateSchema, value)][0];
+		throw new GatewayStateError(
+			`schema error at ${source}${first?.path ?? ""}: ${first?.message ?? "unknown"}`,
+			"schema",
+		);
+	}
+	return value as GatewayState;
+}
