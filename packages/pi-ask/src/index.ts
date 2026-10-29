@@ -6,8 +6,8 @@
  * - `/answer` command: parses last assistant message into the same TUI
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { BorderedLoader } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { BorderedLoader, buildSessionContext, convertToLlm } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { StringEnum, type Api, type AssistantMessage, type Model } from "@earendil-works/pi-ai";
@@ -23,6 +23,17 @@ function normalizeQuestions(raw: Question[]): NormalizedQuestion[] {
 		label: q.label || `Q${i + 1}`,
 		options: q.options ?? [],
 	}));
+}
+
+function conversationSnapshot(ctx: ExtensionContext): string {
+	return convertToLlm(buildSessionContext(ctx.sessionManager.getBranch()).messages)
+		.filter((message) => message.role !== "system")
+		.map((message) => {
+			const text = typeof message.content === "string" ? message.content : message.content
+				.filter((part) => part.type === "text")
+				.map((part) => part.text).join("\n");
+			return text ? `${message.role}: ${text}` : "";
+		}).filter(Boolean).join("\n\n");
 }
 
 function formatResultForLLM(result: AskUserResult): string {
@@ -155,16 +166,18 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			const selectedModel = ctx.model ?? null;
+			const conversationContext = conversationSnapshot(ctx);
 			const result = await ctx.ui.custom<AskUserResult>((tui, theme, _kb, done) => {
 				return createAskUserUI({
 					tui,
 					theme,
 					done,
 					questions,
+					conversationContext,
 					model: selectedModel,
 					modelRegistry: ctx.modelRegistry,
 					onResponse: selectedModel
-						? (response, durationMs) => reportNestedUsage(pi, "option-explain", selectedModel, response, durationMs)
+						? (response, durationMs, operation) => reportNestedUsage(pi, operation, selectedModel, response, durationMs)
 						: undefined,
 				});
 			});
@@ -291,6 +304,7 @@ export default function (pi: ExtensionAPI) {
 
 			const normalized = normalizeQuestions(questions);
 			const selectedModel = ctx.model ?? null;
+			const conversationContext = conversationSnapshot(ctx);
 
 			// Open the same TUI
 			const result = await ctx.ui.custom<AskUserResult>((tui, theme, _kb, done) => {
@@ -299,10 +313,11 @@ export default function (pi: ExtensionAPI) {
 					theme,
 					done,
 					questions: normalized,
+					conversationContext,
 					model: selectedModel,
 					modelRegistry: ctx.modelRegistry,
 					onResponse: selectedModel
-						? (response, durationMs) => reportNestedUsage(pi, "option-explain", selectedModel, response, durationMs)
+						? (response, durationMs, operation) => reportNestedUsage(pi, operation, selectedModel, response, durationMs)
 						: undefined,
 				});
 			});

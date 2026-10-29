@@ -69,7 +69,8 @@ The agent calls `ask_user` with an array of questions. Pi renders the TUI form a
 - **Recommended badge** (★) — the agent marks preferred options; reasoning goes in the description
 - **Annotations** (`a`) — add a one-liner note to any selected option; auto-selects if not already selected
 - **Global note** (`n`) — add a free-form note to the whole questionnaire before submitting
-- **LLM explain** (`?`) — ask the model to explain an option's trade-offs; answers are cached per option. Empty input = auto-explain, or type a specific question
+- **LLM explain option** (`?`) — ask the model to explain an option's trade-offs; answers are cached per option. Empty input = auto-explain, or type a specific question
+- **Explain this question** (`e`) — opens a separate view explaining what you are deciding, why it matters, and unfamiliar terms. Uses the active conversation as background without selecting an answer. Inside this view, `?` asks a private follow-up, `r` retries a failed request or requests a simpler explanation, `J/K` scrolls, and `Esc` returns to your unchanged answers.
 - **Custom input** ("Other") — type a custom answer when none of the options fit
 - **Multi-question tabs** — Tab/←→ to navigate; Submit tab shows a review before confirming
 - **Scroll** — J/K scrolls the detail panel; left panel auto-scrolls with the cursor
@@ -83,10 +84,17 @@ The agent calls `ask_user` with an array of questions. Pi renders the TUI form a
 | `Enter` | Confirm and advance |
 | `a` | Annotate highlighted option |
 | `n` | Add/edit global note |
-| `?` | Ask about / explain option |
-| `J / K` | Scroll detail panel |
+| `?` | Ask about / explain highlighted option |
+| `e` | Explain the current question in a separate view |
+| `J / K` | Scroll detail panel or question explanation |
 | `Tab / ← →` | Switch between questions |
 | `Esc` | Cancel |
+
+## Question explanation context
+
+Question explanations use an independent call to the currently selected model. The call receives a text snapshot of the active conversation when the form opens, including compaction summaries and model-visible tool output, plus the current question and option descriptions. Images, system instructions, and private reasoning are not forwarded. The explainer has no tools and cannot inspect files or recover details omitted by compaction.
+
+Clarification exchanges are kept in memory per question for the lifetime of the form. They are not added to the main conversation, included in tool results, or sent back by `/answer`. Returning to a question reuses its explanation and private follow-up history. Closing the form discards that history. Normal model-provider processing and usage accounting still apply; “private” here means separate from the main conversation, not a local-only model call.
 
 ## Command: /answer
 
