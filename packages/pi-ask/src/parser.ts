@@ -3,7 +3,7 @@
  * Used by the /answer command.
  */
 
-import { type Api, type AssistantMessage, type Model } from "@earendil-works/pi-ai";
+import { type Api, type AssistantMessage, type Model, type ThinkingLevel } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { Question } from "./types.js";
 
@@ -39,6 +39,7 @@ export async function parseAssistantMessage(
 	modelRegistry: ModelRegistry,
 	signal?: AbortSignal,
 	onResponse?: (response: AssistantMessage, durationMs: number) => void,
+	reasoning?: ThinkingLevel,
 ): Promise<Question[]> {
 	const startedAt = Date.now();
 	const response = await modelRegistry.streamSimple(
@@ -53,7 +54,7 @@ export async function parseAssistantMessage(
 				},
 			],
 		},
-		signal ? { signal } : {},
+		{ ...(signal ? { signal } : {}), ...(reasoning ? { reasoning } : {}) },
 	).result();
 	onResponse?.(response, Date.now() - startedAt);
 

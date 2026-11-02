@@ -92,7 +92,7 @@ The agent calls `ask_user` with an array of questions. Pi renders the TUI form a
 
 ## Question explanation context
 
-Question explanations use an independent call to the currently selected model. The call receives a text snapshot of the active conversation when the form opens, including compaction summaries and model-visible tool output, plus the current question and option descriptions. Images, system instructions, and private reasoning are not forwarded. The explainer has no tools and cannot inspect files or recover details omitted by compaction.
+Question explanations use an independent call to the currently selected model with the session's thinking level. Option explanations and `/answer` extraction inherit that level too, preserving provider routing that depends on reasoning mode. The call receives a text snapshot of the active conversation when the form opens, including compaction summaries and model-visible tool output, plus the current question and option descriptions. Images, system instructions, and private reasoning are not forwarded. The explainer has no tools and cannot inspect files or recover details omitted by compaction.
 
 Clarification exchanges are kept in memory per question for the lifetime of the form. They are not added to the main conversation, included in tool results, or sent back by `/answer`. Returning to a question reuses its explanation and private follow-up history. Closing the form discards that history. Normal model-provider processing and usage accounting still apply; “private” here means separate from the main conversation, not a local-only model call.
 

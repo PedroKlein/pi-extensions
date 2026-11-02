@@ -63,6 +63,22 @@ describe("question explanation UI", () => {
     expect(screen(form)).toContain("[ ] Local");
   });
 
+  it.each(["response", "exception"])("shows the underlying %s error without adding it to answers", async (source) => {
+    const form = openForm();
+    const errorMessage = "Request exceeds the model context limit";
+    form.streamSimple.mockReturnValueOnce({ result: () => source === "response"
+      ? Promise.resolve({ ...response("", "error"), errorMessage })
+      : Promise.reject(new Error(errorMessage)),
+    });
+    form.ui.handleInput("e");
+    await vi.waitFor(() => expect(screen(form)).toContain(errorMessage));
+    expect(screen(form)).toContain("Press r to retry");
+    form.ui.handleInput("\x1b");
+    form.ui.handleInput(" ");
+    form.ui.handleInput("\r");
+    expect(JSON.stringify(form.done.mock.calls[0][0])).not.toContain(errorMessage);
+  });
+
   it("aborts explanation on back, ignores late responses, and safely starts a new request", async () => {
     const form = openForm();
     let resolveOld!: (value: AssistantMessage) => void;

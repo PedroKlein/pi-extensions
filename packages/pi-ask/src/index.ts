@@ -166,6 +166,8 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			const selectedModel = ctx.model ?? null;
+			const thinkingLevel = pi.getThinkingLevel();
+			const reasoning = thinkingLevel === "off" ? undefined : thinkingLevel;
 			const conversationContext = conversationSnapshot(ctx);
 			const result = await ctx.ui.custom<AskUserResult>((tui, theme, _kb, done) => {
 				return createAskUserUI({
@@ -173,6 +175,7 @@ export default function (pi: ExtensionAPI) {
 					theme,
 					done,
 					questions,
+					reasoning,
 					conversationContext,
 					model: selectedModel,
 					modelRegistry: ctx.modelRegistry,
@@ -254,6 +257,8 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
+			const thinkingLevel = pi.getThinkingLevel();
+			const reasoning = thinkingLevel === "off" ? undefined : thinkingLevel;
 			// Find last assistant message
 			const branch = ctx.sessionManager.getBranch();
 			let lastText: string | undefined;
@@ -290,6 +295,7 @@ export default function (pi: ExtensionAPI) {
 					ctx.modelRegistry,
 					loader.signal,
 					(response, durationMs) => reportNestedUsage(pi, "question-extract", ctx.model!, response, durationMs),
+					reasoning,
 				)
 					.then((qs) => done(qs))
 					.catch(() => done(null));
@@ -313,6 +319,7 @@ export default function (pi: ExtensionAPI) {
 					theme,
 					done,
 					questions: normalized,
+					reasoning,
 					conversationContext,
 					model: selectedModel,
 					modelRegistry: ctx.modelRegistry,

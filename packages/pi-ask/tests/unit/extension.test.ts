@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { SessionManager, initTheme, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { AssistantMessageEventStream, type AssistantMessage } from "@earendil-works/pi-ai";
+import { ModelRegistry, ModelRuntime, SessionManager, initTheme, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import piAsk from "../../src/index.js";
 import type { NormalizedQuestion } from "../../src/types.js";
 
@@ -22,6 +25,7 @@ function openQuestionnaire(
     context: "Decide how drafts are saved.",
     options: [{ value: "local", label: "Local", description: "Keeps drafts on this device" }],
   }],
+  context: Record<string, unknown> = {},
 ) {
   let askUser: any;
   let ui!: Component;
@@ -31,6 +35,7 @@ function openQuestionnaire(
   const emit = vi.fn();
   const pi = {
     registerTool: (tool: unknown) => { askUser = tool; }, registerCommand: vi.fn(), events: { emit },
+    getThinkingLevel: () => context.thinkingLevel ?? "off",
   } as unknown as ExtensionAPI;
   piAsk(pi);
   const execution = askUser.execute("call-1", { questions }, undefined, undefined, {
@@ -42,6 +47,7 @@ function openQuestionnaire(
         bold: (text: string) => text,
       }, {}, resolve);
     }) },
+    ...context,
   });
   return { ui, streamSimple, emit, execution };
 }
@@ -183,7 +189,7 @@ describe("pi-ask prompt placement", () => {
     let component: Component | undefined;
     const sendUserMessage = vi.fn();
     piAsk({ registerTool: vi.fn(), registerCommand: (name: string, command: any) => { if (name === "answer") handler = command.handler; },
-      sendUserMessage, events: { emit: vi.fn() } } as unknown as ExtensionAPI);
+      sendUserMessage, getThinkingLevel: () => "high", events: { emit: vi.fn() } } as unknown as ExtensionAPI);
     const execution = handler("", {
       hasUI: true, model: { provider: "backend-a", id: "example-model" }, sessionManager: session,
       modelRegistry: { streamSimple }, ui: { notify: vi.fn(), custom: (factory: any) => new Promise((resolve) => {
@@ -199,11 +205,52 @@ describe("pi-ask prompt placement", () => {
     component!.handleInput("e");
     await vi.waitFor(() => expect(component!.render(100).join("\n")).toContain("This is a private clarification."));
     expect(JSON.stringify(streamSimple.mock.calls[1][1])).toContain("Protect drafts during outages");
+    expect(streamSimple.mock.calls[0][2]).toMatchObject({ reasoning: "high" });
+    expect(streamSimple.mock.calls[1][2]).toMatchObject({ reasoning: "high" });
     component!.handleInput("\x1b");
     component!.handleInput("\r");
     await execution;
     expect(sendUserMessage).toHaveBeenCalledWith("User answers:\n- Storage: Local");
     expect(session.getEntries()).toEqual(before);
+  });
+
+  it("preserves session reasoning so nested calls use the provider's supported endpoint", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-ask-routing-"));
+    try {
+      const runtime = await ModelRuntime.create({ authPath: join(dir, "auth.json"), modelsStorePath: join(dir, "models.json"), modelsPath: null, refreshOnCreate: false });
+      runtime.registerProvider("custom-provider", {
+        api: "test-routing", baseUrl: "https://example.invalid", apiKey: "test-key",
+        models: [{ id: "example-model", name: "Example Model", reasoning: true, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 10000, maxTokens: 1000 }],
+        streamSimple: (_model, _context, options) => {
+          const stream = new AssistantMessageEventStream();
+          const supported = options?.reasoning === "high";
+          const reply = { ...explanationResponse(supported ? "Supported endpoint explanation." : ""), stopReason: supported ? "stop" : "error", errorMessage: supported ? undefined : "Model name is not supported by the default endpoint" } as AssistantMessage;
+          if (supported) stream.push({ type: "done", reason: "stop", message: reply });
+          else stream.push({ type: "error", reason: "error", error: reply });
+          stream.end(reply);
+          return stream;
+        },
+      });
+      const registry = new ModelRegistry(runtime);
+      const form = openQuestionnaire(SessionManager.inMemory(), undefined, {
+        model: registry.find("custom-provider", "example-model"), modelRegistry: registry,
+        thinkingLevel: "high",
+      });
+      form.ui.handleInput("e");
+      await vi.waitFor(() => expect(form.ui.render(100).join("\n")).toContain("Supported endpoint explanation."));
+      form.ui.handleInput("?");
+      for (const char of "Why?") form.ui.handleInput(char);
+      form.ui.handleInput("\r");
+      await vi.waitFor(() => expect(form.emit).toHaveBeenCalledTimes(2));
+      form.ui.handleInput("\x1b");
+      form.ui.handleInput("?");
+      form.ui.handleInput("\r");
+      await vi.waitFor(() => expect(form.ui.render(100).join("\n")).toContain("Supported endpoint explanation."));
+      form.ui.handleInput("\x1b");
+      await form.execution;
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("attributes option explanations dispatched through ModelRuntime", async () => {
@@ -236,6 +283,7 @@ describe("pi-ask prompt placement", () => {
       registerTool: (tool: unknown) => { askUser = tool; },
       registerCommand: vi.fn(),
       on: vi.fn(),
+      getThinkingLevel: () => "off",
       events: { emit },
     } as unknown as ExtensionAPI;
     piAsk(pi);
