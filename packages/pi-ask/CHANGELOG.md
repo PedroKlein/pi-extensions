@@ -1,5 +1,15 @@
 # @pedro_klein/pi-ask
 
+## 0.3.0
+
+### Minor Changes
+
+- d7397fe: Add `e` to explain the current question using conversation background in a separate view. Clarification follow-ups stay in memory and out of the main conversation, while selections and existing option explanations remain unchanged.
+
+### Patch Changes
+
+- 8987d6d: Preserve the session's thinking level in nested model calls so providers that route by reasoning mode use the supported endpoint. Show underlying explanation errors instead of hiding them behind a generic retry message.
+
 ## 0.2.0
 
 ### Minor Changes
