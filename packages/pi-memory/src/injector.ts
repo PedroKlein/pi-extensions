@@ -58,8 +58,8 @@ export function buildDeterministicBlock(
 }
 
 function matchesProjectScope(entry: SemanticEntry, slug: string): boolean {
-  const [scope, project] = entry.key.toLowerCase().split(".");
-  return scope !== "project" || project === slug;
+  const normalized = entry.key.toLowerCase();
+  return !normalized.startsWith("project.") || normalized.startsWith(`project.${slug}.`);
 }
 
 function renderPinnedBlock(entries: SemanticEntry[]): string {
