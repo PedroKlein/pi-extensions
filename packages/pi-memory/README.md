@@ -17,7 +17,7 @@ pi install npm:@pedro_klein/pi-memory
 | `memory_search` | Search facts or list them with pagination |
 | `memory_remember` | Store one durable fact or preference |
 | `memory_forget` | Remove one fact by key |
-| `memory_stats` | Show fact, pin, and event counts plus the database path |
+| `memory_stats` | Show fact, pin, and event counts plus the agent directory, database path, and storage mode |
 | `memory_pin` | Pin, unpin, or list facts used for automatic prompt injection |
 
 ## Store a fact
@@ -64,6 +64,14 @@ The default database follows the current agent directory from Pi's `getAgentDir(
 
 The same agent uses the same default across working directories. No memories are copied or inherited from another agent. This is path-based separation, not an OS sandbox.
 
+Every successful `session_start`, including an empty store, reports the normalized absolute `agentDir`, selected absolute `dbPath`, and `storageMode`:
+
+- `legacy-global`: standard-agent compatibility database.
+- `agent-local`: a custom agent's default database.
+- `project-local`: an explicit trusted `localPath`, even when it equals a default path.
+
+TUI/RPC receive an info notification via Pi's UI. Print/JSON receive one JSON-encoded line on stderr, never bare text on stdout. Paths containing newlines or control characters are escaped. Diagnostics are not injected into the model prompt or written to a separate persistent log. `memory_stats` exposes the same `agentDir` and `storageMode` alongside its existing fields. Failed initialization emits no success diagnostic and clears the selected storage state.
+
 To use a project-local store, add this to `<project>/.pi/settings.json`:
 
 ```json
@@ -82,15 +90,20 @@ Missing configuration uses the agent default. Malformed, invalid, or unreadable 
 
 All persistent state is in the selected SQLite database: facts, pins, and event history. SQLite WAL/SHM sidecars (`memory.db-wal`, `memory.db-shm`) stay alongside it. SQLite temporary query data stays in memory only (`PRAGMA temp_store = MEMORY`). The extension creates no separate cache, log, lock, backup, or IPC files; its prompt cache is in memory only. Project settings are read, never written.
 
-Existing databases remain compatible. Legacy lesson and Dream tables are left untouched but are no longer read or written by the extension.
+Existing databases remain compatible. Legacy lesson and Dream tables are left untouched but are no longer read or written by the extension. Missing `pinned` columns are migrated without replacing existing facts, timestamps, or event history.
+
+Independent processes can open the same selected store: schema inspection/migration is serialized in an immediate transaction, and `busy_timeout` is configured before enabling WAL. WAL lock-upgrade contention is retried only for confirmed SQLite BUSY/LOCKED codes, with a bounded same-connection wait. Other errors still fail closed; there is no fallback store or external lock service.
 
 ## Development
 
 ```bash
-pnpm test
-pnpm typecheck
-pnpm build
+# From the repository root, using already-installed tools:
+./node_modules/.bin/vitest run --root packages/pi-memory
+./node_modules/.bin/tsc --noEmit -p packages/pi-memory/tsconfig.json
+(cd packages/pi-memory && ../../node_modules/.bin/tsup)
 ```
+
+The concurrency suite uses native TypeScript support in Node 24/26, four independent Node workers per store, IPC barriers (not timing sleeps), and temporary directories only. It covers cold starts, existing stores, concurrent legacy migration, different working directories sharing one agent, and two isolated agent groups (eight workers). Every worker is awaited or killed and awaited on failure. Writes, shared-key updates, event counts, cleanup, and SQLite integrity are checked against the real database.
 
 ## License
 

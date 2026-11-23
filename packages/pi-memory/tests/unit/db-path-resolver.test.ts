@@ -112,6 +112,25 @@ describe("agent-aware defaults (path calculation only)", () => {
     expect(() => path({ isProjectTrusted: false })).toThrow(new DbPathError(agentDir, "EPERM"));
   });
 
+  it("resolves an alias created between realpath ENOENT and the existence check", () => {
+    const standard = join(home, ".pi", "agent");
+    fs.mkdirSync(standard, { recursive: true });
+    const alias = join(root, "new-alias");
+    vi.mocked(fs.realpathSync).mockImplementationOnce(() => {
+      fs.symlinkSync(standard, alias);
+      throw Object.assign(new Error("concurrent creation"), { code: "ENOENT" });
+    });
+    expect(path({ agentDir: alias })).toBe(join(home, ".pi", "memory", "memory.db"));
+  });
+
+  it("propagates an error on the one concurrent-creation recheck without fallback", () => {
+    fs.mkdirSync(agentDir, { recursive: true });
+    vi.mocked(fs.realpathSync)
+      .mockImplementationOnce(() => { throw Object.assign(new Error("missing"), { code: "ENOENT" }); })
+      .mockImplementationOnce(() => { throw Object.assign(new Error("denied"), { code: "EACCES" }); });
+    expect(() => path()).toThrow(new DbPathError(agentDir, "EACCES"));
+  });
+
   it("allows a missing leaf beneath a valid symlink ancestor", () => {
     const target = join(root, "target");
     const link = join(root, "valid-link");

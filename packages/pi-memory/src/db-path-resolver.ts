@@ -63,24 +63,48 @@ function canonicalPath(path: string): string {
   try {
     return realpathSync(path);
   } catch (error) {
-    if (errorType(error) === "ENOENT" && isMissingPath(path)) return resolve(path);
+    if (errorType(error) === "ENOENT") {
+      if (isMissingPath(path)) return resolve(path);
+      // Another starter may have created the directory between realpath and lstat.
+      // Resolve once more (also following aliases); all errors still fail closed.
+      try {
+        return realpathSync(path);
+      } catch (retryError) {
+        throw new DbPathError(path, errorType(retryError));
+      }
+    }
     throw new DbPathError(path, errorType(error));
   }
 }
 
+export type StorageMode = "legacy-global" | "agent-local" | "project-local";
+
+export interface ResolvedStorage {
+  agentDir: string;
+  dbPath: string;
+  mode: StorageMode;
+}
+
 /** Trusted project override, then the current agent's default; never fall back on errors. */
-export function resolveDbPath(options: DbPathResolverOptions): string {
+export function resolveStorage(options: DbPathResolverOptions): ResolvedStorage {
   const { agentDir, cwd, isProjectTrusted, configDirName, homeDir = homedir() } = options;
+  const normalized = normalizeAgentDir(agentDir, homeDir);
   if (isProjectTrusted) {
     const projectPath = readProjectLocalPath(cwd, configDirName);
-    if (projectPath !== undefined) return projectPath;
+    if (projectPath !== undefined) {
+      return { agentDir: normalized, dbPath: projectPath, mode: "project-local" };
+    }
   }
 
-  const normalized = normalizeAgentDir(agentDir, homeDir);
   const standard = resolve(homeDir, ".pi", "agent");
   return canonicalPath(normalized) === canonicalPath(standard)
-    ? join(homeDir, ".pi", "memory", "memory.db")
-    : join(normalized, "memory", "memory.db");
+    ? { agentDir: normalized, dbPath: resolve(homeDir, ".pi", "memory", "memory.db"), mode: "legacy-global" }
+    : { agentDir: normalized, dbPath: join(normalized, "memory", "memory.db"), mode: "agent-local" };
+}
+
+/** Compatibility wrapper; resolution (including project settings) happens only once. */
+export function resolveDbPath(options: DbPathResolverOptions): string {
+  return resolveStorage(options).dbPath;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

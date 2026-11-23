@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DatabaseSync } from "node:sqlite";
+import { performance } from "node:perf_hooks";
 import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -33,6 +34,54 @@ function createLegacySemantic(path: string): void {
 }
 
 describe("store initialization", () => {
+  it.each([5, 6, 261])("retries confirmed SQLite busy/locked (%s) on the same connection", (errcode) => {
+    const exec = DatabaseSync.prototype.exec;
+    let attempts = 0;
+    const calls = vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(function (sql) {
+      if (sql === "PRAGMA journal_mode = WAL" && attempts++ === 0) {
+        throw Object.assign(new Error("contention"), { code: "ERR_SQLITE_ERROR", errcode });
+      }
+      return exec.call(this, sql);
+    });
+    const wait = vi.spyOn(Atomics, "wait").mockReturnValue("timed-out");
+    const opened = new MemoryStore(join(tmpDir, "retry.db"));
+    try {
+      expect(attempts).toBe(2);
+      expect(wait).toHaveBeenCalledOnce();
+      const walCalls = calls.mock.calls.flatMap(([sql], i) => sql === "PRAGMA journal_mode = WAL" ? [i] : []);
+      expect(calls.mock.calls[0][0]).toBe("PRAGMA busy_timeout = 5000");
+      expect(calls.mock.contexts[walCalls[0]]).toBe(calls.mock.contexts[walCalls[1]]);
+      expect(opened.stats()).toEqual({ semantic: 0, events: 0 });
+    } finally { opened.close(); }
+  });
+
+  it("bounds WAL retries and propagates the original SQLite contention error", () => {
+    const failure = Object.assign(new Error("locked"), { code: "ERR_SQLITE_ERROR", errcode: 5 });
+    const exec = DatabaseSync.prototype.exec;
+    vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(function (sql) {
+      if (sql === "PRAGMA journal_mode = WAL") throw failure;
+      return exec.call(this, sql);
+    });
+    vi.spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValueOnce(1).mockReturnValue(5_001);
+    const wait = vi.spyOn(Atomics, "wait").mockReturnValue("timed-out");
+    const close = vi.spyOn(DatabaseSync.prototype, "close");
+    expect(() => new MemoryStore(join(tmpDir, "busy.db"))).toThrow(failure);
+    expect(wait).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("does not retry SQLite errors classified only by their text", () => {
+    const failure = Object.assign(new Error("database is locked"), { code: "ERR_SQLITE_ERROR", errcode: 1 });
+    const exec = DatabaseSync.prototype.exec;
+    vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(function (sql) {
+      if (sql === "PRAGMA journal_mode = WAL") throw failure;
+      return exec.call(this, sql);
+    });
+    const wait = vi.spyOn(Atomics, "wait");
+    expect(() => new MemoryStore(join(tmpDir, "nonbusy.db"))).toThrow(failure);
+    expect(wait).not.toHaveBeenCalled();
+  });
+
   it("keeps SQLite temporary query data in memory on the store connection", () => {
     const db = (store as unknown as { db: DatabaseSync }).db;
     expect(db.prepare("PRAGMA temp_store").get()).toMatchObject({ temp_store: 2 });

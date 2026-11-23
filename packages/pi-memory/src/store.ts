@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { performance } from "node:perf_hooks";
 
 export interface SemanticEntry {
   key: string;
@@ -40,13 +41,33 @@ export class MemoryStore {
 
     this.db = new DatabaseSync(dbPath);
     try {
-      this.db.exec("PRAGMA journal_mode = WAL");
       this.db.exec("PRAGMA busy_timeout = 5000");
+      this.enableWal();
       this.db.exec("PRAGMA temp_store = MEMORY");
-      this.migrate();
+      // Serialize schema inspection and ALTER across independently starting processes.
+      this.withTransaction(() => this.migrate());
     } catch (error) {
       this.db.close();
       throw error;
+    }
+  }
+
+  private enableWal(): void {
+    const deadline = performance.now() + 5_000;
+    // journal_mode can return BUSY immediately despite busy_timeout (lock upgrade).
+    // Retry only SQLite BUSY/LOCKED on this connection, never another path.
+    const wait = new Int32Array(new SharedArrayBuffer(4));
+    while (true) {
+      try {
+        this.db.exec("PRAGMA journal_mode = WAL");
+        return;
+      } catch (error) {
+        const sqlite = error as { code?: unknown; errcode?: unknown } | null;
+        const remaining = deadline - performance.now();
+        if (sqlite?.code !== "ERR_SQLITE_ERROR" || typeof sqlite.errcode !== "number" ||
+          ![5, 6].includes(sqlite.errcode & 0xff) || remaining <= 0) throw error;
+        Atomics.wait(wait, 0, 0, Math.min(25, remaining));
+      }
     }
   }
 

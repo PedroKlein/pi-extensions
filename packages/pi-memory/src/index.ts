@@ -4,7 +4,7 @@ import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { buildDeterministicBlock, projectSlug, type ContextBlock } from "./injector.js";
 import { MemoryStore, type MemoryScope } from "./store.js";
-import { DbPathError, errorType, resolveDbPath } from "./db-path-resolver.js";
+import { DbPathError, errorType, resolveStorage, type ResolvedStorage } from "./db-path-resolver.js";
 
 type ToolResult = AgentToolResult<unknown>;
 
@@ -43,7 +43,13 @@ const MemoryStatsOutput = Type.Object({
   semantic: Type.Integer({ minimum: 0 }),
   events: Type.Integer({ minimum: 0 }),
   pinned: Type.Integer({ minimum: 0 }),
-  dbPath: Type.String({ maxLength: 4096 }),
+  dbPath: Type.String(),
+  agentDir: Type.String(),
+  storageMode: Type.Union([
+    Type.Literal("legacy-global"),
+    Type.Literal("agent-local"),
+    Type.Literal("project-local"),
+  ]),
 });
 
 const memoryQueryContract = {
@@ -86,7 +92,7 @@ function stripQuotes<T>(value: T): T {
 export default function piMemory(pi: ExtensionAPI): void {
   let store: MemoryStore | null = null;
   let sessionCwd = "";
-  let resolvedDbPath = "";
+  let storage: ResolvedStorage | null = null;
   let cachedMemoryBlock: ContextBlock | null = null;
   let initializationError = "";
 
@@ -98,7 +104,9 @@ export default function piMemory(pi: ExtensionAPI): void {
     const previous = store;
     store = null;
     cachedMemoryBlock = null;
-    resolvedDbPath = "";
+    storage = null;
+    sessionCwd = "";
+    initializationError = "";
     previous?.close();
   };
 
@@ -130,7 +138,7 @@ export default function piMemory(pi: ExtensionAPI): void {
 
   pi.on("session_start", async (_event, ctx) => {
     // Preserve the affected path for close errors; clearStore resets public state first.
-    let initializingPath = resolvedDbPath;
+    let initializingPath = storage?.dbPath ?? "";
     try {
       clearStore();
       initializingPath = "";
@@ -141,16 +149,16 @@ export default function piMemory(pi: ExtensionAPI): void {
       const isProjectTrusted = ctx.isProjectTrusted();
 
       // Resolve database path with agent-aware isolation
-      resolvedDbPath = resolveDbPath({
+      storage = resolveStorage({
         agentDir,
         cwd: sessionCwd,
         isProjectTrusted,
         configDirName: CONFIG_DIR_NAME,
       });
 
-      initializingPath = resolvedDbPath;
+      initializingPath = storage.dbPath;
       // Initialize store; failures are not recoverable
-      store = new MemoryStore(resolvedDbPath);
+      store = new MemoryStore(storage.dbPath);
       cachedMemoryBlock = buildDeterministicBlock(store, sessionCwd, {
         onBudgetExceeded: (message) => {
           if (ctx.hasUI) ctx.ui.notify(message, "warning");
@@ -182,6 +190,17 @@ export default function piMemory(pi: ExtensionAPI): void {
           { triggerTurn: false },
         );
       }
+
+      // One protocol-safe diagnostic per successful start, including empty stores.
+      // Keep it out of model messages and emit only after all initialization succeeds.
+      const diagnostic = JSON.stringify({
+        type: "pi-memory-storage",
+        agentDir: storage.agentDir,
+        dbPath: storage.dbPath,
+        storageMode: storage.mode,
+      });
+      if (ctx.hasUI) ctx.ui.notify(diagnostic, "info");
+      else process.stderr.write(`${diagnostic}\n`);
     } catch (error) {
       const diagnostic = error instanceof DbPathError
         ? error.message
@@ -323,7 +342,7 @@ export default function piMemory(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "memory_stats",
     label: "Memory Stats",
-    description: "Show curated-memory statistics and the active database path.",
+    description: "Show curated-memory statistics, agent directory, database path, and storage mode.",
     ...memoryQueryContract,
     parameters: Type.Object({}),
     outputSchema: MemoryStatsOutput,
@@ -336,10 +355,12 @@ export default function piMemory(pi: ExtensionAPI): void {
         semantic: stats.semantic,
         events: stats.events,
         pinned,
-        dbPath: resolvedDbPath.slice(0, 4096),
+        dbPath: storage!.dbPath,
+        agentDir: storage!.agentDir,
+        storageMode: storage!.mode,
       };
       return dataResult(
-        `Memory: ${stats.semantic} facts (${pinned} pinned), ${stats.events} events logged\nDB: ${resolvedDbPath}`,
+        `Memory: ${stats.semantic} facts (${pinned} pinned), ${stats.events} events logged\nDB: ${storage!.dbPath}\nAgent Dir: ${storage!.agentDir}\nStorage mode: ${storage!.mode}`,
         structuredContent,
       );
     },

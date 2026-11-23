@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import * as fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Value } from "typebox/value";
@@ -14,6 +14,11 @@ vi.mock("@earendil-works/pi-coding-agent", () => ({
   getAgentDir: vi.fn(),
 }));
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return { ...actual, homedir: vi.fn(actual.homedir) };
+});
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
@@ -78,6 +83,7 @@ function harness(options?: {
     cwd,
     isProjectTrusted: () => options?.trusted ?? true,
     hasUI: false,
+    mode: "print",
     sessionManager: { getBranch: () => [] },
     ui: { notify: vi.fn(), setStatus: vi.fn() },
   };
@@ -102,6 +108,107 @@ function harness(options?: {
     },
   };
 }
+
+describe("startup storage diagnostics", () => {
+  it.each(["tui", "rpc", "print", "json"].flatMap((mode) =>
+    ["legacy-global", "agent-local", "project-local"].map((storageMode) => [mode, storageMode]),
+  ))("reports %s / %s on every successful empty-store start without stdout or prompt pollution", async (mode, storageMode) => {
+    const root = mkdtempSync(join(tmpdir(), "pi-memory-diagnostic-"));
+    tempDirs.push(root);
+    const home = join(root, "fake-home");
+    vi.mocked(homedir).mockReturnValue(home);
+    const agentDir = storageMode === "legacy-global" ? join(home, ".pi", "agent") : join(home, "custom", "agent");
+    const h = harness({ cwd: join(root, "cwd"), agentDir: `${agentDir}/../agent`, noOverride: true });
+    h.ctx.mode = mode;
+    h.ctx.hasUI = mode === "tui" || mode === "rpc";
+    const dbPath = storageMode === "legacy-global"
+      ? join(home, ".pi", "memory", "memory.db") : join(agentDir, "memory", "memory.db");
+    if (storageMode === "project-local") {
+      // Deliberately equal to the agent default: provenance, not path spelling, defines mode.
+      writeFileSync(join(h.ctx.cwd, ".pi", "settings.json"), JSON.stringify({ "pi-memory": { localPath: join(agentDir, "memory") } }));
+    }
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      await h.start();
+      await h.start();
+      const expected = { type: "pi-memory-storage", agentDir, dbPath, storageMode };
+      if (h.ctx.hasUI) {
+        expect(h.ctx.ui.notify).toHaveBeenCalledTimes(2);
+        for (const [message, level] of h.ctx.ui.notify.mock.calls) {
+          expect(level).toBe("info");
+          expect(JSON.parse(message)).toEqual(expected);
+        }
+        expect(stderr).not.toHaveBeenCalled();
+      } else {
+        expect(h.ctx.ui.notify).not.toHaveBeenCalled();
+        expect(stderr).toHaveBeenCalledTimes(2);
+        for (const [message] of stderr.mock.calls) expect(JSON.parse(String(message))).toEqual(expected);
+      }
+      expect(stdout).not.toHaveBeenCalled();
+      const tool = h.tools.get("memory_stats")!;
+      const result = await tool.execute("call", {}, undefined, undefined, h.ctx as never);
+      expect(result.structuredContent).toEqual({ semantic: 0, events: 0, pinned: 0, agentDir, dbPath, storageMode });
+      expect(Value.Check(tool.outputSchema!, result.structuredContent)).toBe(true);
+      expect(result.content).toEqual([{ type: "text", text: `Memory: 0 facts (0 pinned), 0 events logged\nDB: ${dbPath}\nAgent Dir: ${agentDir}\nStorage mode: ${storageMode}` }]);
+      expect((await h.applyPrompt({ rules: "unchanged" })).sections).toEqual({ rules: "unchanged" });
+    } finally {
+      await h.shutdown();
+      stdout.mockRestore();
+      stderr.mockRestore();
+    }
+  });
+
+  it.each(["print", "json"])("JSON-escapes newlines and control characters on %s stderr", async (mode) => {
+    const root = mkdtempSync(join(tmpdir(), "pi-memory-control-"));
+    tempDirs.push(root);
+    const agentDir = join(root, "agent\n\r\t\u001b-control");
+    const h = harness({ cwd: join(root, "cwd"), agentDir, noOverride: true });
+    h.ctx.mode = mode;
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      await h.start();
+      const message = String(stderr.mock.calls[0][0]);
+      expect(message.split("\n")).toHaveLength(2);
+      expect(message.slice(0, -1)).not.toMatch(/[\u0000-\u001f]/);
+      expect(JSON.parse(message)).toEqual({ type: "pi-memory-storage", agentDir, dbPath: join(agentDir, "memory", "memory.db"), storageMode: "agent-local" });
+      expect(stdout).not.toHaveBeenCalled();
+    } finally { await h.shutdown(); }
+  });
+
+  it.each(["tui", "rpc", "print", "json"])("clears stale dir/mode on %s failure/shutdown and reports only the recovered selection", async (mode) => {
+    const h = harness();
+    h.ctx.mode = mode;
+    h.ctx.hasUI = mode === "tui" || mode === "rpc";
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      await h.start();
+      const settings = join(h.ctx.cwd, ".pi", "settings.json");
+      writeFileSync(settings, "{ invalid sensitive-marker");
+      h.ctx.ui.notify.mockClear();
+      stderr.mockClear();
+      if (h.ctx.hasUI) await h.start();
+      else await expect(h.start()).rejects.toThrow("failed to initialize");
+      expect(h.ctx.ui.notify.mock.calls.filter(([, level]) => level === "info")).toEqual([]);
+      expect(stderr).not.toHaveBeenCalled();
+      await expect(h.tools.get("memory_stats")!.execute("call", {}, undefined, undefined, h.ctx as never)).rejects.toThrow("Memory store not initialized");
+      expect((await h.applyPrompt({ memory: "stale" })).sections).toEqual({});
+      await h.shutdown();
+      await expect(h.tools.get("memory_stats")!.execute("call", {}, undefined, undefined, h.ctx as never)).rejects.toThrow(/^Memory store not initialized$/);
+      rmSync(settings);
+      await h.start();
+      const result = await h.tools.get("memory_stats")!.execute("call", {}, undefined, undefined, h.ctx as never);
+      expect(result.structuredContent).toMatchObject({ agentDir: join(h.ctx.cwd, "agent"), storageMode: "agent-local", dbPath: join(h.ctx.cwd, "agent", "memory", "memory.db") });
+      const diagnostic = h.ctx.hasUI ? h.ctx.ui.notify.mock.calls.at(-1)![0] : String(stderr.mock.calls.at(-1)![0]);
+      expect(JSON.parse(diagnostic)).toMatchObject({
+        agentDir: (result.structuredContent as any).agentDir,
+        dbPath: (result.structuredContent as any).dbPath,
+        storageMode: "agent-local",
+      });
+    } finally { await h.shutdown(); }
+  });
+});
 
 describe("pi-memory extension surface", () => {
   it("keeps every existing memory tool registered", () => {
@@ -460,6 +567,8 @@ describe("pi-memory extension surface", () => {
     const close = vi.spyOn(MemoryStore.prototype, "close");
     await h.start();
     expect((await h.applyPrompt({})).sections.memory).toContain("Old pinned editor");
+    h.ctx.ui.notify.mockClear();
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     const dbPath = join(h.ctx.cwd, "agent", "memory", "memory.db");
     const settings = join(h.ctx.cwd, ".pi", "settings.json");
     let affectedPath = dbPath;
@@ -505,6 +614,8 @@ describe("pi-memory extension surface", () => {
       await expect(h.start()).rejects.toThrow(message);
       expect(h.ctx.ui.notify).not.toHaveBeenCalled();
     }
+    expect(h.ctx.ui.notify.mock.calls.filter(([, level]) => level === "info")).toEqual([]);
+    expect(stderr).not.toHaveBeenCalled();
     expect(close).toHaveBeenCalledTimes(1);
     expect(() => close.mock.contexts[0].stats()).toThrow();
     expect(dbClose).toHaveBeenCalledTimes(stage === "pragma" || stage === "migration" ? 2 : 1);
