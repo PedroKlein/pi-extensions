@@ -1,11 +1,10 @@
-import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { AgentToolResult, ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
 import { buildDeterministicBlock, projectSlug, type ContextBlock } from "./injector.js";
 import { MemoryStore, type MemoryScope } from "./store.js";
+import { DbPathError, errorType, resolveStorage, type ResolvedStorage } from "./db-path-resolver.js";
 
 type ToolResult = AgentToolResult<unknown>;
 
@@ -44,7 +43,13 @@ const MemoryStatsOutput = Type.Object({
   semantic: Type.Integer({ minimum: 0 }),
   events: Type.Integer({ minimum: 0 }),
   pinned: Type.Integer({ minimum: 0 }),
-  dbPath: Type.String({ maxLength: 4096 }),
+  dbPath: Type.String(),
+  agentDir: Type.String(),
+  storageMode: Type.Union([
+    Type.Literal("legacy-global"),
+    Type.Literal("agent-local"),
+    Type.Literal("project-local"),
+  ]),
 });
 
 const memoryQueryContract = {
@@ -59,8 +64,6 @@ const memoryMutationContract = {
   constrainedSampling: { type: "json_schema" as const, strict: "prefer" as const },
   annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
 };
-
-const DEFAULT_DB_PATH = join(homedir(), ".pi", "memory", "memory.db");
 
 function bounded(value: string, maxLength: number): { value: string; truncated: boolean } {
   if (value.length <= maxLength) return { value, truncated: false };
@@ -86,25 +89,36 @@ function stripQuotes<T>(value: T): T {
   return trimmed.slice(1, -1) as unknown as T;
 }
 
-function resolveDbPath(cwd: string): string {
-  try {
-    const settings = JSON.parse(readFileSync(join(cwd, ".pi", "settings.json"), "utf-8"));
-    const localPath = settings?.["pi-memory"]?.localPath;
-    if (typeof localPath === "string" && localPath) {
-      const directory = isAbsolute(localPath) ? localPath : resolve(cwd, localPath);
-      return join(directory, "memory.db");
-    }
-  } catch {
-    // Use the global store when no project override exists.
-  }
-  return DEFAULT_DB_PATH;
+/** SDK hosts must pass the same agentDir here and to createAgentSession. */
+export function createMemoryExtension({ agentDir }: { agentDir: string }): ExtensionFactory {
+  return (pi) => registerMemory(pi, agentDir);
 }
 
+/** CLI entry: Pi resolves its agent directory from the process environment. */
 export default function piMemory(pi: ExtensionAPI): void {
+  registerMemory(pi);
+}
+
+function registerMemory(pi: ExtensionAPI, explicitAgentDir?: string): void {
   let store: MemoryStore | null = null;
   let sessionCwd = "";
-  let resolvedDbPath = DEFAULT_DB_PATH;
+  let storage: ResolvedStorage | null = null;
   let cachedMemoryBlock: ContextBlock | null = null;
+  let initializationError = "";
+
+  const unavailableError = (): Error => new Error(
+    `Memory store not initialized${initializationError ? `: ${initializationError}` : ""}`,
+  );
+
+  const clearStore = (): void => {
+    const previous = store;
+    store = null;
+    cachedMemoryBlock = null;
+    storage = null;
+    sessionCwd = "";
+    initializationError = "";
+    previous?.close();
+  };
 
   const assertCurrentProjectKey = (key: string): void => {
     const project = projectSlug(sessionCwd);
@@ -133,16 +147,36 @@ export default function piMemory(pi: ExtensionAPI): void {
   }));
 
   pi.on("session_start", async (_event, ctx) => {
+    // Preserve the affected path for close errors; clearStore resets public state first.
+    let initializingPath = storage?.dbPath ?? "";
     try {
+      clearStore();
+      initializingPath = "";
+      initializationError = "";
+      if (ctx.hasUI) ctx.ui.setStatus("pi-memory", "");
       sessionCwd = ctx.cwd;
-      resolvedDbPath = resolveDbPath(sessionCwd);
-      store = new MemoryStore(resolvedDbPath);
+      const agentDir = explicitAgentDir ?? getAgentDir();
+      const isProjectTrusted = ctx.isProjectTrusted();
+
+      // Resolve database path with agent-aware isolation
+      storage = resolveStorage({
+        agentDir,
+        cwd: sessionCwd,
+        isProjectTrusted,
+        configDirName: CONFIG_DIR_NAME,
+      });
+
+      initializingPath = storage.dbPath;
+      // Initialize store; failures are not recoverable
+      store = new MemoryStore(storage.dbPath);
       cachedMemoryBlock = buildDeterministicBlock(store, sessionCwd, {
-        onBudgetExceeded: (message) => ctx.ui.notify(message, "warning"),
+        onBudgetExceeded: (message) => {
+          if (ctx.hasUI) ctx.ui.notify(message, "warning");
+        },
       });
 
       const stats = store.stats();
-      if (stats.semantic > 0) {
+      if (ctx.hasUI && stats.semantic > 0) {
         ctx.ui.setStatus("pi-memory", `Memory: ${stats.semantic} facts`);
         setTimeout(() => {
           try {
@@ -166,9 +200,36 @@ export default function piMemory(pi: ExtensionAPI): void {
           { triggerTurn: false },
         );
       }
+
+      // One protocol-safe diagnostic per successful start, including empty stores.
+      // Keep it out of model messages and emit only after all initialization succeeds.
+      const diagnostic = JSON.stringify({
+        type: "pi-memory-storage",
+        agentDir: storage.agentDir,
+        dbPath: storage.dbPath,
+        storageMode: storage.mode,
+      });
+      if (ctx.hasUI) ctx.ui.notify(diagnostic, "info");
+      else process.stderr.write(`${diagnostic}\n`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      ctx.ui.notify(`pi-memory: failed to open store: ${message}`, "warning");
+      const diagnostic = error instanceof DbPathError
+        ? error.message
+        : `${initializingPath || "database path unresolved"}: ${errorType(error)}`;
+      try {
+        clearStore();
+      } catch {
+        // State is already cleared even if closing the connection fails.
+      }
+      initializationError = `pi-memory: failed to initialize: ${diagnostic}`;
+      const failure = new Error(initializationError);
+      // Print/JSON UI methods are no-ops: let Pi report this extension error instead.
+      if (!ctx.hasUI) throw failure;
+      try {
+        ctx.ui.setStatus("pi-memory", "");
+        ctx.ui.notify(initializationError, "error");
+      } catch {
+        throw failure;
+      }
     }
   });
 
@@ -181,8 +242,7 @@ export default function piMemory(pi: ExtensionAPI): void {
   });
 
   pi.on("session_shutdown", async () => {
-    store?.close();
-    store = null;
+    clearStore();
   });
 
   pi.registerTool({
@@ -208,7 +268,7 @@ export default function piMemory(pi: ExtensionAPI): void {
     }),
     outputSchema: MemorySearchOutput,
     async execute(_id, params) {
-      if (!store) throw new Error("Memory store not initialized");
+      if (!store) throw unavailableError();
 
       const limit = params.limit ?? 10;
       const offset = params.offset ?? 0;
@@ -258,7 +318,7 @@ export default function piMemory(pi: ExtensionAPI): void {
       pinned: Type.Optional(Type.Boolean({ description: "Pin for automatic prompt injection" })),
     }),
     async execute(_id, params) {
-      if (!store) throw new Error("Memory store not initialized");
+      if (!store) throw unavailableError();
 
       const key = stripQuotes(params.key);
       const value = stripQuotes(params.value);
@@ -279,7 +339,7 @@ export default function piMemory(pi: ExtensionAPI): void {
       key: Type.String({ description: "Fact key to remove" }),
     }),
     async execute(_id, params) {
-      if (!store) throw new Error("Memory store not initialized");
+      if (!store) throw unavailableError();
 
       const key = stripQuotes(params.key);
       assertCurrentProjectKey(key);
@@ -292,12 +352,12 @@ export default function piMemory(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "memory_stats",
     label: "Memory Stats",
-    description: "Show curated-memory statistics and the active database path.",
+    description: "Show curated-memory statistics, agent directory, database path, and storage mode.",
     ...memoryQueryContract,
     parameters: Type.Object({}),
     outputSchema: MemoryStatsOutput,
     async execute() {
-      if (!store) throw new Error("Memory store not initialized");
+      if (!store) throw unavailableError();
 
       const stats = store.stats();
       const pinned = store.listPinned().length;
@@ -305,10 +365,12 @@ export default function piMemory(pi: ExtensionAPI): void {
         semantic: stats.semantic,
         events: stats.events,
         pinned,
-        dbPath: resolvedDbPath.slice(0, 4096),
+        dbPath: storage!.dbPath,
+        agentDir: storage!.agentDir,
+        storageMode: storage!.mode,
       };
       return dataResult(
-        `Memory: ${stats.semantic} facts (${pinned} pinned), ${stats.events} events logged\nDB: ${resolvedDbPath}`,
+        `Memory: ${stats.semantic} facts (${pinned} pinned), ${stats.events} events logged\nDB: ${storage!.dbPath}\nAgent Dir: ${storage!.agentDir}\nStorage mode: ${storage!.mode}`,
         structuredContent,
       );
     },
@@ -325,7 +387,7 @@ export default function piMemory(pi: ExtensionAPI): void {
       key: Type.Optional(Type.String({ description: "Fact key for pin or unpin" })),
     }),
     async execute(_id, params) {
-      if (!store) throw new Error("Memory store not initialized");
+      if (!store) throw unavailableError();
 
       const action = stripQuotes(params.action);
       const key = stripQuotes(params.key);
