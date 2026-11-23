@@ -1,6 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DatabaseSync } from "node:sqlite";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { MemoryStore } from "../../src/store.js";
@@ -14,8 +14,20 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   store.close();
   rmSync(tmpDir, { recursive: true, force: true });
+});
+
+describe("store initialization", () => {
+  it("closes a connection if initialization fails after opening SQLite", () => {
+    const path = join(tmpDir, "invalid.db");
+    writeFileSync(path, "not a SQLite database");
+    const close = vi.spyOn(DatabaseSync.prototype, "close");
+    expect(() => new MemoryStore(path)).toThrow();
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(() => close.mock.contexts[0].prepare("SELECT 1")).toThrow();
+  });
 });
 
 describe("semantic facts", () => {

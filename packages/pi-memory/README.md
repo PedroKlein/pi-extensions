@@ -57,11 +57,12 @@ Pin only behavior that must be present on every turn. Ordinary facts should stay
 
 ## Storage
 
-The default database is:
+The default database follows the current agent directory from Pi's `getAgentDir()`:
 
-```text
-~/.pi/memory/memory.db
-```
+- Standard `~/.pi/agent`: `~/.pi/memory/memory.db` (unchanged for compatibility).
+- Any other agent directory: `<agent-dir>/memory/memory.db`.
+
+The same agent uses the same default across working directories. No memories are copied or inherited from another agent. This is path-based separation, not an OS sandbox.
 
 To use a project-local store, add this to `<project>/.pi/settings.json`:
 
@@ -73,7 +74,9 @@ To use a project-local store, add this to `<project>/.pi/settings.json`:
 }
 ```
 
-Relative paths resolve from the project working directory.
+`localPath` is a directory; `memory.db` is appended. Absolute paths are supported, and relative paths resolve from the project working directory. This project override is read only when `ctx.isProjectTrusted()` is true and takes precedence over the agent default. Global merged settings are not used for this override.
+
+Missing configuration uses the agent default. Malformed, invalid, or unreadable configuration and database-open failures disable memory and report only the affected path and error type, without falling back to another database or retaining old cached memories.
 
 Existing databases remain compatible. Legacy lesson and Dream tables are left untouched but are no longer read or written by the extension.
 

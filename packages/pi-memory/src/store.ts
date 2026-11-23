@@ -39,9 +39,14 @@ export class MemoryStore {
     if (!existsSync(directory)) mkdirSync(directory, { recursive: true });
 
     this.db = new DatabaseSync(dbPath);
-    this.db.exec("PRAGMA journal_mode = WAL");
-    this.db.exec("PRAGMA busy_timeout = 5000");
-    this.migrate();
+    try {
+      this.db.exec("PRAGMA journal_mode = WAL");
+      this.db.exec("PRAGMA busy_timeout = 5000");
+      this.migrate();
+    } catch (error) {
+      this.db.close();
+      throw error;
+    }
   }
 
   private migrate(): void {

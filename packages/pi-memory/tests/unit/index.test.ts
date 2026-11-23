@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
@@ -7,9 +7,16 @@ import { Value } from "typebox/value";
 import piMemory from "../../src/index.js";
 import { MemoryStore } from "../../src/store.js";
 
+vi.mock("@earendil-works/pi-coding-agent", () => ({
+  CONFIG_DIR_NAME: ".pi",
+  getAgentDir: vi.fn(),
+}));
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
+
 const tempDirs: string[] = [];
 
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -19,17 +26,21 @@ function harness(options?: {
   pinned?: { key: string; value: string };
   facts?: Array<{ key: string; value: string }>;
   cwd?: string;
+  agentDir?: string;
+  trusted?: boolean;
+  noOverride?: boolean;
 }) {
   const cwd = options?.cwd ?? mkdtempSync(join(tmpdir(), "pi-memory-extension-"));
   tempDirs.push(cwd);
-  const memoryDir = join(cwd, "memory");
+  const agentDir = options?.agentDir ?? join(cwd, "agent");
+  const memoryDir = options?.noOverride ? join(agentDir, "memory") : join(cwd, "memory");
   mkdirSync(join(cwd, ".pi"), { recursive: true });
-  writeFileSync(
-    join(cwd, ".pi", "settings.json"),
-    JSON.stringify({
-      "pi-memory": { localPath: memoryDir },
-    }),
-  );
+  if (!options?.noOverride) {
+    writeFileSync(
+      join(cwd, ".pi", "settings.json"),
+      JSON.stringify({ "pi-memory": { localPath: memoryDir } }),
+    );
+  }
   if (options?.pinned || options?.facts?.length) {
     const store = new MemoryStore(join(memoryDir, "memory.db"));
     if (options.pinned) {
@@ -58,6 +69,7 @@ function harness(options?: {
   } as unknown as ExtensionAPI;
   const ctx = {
     cwd,
+    isProjectTrusted: () => options?.trusted ?? true,
     hasUI: false,
     sessionManager: { getBranch: () => [] },
     ui: { notify: vi.fn(), setStatus: vi.fn() },
@@ -68,7 +80,10 @@ function harness(options?: {
     tools,
     registerCommand,
     toolNames: [...tools.keys()],
-    start: () => listeners.get("session_start")?.({ reason: "startup" }, ctx),
+    start: () => {
+      vi.mocked(getAgentDir).mockReturnValue(agentDir);
+      return listeners.get("session_start")?.({ reason: "startup" }, ctx);
+    },
     shutdown: () => listeners.get("session_shutdown")?.({}, ctx),
     applyPrompt: async (sections: Record<string, string>) => {
       const systemPromptOptions = { sections };
@@ -296,6 +311,119 @@ describe("pi-memory extension surface", () => {
         annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
       });
     }
+  });
+
+  it("isolates real temporary databases across agents, including writes and deletes", async () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-memory-agents-"));
+    tempDirs.push(root);
+    const agentA = join(root, "pico", "agent");
+    const a = harness({ cwd: join(root, "project-a"), agentDir: agentA, noOverride: true });
+    const b = harness({ cwd: join(root, "project-b"), agentDir: join(root, "eros", "agent"), noOverride: true });
+    const sameAgent = harness({ cwd: join(root, "project-c"), agentDir: agentA, noOverride: true });
+    await a.start();
+    await b.start();
+    await sameAgent.start();
+    const run = (h: typeof a, name: string, params: any = {}) =>
+      h.tools.get(name)!.execute("call", params, undefined, undefined, h.ctx as never);
+    try {
+      await run(a, "memory_remember", { key: "pref.editor", value: "Pico editor", pinned: true });
+      expect((await run(b, "memory_search")).structuredContent).toMatchObject({ count: 0 });
+      expect((await run(sameAgent, "memory_search")).structuredContent).toMatchObject({
+        results: [expect.objectContaining({ value: "Pico editor" })],
+      });
+      await run(b, "memory_remember", { key: "pref.editor", value: "Eros editor", pinned: true });
+      await run(a, "memory_forget", { key: "pref.editor" });
+      expect((await run(a, "memory_search")).structuredContent).toMatchObject({ count: 0 });
+      expect((await run(b, "memory_search")).structuredContent).toMatchObject({
+        results: [expect.objectContaining({ value: "Eros editor" })],
+      });
+      expect((await b.applyPrompt({})).sections.memory).toContain("Eros editor");
+      expect((await a.applyPrompt({})).sections.memory).toBeUndefined();
+      expect((await run(a, "memory_stats")).structuredContent).toMatchObject({ dbPath: join(agentA, "memory", "memory.db") });
+    } finally {
+      await a.shutdown();
+      await b.shutdown();
+      await sameAgent.shutdown();
+    }
+  });
+
+  it("ignores untrusted overrides and does not use globally merged settings", async () => {
+    const h = harness({ trusted: false, pinned: { key: "pref.editor", value: "Project-only editor" } });
+    await h.start();
+    try {
+      const stats = await h.tools.get("memory_stats")!.execute("call", {}, undefined, undefined, h.ctx as never);
+      expect(stats.structuredContent).toMatchObject({ semantic: 0, dbPath: join(h.ctx.cwd, "agent", "memory", "memory.db") });
+      expect((await h.applyPrompt({})).sections.memory).toBeUndefined();
+    } finally {
+      await h.shutdown();
+    }
+  });
+
+  it("closes the previous store before successful reinitialization and clears cache on shutdown", async () => {
+    const h = harness({ pinned: { key: "pref.editor", value: "Previous editor" } });
+    const close = vi.spyOn(MemoryStore.prototype, "close");
+    await h.start();
+    await h.start();
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(() => close.mock.contexts[0].stats()).toThrow();
+    expect((await h.applyPrompt({})).sections.memory).toContain("Previous editor");
+    await h.shutdown();
+    expect(close).toHaveBeenCalledTimes(2);
+    expect((await h.applyPrompt({ memory: "stale" })).sections.memory).toBeUndefined();
+    await h.shutdown();
+    expect(close).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["config", "database"])("clears old store/cache on %s failure without fallback or stale path", async (failure) => {
+    const h = harness({ pinned: { key: "pref.editor", value: "Old pinned editor" } });
+    const close = vi.spyOn(MemoryStore.prototype, "close");
+    await h.start();
+    expect((await h.applyPrompt({})).sections.memory).toContain("Old pinned editor");
+    const settings = join(h.ctx.cwd, ".pi", "settings.json");
+    const blocked = join(h.ctx.cwd, "blocked");
+    if (failure === "config") {
+      writeFileSync(settings, "{ sensitive-config-marker");
+    } else {
+      writeFileSync(blocked, "not a directory");
+      writeFileSync(settings, JSON.stringify({ "pi-memory": { localPath: blocked } }));
+    }
+    await h.start();
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(() => close.mock.contexts[0].stats()).toThrow();
+    for (const name of h.toolNames) {
+      await expect(h.tools.get(name)!.execute("call", {}, undefined, undefined, h.ctx as never))
+        .rejects.toThrow("Memory store not initialized");
+    }
+    expect((await h.applyPrompt({ rules: "stable", memory: "stale" })).sections).toEqual({ rules: "stable" });
+    expect(existsSync(join(h.ctx.cwd, "agent", "memory"))).toBe(false);
+    const notification = h.ctx.ui.notify.mock.calls.at(-1)!;
+    expect(notification[1]).toBe("error");
+    expect(notification[0]).toContain(failure === "config" ? settings : join(blocked, "memory.db"));
+    expect(notification[0]).not.toContain("sensitive-config-marker");
+    expect(notification[0]).not.toContain(join(h.ctx.cwd, "memory", "memory.db"));
+    // A later resolution failure must not reuse the failed DB path either.
+    writeFileSync(settings, "{ sensitive-config-marker");
+    await h.start();
+    expect(h.ctx.ui.notify.mock.calls.at(-1)![0]).not.toContain(blocked);
+    expect(close).toHaveBeenCalledTimes(1);
+    await h.shutdown();
+  });
+
+  it("closes a newly opened store when subsequent initialization fails", async () => {
+    const h = harness();
+    const close = vi.spyOn(MemoryStore.prototype, "close");
+    vi.spyOn(MemoryStore.prototype, "listPinned").mockImplementationOnce(() => {
+      throw new Error("sensitive-initialization-message");
+    });
+    await h.start();
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(() => close.mock.contexts[0].stats()).toThrow();
+    expect((await h.applyPrompt({ memory: "stale" })).sections).toEqual({});
+    expect(h.ctx.ui.notify.mock.calls.at(-1)![0]).not.toContain("sensitive-initialization-message");
+    await expect(h.tools.get("memory_stats")!.execute("call", {}, undefined, undefined, h.ctx as never))
+      .rejects.toThrow("Memory store not initialized");
+    await h.shutdown();
+    expect(close).toHaveBeenCalledTimes(1);
   });
 
   it("removes a stale memory section when there are no pinned memories", async () => {

@@ -1,11 +1,10 @@
 import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
 import { buildDeterministicBlock, projectSlug, type ContextBlock } from "./injector.js";
 import { MemoryStore, type MemoryScope } from "./store.js";
+import { DbPathError, errorType, resolveDbPath } from "./db-path-resolver.js";
 
 type ToolResult = AgentToolResult<unknown>;
 
@@ -60,8 +59,6 @@ const memoryMutationContract = {
   annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
 };
 
-const DEFAULT_DB_PATH = join(homedir(), ".pi", "memory", "memory.db");
-
 function bounded(value: string, maxLength: number): { value: string; truncated: boolean } {
   if (value.length <= maxLength) return { value, truncated: false };
   return { value: value.slice(0, maxLength), truncated: true };
@@ -86,25 +83,19 @@ function stripQuotes<T>(value: T): T {
   return trimmed.slice(1, -1) as unknown as T;
 }
 
-function resolveDbPath(cwd: string): string {
-  try {
-    const settings = JSON.parse(readFileSync(join(cwd, ".pi", "settings.json"), "utf-8"));
-    const localPath = settings?.["pi-memory"]?.localPath;
-    if (typeof localPath === "string" && localPath) {
-      const directory = isAbsolute(localPath) ? localPath : resolve(cwd, localPath);
-      return join(directory, "memory.db");
-    }
-  } catch {
-    // Use the global store when no project override exists.
-  }
-  return DEFAULT_DB_PATH;
-}
-
 export default function piMemory(pi: ExtensionAPI): void {
   let store: MemoryStore | null = null;
   let sessionCwd = "";
-  let resolvedDbPath = DEFAULT_DB_PATH;
+  let resolvedDbPath = "";
   let cachedMemoryBlock: ContextBlock | null = null;
+
+  const clearStore = (): void => {
+    const previous = store;
+    store = null;
+    cachedMemoryBlock = null;
+    resolvedDbPath = "";
+    previous?.close();
+  };
 
   const assertCurrentProjectKey = (key: string): void => {
     const project = projectSlug(sessionCwd);
@@ -134,8 +125,21 @@ export default function piMemory(pi: ExtensionAPI): void {
 
   pi.on("session_start", async (_event, ctx) => {
     try {
+      clearStore();
+      ctx.ui.setStatus("pi-memory", "");
       sessionCwd = ctx.cwd;
-      resolvedDbPath = resolveDbPath(sessionCwd);
+      const agentDir = getAgentDir();
+      const isProjectTrusted = ctx.isProjectTrusted();
+
+      // Resolve database path with agent-aware isolation
+      resolvedDbPath = resolveDbPath({
+        agentDir,
+        cwd: sessionCwd,
+        isProjectTrusted,
+        configDirName: CONFIG_DIR_NAME,
+      });
+
+      // Initialize store; failures are not recoverable
       store = new MemoryStore(resolvedDbPath);
       cachedMemoryBlock = buildDeterministicBlock(store, sessionCwd, {
         onBudgetExceeded: (message) => ctx.ui.notify(message, "warning"),
@@ -167,8 +171,16 @@ export default function piMemory(pi: ExtensionAPI): void {
         );
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      ctx.ui.notify(`pi-memory: failed to open store: ${message}`, "warning");
+      const diagnostic = error instanceof DbPathError
+        ? error.message
+        : `${resolvedDbPath || "database path unresolved"}: ${errorType(error)}`;
+      try {
+        clearStore();
+      } catch {
+        // State is already cleared even if closing the connection fails.
+      }
+      ctx.ui.setStatus("pi-memory", "");
+      ctx.ui.notify(`pi-memory: failed to initialize: ${diagnostic}`, "error");
     }
   });
 
@@ -181,8 +193,7 @@ export default function piMemory(pi: ExtensionAPI): void {
   });
 
   pi.on("session_shutdown", async () => {
-    store?.close();
-    store = null;
+    clearStore();
   });
 
   pi.registerTool({
