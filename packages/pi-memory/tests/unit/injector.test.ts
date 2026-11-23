@@ -46,6 +46,50 @@ describe("buildDeterministicBlock", () => {
     expect(block.text).not.toMatch(/facts|lessons|memory_search|BEFORE starting/i);
   });
 
+  it.each(["Foo.Bar", "Foo_Bar"])(
+    "injects exact project pins for the real %s repository in stable budgeted order",
+    (name) => {
+      const repo = join(tmpDir, name);
+      const cwd = join(repo, "src", "nested");
+      mkdirSync(join(repo, ".git"), { recursive: true });
+      mkdirSync(cwd, { recursive: true });
+      const slug = name.toLowerCase();
+      const otherSlugs = ["foo", "foobar", "fooxbar", "foo.barista", "foo_barista", "other",
+        slug === "foo.bar" ? "foo_bar" : "foo.bar"];
+      for (const other of otherSlugs) {
+        rememberPinned(`project.${other}.workflow`, "wrong project");
+      }
+      // The trailing dot is part of the prefix boundary.
+      rememberPinned(`project.${slug}`, "not a fact beneath the project prefix");
+      rememberPinned(`PROJECT.${name}.WORKFLOW`, "current workflow");
+      rememberPinned("Pref.Editor", "global editor");
+      const expected = ["pref.editor", `project.${slug}.workflow`];
+
+      expect(projectSlug(cwd)).toBe(slug);
+      const first = buildDeterministicBlock(store, cwd);
+      expect(first.factKeys).toEqual(expected);
+      expect(first.stats.facts).toBe(2);
+      expect(first.budgetExceeded).toBe(false);
+      expect(first.omittedFacts).toBe(0);
+      expect(first.estimatedTokens).toBeLessThanOrEqual(500);
+      expect(buildDeterministicBlock(store, cwd)).toEqual(first);
+
+      store.unpin(`project.${slug}.workflow`);
+      const globalOnly = buildDeterministicBlock(store, cwd);
+      store.pin(`project.${slug}.workflow`);
+      const warning = vi.fn();
+      const limited = buildDeterministicBlock(store, cwd, {
+        tokenBudget: globalOnly.estimatedTokens,
+        onBudgetExceeded: warning,
+      });
+      expect(limited.factKeys).toEqual(["pref.editor"]);
+      expect(limited.estimatedTokens).toBeLessThanOrEqual(globalOnly.estimatedTokens);
+      expect(limited.budgetExceeded).toBe(true);
+      expect(limited.omittedFacts).toBe(1);
+      expect(warning).toHaveBeenCalledOnce();
+    },
+  );
+
   it("resolves the repository name for a managed main worktree", () => {
     const root = mkdtempSync(join(tmpdir(), "pi-memory-worktree-"));
     const repo = join(root, "alpha");

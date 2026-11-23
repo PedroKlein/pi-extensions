@@ -95,6 +95,82 @@ describe("semantic facts", () => {
     expect(store.querySemantic({ query: "editor", scope: "all", project: "alpha" }).entries.map((entry) => entry.key))
       .toEqual(["pref.editor", "project.alpha.editor", "project.beta.editor"]);
   });
+
+  it.each(["foo_bar", "FOO_BAR", "foo.bar", "FOO.BAR"])(
+    "uses the complete literal project prefix for %s in queries, lists, and pages",
+    (project) => {
+      const keys = [
+        "pref.editor",
+        "project.foo_bar.editor-a",
+        "project.foo_bar.editor-b",
+        "project.foo_barista.editor",
+        "project.fooxbar.editor",
+        "project.foo.bar.editor-a",
+        "project.foo.bar.editor-b",
+        "project.foo.barista.editor",
+        "project.foo.editor",
+        "project.foobar.editor",
+        "project.other.editor",
+        `project.${project.toLowerCase()}`,
+      ];
+      for (const key of keys) store.setSemantic(key.toUpperCase(), "shared editor term");
+      const expected = [
+        "pref.editor",
+        `project.${project.toLowerCase()}.editor-a`,
+        `project.${project.toLowerCase()}.editor-b`,
+      ];
+
+      for (const query of [undefined, "EDITOR"]) {
+        for (const scope of [undefined, "current"] as const) {
+          const options = { query, scope, project };
+          const result = store.querySemantic(options);
+          expect(result.total).toBe(3);
+          expect(result.entries.map((entry) => entry.key)).toEqual(expected);
+          for (let offset = 0; offset <= expected.length; offset += 1) {
+            const page = store.querySemantic({ ...options, limit: 1, offset });
+            expect(page.total).toBe(3);
+            expect(page.entries.map((entry) => entry.key)).toEqual(expected.slice(offset, offset + 1));
+          }
+        }
+        const global = store.querySemantic({ query, scope: "global", project });
+        expect(global.total).toBe(1);
+        expect(global.entries.map((entry) => entry.key)).toEqual(["pref.editor"]);
+        const all = store.querySemantic({ query, scope: "all", project, limit: 100 });
+        expect(all.total).toBe(keys.length);
+        expect(all.entries.map((entry) => entry.key)).toEqual([...keys].sort((a, b) => a.localeCompare(b)));
+      }
+      expect(store.querySemantic().entries.map((entry) => entry.key)).toEqual(["pref.editor"]);
+    },
+  );
+
+  it("does not confuse foo with the similar prefix foobar", () => {
+    store.setSemantic("pref.editor", "global editor");
+    store.setSemantic("project.foo.editor", "foo editor");
+    store.setSemantic("project.foobar.editor", "foobar editor");
+
+    expect(store.querySemantic({ project: "FOO" }).entries.map((entry) => entry.key))
+      .toEqual(["pref.editor", "project.foo.editor"]);
+    expect(store.querySemantic({ project: "FOOBAR" }).entries.map((entry) => entry.key))
+      .toEqual(["pref.editor", "project.foobar.editor"]);
+  });
+
+  it.each(["%", "foo%", "foo%bar", "foo\\bar", "foo\\%", "foo\\_bar", "foo_%bar"])(
+    "does not widen scope for an unrepresentable project slug %s",
+    (project) => {
+      store.setSemantic("pref.editor", "shared editor");
+      for (const slug of ["foo_bar", "fooxbar", "foo.bar", "foobar", "other"]) {
+        store.setSemantic(`project.${slug}.editor`, "project editor");
+      }
+      // These slugs cannot be stored as keys; keep the existing key validation.
+      expect(() => store.setSemantic(`project.${project}.editor`, "invalid key"))
+        .toThrow("Memory key");
+      for (const query of [undefined, "editor"]) {
+        const result = store.querySemantic({ query, project });
+        expect(result.total).toBe(1);
+        expect(result.entries.map((entry) => entry.key)).toEqual(["pref.editor"]);
+      }
+    },
+  );
 });
 
 describe("legacy databases", () => {

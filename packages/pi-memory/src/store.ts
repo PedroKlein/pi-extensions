@@ -198,8 +198,8 @@ function semanticScope(scope: MemoryScope, project?: string): { clause: string; 
   if (scope === "all") return { clause: "1 = 1", params: [] };
   if (scope === "global" || !project) return { clause: "key NOT LIKE 'project.%'", params: [] };
   return {
-    clause: "(key NOT LIKE 'project.%' OR key LIKE ?)",
-    params: [`project.${project}.%`],
+    clause: "(key NOT LIKE 'project.%' OR key LIKE ? ESCAPE '\\')",
+    params: [`project.${project.replace(/[\\%_]/g, "\\$&")}.%`],
   };
 }
 

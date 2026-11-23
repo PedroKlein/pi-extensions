@@ -198,6 +198,117 @@ describe("pi-memory extension surface", () => {
     await h.shutdown();
   });
 
+  it.each(["Foo_Bar", "Foo.Bar"])(
+    "keeps writes, searches, pin lists, and injection consistent for the real %s repository",
+    async (name) => {
+      const root = mkdtempSync(join(tmpdir(), "pi-memory-project-scope-"));
+      tempDirs.push(root);
+      const repo = join(root, name);
+      const cwd = join(repo, "src", "nested");
+      mkdirSync(join(repo, ".git"), { recursive: true });
+      mkdirSync(cwd, { recursive: true });
+      // The harness always writes a temporary localPath override before startup.
+      const h = harness({ cwd });
+      const call = (tool: string, params: any) => h.tools.get(tool)!.execute(
+        "call", params, undefined, undefined, h.ctx as never,
+      );
+      const slug = name.toLowerCase();
+      const ownKey = `project.${slug}.editor`;
+      const visibleKeys = ["pref.editor", ownKey];
+      const otherKeys = ["foo", "foobar", "fooxbar", "foo_barista", "foo.barista", "other",
+        slug === "foo_bar" ? "foo.bar" : "foo_bar"]
+        .map((other) => `project.${other}.editor`);
+
+      try {
+        await h.start();
+        expect(h.ctx.ui.notify).not.toHaveBeenCalled();
+        const stats = await call("memory_stats", {});
+        expect(stats.structuredContent).toMatchObject({
+          dbPath: join(cwd, "memory", "memory.db"), semantic: 0,
+        });
+        // Seed pins from other repositories into the same temporary SQLite DB.
+        const seed = new MemoryStore(join(cwd, "memory", "memory.db"));
+        try {
+          for (const key of otherKeys) {
+            seed.setSemantic(key, "other editor");
+            seed.pin(key);
+          }
+        } finally {
+          seed.close();
+        }
+        await call("memory_remember", { key: "Pref.Editor", value: "shared editor", pinned: true });
+        await call("memory_remember", {
+          key: ownKey.toUpperCase(), value: "current editor", pinned: true,
+        });
+
+        for (const query of [undefined, "EDITOR"]) {
+          for (const scope of [undefined, "current"]) {
+            const result = await call("memory_search", { query, scope });
+            expect(result.structuredContent).toMatchObject({
+              project: slug, scope: "current", count: 2, total: 2, nextOffset: null, truncated: false,
+            });
+            expect((result.structuredContent as any).results.map((fact: any) => fact.key))
+              .toEqual(visibleKeys);
+            for (let offset = 0; offset <= 2; offset += 1) {
+              const page = await call("memory_search", { query, scope, limit: 1, offset });
+              expect(page.structuredContent).toMatchObject({
+                total: 2, offset, count: offset < 2 ? 1 : 0,
+                nextOffset: offset === 0 ? 1 : null, truncated: offset === 0,
+              });
+              expect((page.structuredContent as any).results.map((fact: any) => fact.key))
+                .toEqual(visibleKeys.slice(offset, offset + 1));
+            }
+          }
+        }
+        const global = await call("memory_search", { scope: "global" });
+        expect((global.structuredContent as any).results.map((fact: any) => fact.key))
+          .toEqual(["pref.editor"]);
+        const allKeys = [...visibleKeys, ...otherKeys].sort((a, b) => a.localeCompare(b));
+        const all = await call("memory_search", { scope: "all", limit: 100 });
+        expect((all.structuredContent as any).results.map((fact: any) => fact.key)).toEqual(allKeys);
+
+        const pins = await call("memory_pin", { action: "list" });
+        expect(pins.content).toEqual([{ type: "text", text:
+          `📌 pref.editor: shared editor\n📌 ${ownKey}: current editor`,
+        }]);
+        const prompt = await h.applyPrompt({ rules: "stable" });
+        expect(prompt.sections).toEqual({ rules: "stable", memory:
+          `## Pinned Preferences\n- pref.editor: shared editor\n- ${ownKey}: current editor`,
+        });
+        expect((await h.applyPrompt({ ...prompt.sections })).sections).toEqual(prompt.sections);
+
+        for (const key of otherKeys) {
+          for (const [tool, params] of [
+            ["memory_remember", { key, value: "wrong editor", pinned: true }],
+            ["memory_forget", { key }],
+            ["memory_pin", { action: "pin", key }],
+            ["memory_pin", { action: "unpin", key }],
+          ] as const) {
+            await expect(call(tool, params)).rejects.toThrow("current repository slug");
+          }
+        }
+        expect((await call("memory_search", { scope: "all", limit: 100 })).structuredContent)
+          .toEqual(all.structuredContent);
+        expect((await call("memory_pin", { action: "list" })).content).toEqual(pins.content);
+        expect((await h.applyPrompt({ rules: "stable" })).sections).toEqual(prompt.sections);
+
+        await call("memory_pin", { action: "unpin", key: ownKey.toUpperCase() });
+        expect((await h.applyPrompt({})).sections.memory).toBe(
+          "## Pinned Preferences\n- pref.editor: shared editor",
+        );
+        await call("memory_pin", { action: "pin", key: ownKey.toUpperCase() });
+        expect((await h.applyPrompt({ rules: "stable" })).sections).toEqual(prompt.sections);
+        await call("memory_forget", { key: ownKey.toUpperCase() });
+        const afterDelete = await call("memory_search", {});
+        expect((afterDelete.structuredContent as any).results.map((fact: any) => fact.key))
+          .toEqual(["pref.editor"]);
+        expect((await h.applyPrompt({})).sections.memory).not.toContain(ownKey);
+      } finally {
+        await h.shutdown();
+      }
+    },
+  );
+
   it("rejects credential-shaped facts without echoing or persisting the value", async () => {
     const h = harness();
     await h.start();
