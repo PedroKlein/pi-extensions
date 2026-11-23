@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
-import { existsSync, mkdirSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { performance } from "node:perf_hooks";
 
 export interface SemanticEntry {
   key: string;
@@ -36,12 +37,55 @@ export class MemoryStore {
 
   constructor(dbPath: string) {
     const directory = dirname(dbPath);
-    if (!existsSync(directory)) mkdirSync(directory, { recursive: true });
+    mkdirSync(directory, { recursive: true });
 
     this.db = new DatabaseSync(dbPath);
-    this.db.exec("PRAGMA journal_mode = WAL");
-    this.db.exec("PRAGMA busy_timeout = 5000");
-    this.migrate();
+    try {
+      this.db.exec("PRAGMA busy_timeout = 5000");
+      this.enableWal();
+      this.db.exec("PRAGMA temp_store = MEMORY");
+      // Serialize schema inspection and ALTER across independently starting processes.
+      this.withTransaction(() => this.migrate());
+    } catch (error) {
+      try { this.db.close(); } catch { /* Preserve the initialization error. */ }
+      throw error;
+    }
+  }
+
+  private enableWal(budgetMs = 5_000): void {
+    const deadline = performance.now() + budgetMs;
+    // journal_mode can return BUSY immediately despite busy_timeout (lock upgrade).
+    // Bound both retries and SQLite's internal wait by this phase's remaining budget.
+    const wait = new Int32Array(new SharedArrayBuffer(4));
+    let lastBusy: unknown;
+    let failed = false;
+    try {
+      while (true) {
+        const remaining = Math.floor(deadline - performance.now());
+        if (remaining <= 0) throw lastBusy;
+        this.db.exec(`PRAGMA busy_timeout = ${remaining}`);
+        try {
+          this.db.exec("PRAGMA journal_mode = WAL");
+          return;
+        } catch (error) {
+          const sqlite = error as { code?: unknown; errcode?: unknown } | null;
+          if (sqlite?.code !== "ERR_SQLITE_ERROR" || typeof sqlite.errcode !== "number" ||
+            ![5, 6].includes(sqlite.errcode & 0xff)) throw error;
+          lastBusy = error;
+          const rest = deadline - performance.now();
+          if (rest <= 0) throw error;
+          Atomics.wait(wait, 0, 0, Math.min(25, rest));
+          // The loop rechecks the deadline after waiting, before issuing another PRAGMA.
+        }
+      }
+    } catch (error) {
+      failed = true;
+      throw error;
+    } finally {
+      try { this.db.exec("PRAGMA busy_timeout = 5000"); } catch (error) {
+        if (!failed) throw error;
+      }
+    }
   }
 
   private migrate(): void {
@@ -66,10 +110,9 @@ export class MemoryStore {
       );
     `);
 
-    try {
+    const columns = this.db.prepare("PRAGMA table_info(semantic)").all();
+    if (!columns.some((column) => column.name === "pinned")) {
       this.db.exec("ALTER TABLE semantic ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0");
-    } catch {
-      // Existing databases already have this column.
     }
   }
 
