@@ -76,7 +76,11 @@ To use a project-local store, add this to `<project>/.pi/settings.json`:
 
 `localPath` is a directory; `memory.db` is appended. Absolute paths are supported, and relative paths resolve from the project working directory. This project override is read only when `ctx.isProjectTrusted()` is true and takes precedence over the agent default. Global merged settings are not used for this override.
 
-Missing configuration uses the agent default. Malformed, invalid, or unreadable configuration and database-open failures disable memory and report only the affected path and error type, without falling back to another database or retaining old cached memories.
+Only a full normalized/resolved path match selects the standard-agent compatibility path; names, substrings, and prefixes do not. Existing symlink aliases are equivalent. A genuinely missing agent directory is allowed, but dangling symlinks and path/permission errors are initialization failures.
+
+Missing configuration uses the agent default. Malformed, invalid, or unreadable configuration, directory-creation failures, and SQLite open/PRAGMA/migration failures disable memory and report only the affected path and error type, without falling back to another database or retaining old cached memories. TUI/RPC receive an error notification; print/JSON modes receive a thrown initialization error through Pi's extension-error reporting. Unavailable tools retain the same safe diagnostic until initialization succeeds.
+
+All persistent state is in the selected SQLite database: facts, pins, and event history. SQLite WAL/SHM sidecars (`memory.db-wal`, `memory.db-shm`) stay alongside it. SQLite temporary query data stays in memory only (`PRAGMA temp_store = MEMORY`). The extension creates no separate cache, log, lock, backup, or IPC files; its prompt cache is in memory only. Project settings are read, never written.
 
 Existing databases remain compatible. Legacy lesson and Dream tables are left untouched but are no longer read or written by the extension.
 

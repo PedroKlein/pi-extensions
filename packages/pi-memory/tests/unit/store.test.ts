@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DatabaseSync } from "node:sqlite";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { MemoryStore } from "../../src/store.js";
@@ -19,7 +19,79 @@ afterEach(() => {
   rmSync(tmpDir, { recursive: true, force: true });
 });
 
+function createLegacySemantic(path: string): void {
+  const legacy = new DatabaseSync(path);
+  legacy.exec(`
+    CREATE TABLE semantic (
+      key TEXT PRIMARY KEY, value TEXT NOT NULL, confidence REAL NOT NULL DEFAULT 0.8,
+      source TEXT NOT NULL DEFAULT 'user', created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    INSERT INTO semantic (key, value) VALUES ('pref.editor', 'legacy editor');
+  `);
+  legacy.close();
+}
+
 describe("store initialization", () => {
+  it("keeps SQLite temporary query data in memory on the store connection", () => {
+    const db = (store as unknown as { db: DatabaseSync }).db;
+    expect(db.prepare("PRAGMA temp_store").get()).toMatchObject({ temp_store: 2 });
+  });
+
+  it("keeps facts, pins, events and SQLite sidecars at the selected location only", () => {
+    const selected = join(tmpDir, "selected");
+    const isolated = new MemoryStore(join(selected, "memory.db"));
+    try {
+      isolated.setSemantic("pref.editor", "isolated editor");
+      isolated.pin("pref.editor");
+      expect(isolated.stats()).toEqual({ semantic: 1, events: 1 });
+      expect(isolated.listPinned()).toHaveLength(1);
+      expect(readdirSync(selected).sort()).toEqual(["memory.db", "memory.db-shm", "memory.db-wal"]);
+      expect(readdirSync(tmpDir).sort()).toEqual(["selected", "test.db", "test.db-shm", "test.db-wal"]);
+      expect(store.stats()).toEqual({ semantic: 0, events: 0 });
+    } finally {
+      isolated.close();
+    }
+  });
+
+  it.each(["PRAGMA journal_mode", "PRAGMA temp_store = MEMORY", "CREATE TABLE", "ALTER TABLE"])("propagates %s failure and closes the connection", (statement) => {
+    const path = join(tmpDir, "failure.db");
+    createLegacySemantic(path);
+    const failure = Object.assign(new Error("deterministic initialization failure"), { code: "ERR_SQLITE_ERROR" });
+    const exec = DatabaseSync.prototype.exec;
+    const calls = vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(function (sql) {
+      if (sql.includes(statement)) throw failure;
+      return exec.call(this, sql);
+    });
+    const close = vi.spyOn(DatabaseSync.prototype, "close");
+    expect(() => new MemoryStore(path)).toThrow(failure);
+    expect(calls.mock.calls.some(([sql]) => sql.includes(statement))).toBe(true);
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(() => close.mock.contexts[0].prepare("SELECT 1")).toThrow();
+  });
+
+  it("propagates table_info failure and closes the connection", () => {
+    const prepare = DatabaseSync.prototype.prepare;
+    vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (sql) {
+      if (sql === "PRAGMA table_info(semantic)") throw new Error("table_info failed");
+      return prepare.call(this, sql);
+    });
+    const close = vi.spyOn(DatabaseSync.prototype, "close");
+    expect(() => new MemoryStore(join(tmpDir, "pragma.db"))).toThrow("table_info failed");
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(() => close.mock.contexts[0].prepare("SELECT 1")).toThrow();
+  });
+
+  it("does not attempt ALTER when pinned already exists", () => {
+    const exec = vi.spyOn(DatabaseSync.prototype, "exec");
+    const current = new MemoryStore(join(tmpDir, "test.db"));
+    try {
+      expect(exec.mock.calls.some(([sql]) => sql.includes("ALTER TABLE"))).toBe(false);
+    } finally {
+      current.close();
+    }
+  });
+
   it("closes a connection if initialization fails after opening SQLite", () => {
     const path = join(tmpDir, "invalid.db");
     writeFileSync(path, "not a SQLite database");
@@ -110,6 +182,19 @@ describe("semantic facts", () => {
 });
 
 describe("legacy databases", () => {
+  it("adds pinned to an old semantic table without losing facts", () => {
+    const path = join(tmpDir, "old-semantic.db");
+    createLegacySemantic(path);
+    const migrated = new MemoryStore(path);
+    try {
+      expect(migrated.getSemantic("pref.editor")).toMatchObject({ value: "legacy editor", pinned: 0 });
+      expect(migrated.pin("pref.editor")).toBe(true);
+      expect(migrated.listPinned()).toHaveLength(1);
+    } finally {
+      migrated.close();
+    }
+  });
+
   it("opens a database with legacy lesson tables without deleting them", () => {
     store.close();
     const dbPath = join(tmpDir, "legacy.db");

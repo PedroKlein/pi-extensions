@@ -88,6 +88,11 @@ export default function piMemory(pi: ExtensionAPI): void {
   let sessionCwd = "";
   let resolvedDbPath = "";
   let cachedMemoryBlock: ContextBlock | null = null;
+  let initializationError = "";
+
+  const unavailableError = (): Error => new Error(
+    `Memory store not initialized${initializationError ? `: ${initializationError}` : ""}`,
+  );
 
   const clearStore = (): void => {
     const previous = store;
@@ -124,9 +129,13 @@ export default function piMemory(pi: ExtensionAPI): void {
   }));
 
   pi.on("session_start", async (_event, ctx) => {
+    // Preserve the affected path for close errors; clearStore resets public state first.
+    let initializingPath = resolvedDbPath;
     try {
       clearStore();
-      ctx.ui.setStatus("pi-memory", "");
+      initializingPath = "";
+      initializationError = "";
+      if (ctx.hasUI) ctx.ui.setStatus("pi-memory", "");
       sessionCwd = ctx.cwd;
       const agentDir = getAgentDir();
       const isProjectTrusted = ctx.isProjectTrusted();
@@ -139,14 +148,17 @@ export default function piMemory(pi: ExtensionAPI): void {
         configDirName: CONFIG_DIR_NAME,
       });
 
+      initializingPath = resolvedDbPath;
       // Initialize store; failures are not recoverable
       store = new MemoryStore(resolvedDbPath);
       cachedMemoryBlock = buildDeterministicBlock(store, sessionCwd, {
-        onBudgetExceeded: (message) => ctx.ui.notify(message, "warning"),
+        onBudgetExceeded: (message) => {
+          if (ctx.hasUI) ctx.ui.notify(message, "warning");
+        },
       });
 
       const stats = store.stats();
-      if (stats.semantic > 0) {
+      if (ctx.hasUI && stats.semantic > 0) {
         ctx.ui.setStatus("pi-memory", `Memory: ${stats.semantic} facts`);
         setTimeout(() => {
           try {
@@ -173,14 +185,22 @@ export default function piMemory(pi: ExtensionAPI): void {
     } catch (error) {
       const diagnostic = error instanceof DbPathError
         ? error.message
-        : `${resolvedDbPath || "database path unresolved"}: ${errorType(error)}`;
+        : `${initializingPath || "database path unresolved"}: ${errorType(error)}`;
       try {
         clearStore();
       } catch {
         // State is already cleared even if closing the connection fails.
       }
-      ctx.ui.setStatus("pi-memory", "");
-      ctx.ui.notify(`pi-memory: failed to initialize: ${diagnostic}`, "error");
+      initializationError = `pi-memory: failed to initialize: ${diagnostic}`;
+      const failure = new Error(initializationError);
+      // Print/JSON UI methods are no-ops: let Pi report this extension error instead.
+      if (!ctx.hasUI) throw failure;
+      try {
+        ctx.ui.setStatus("pi-memory", "");
+        ctx.ui.notify(initializationError, "error");
+      } catch {
+        throw failure;
+      }
     }
   });
 
@@ -219,7 +239,7 @@ export default function piMemory(pi: ExtensionAPI): void {
     }),
     outputSchema: MemorySearchOutput,
     async execute(_id, params) {
-      if (!store) throw new Error("Memory store not initialized");
+      if (!store) throw unavailableError();
 
       const limit = params.limit ?? 10;
       const offset = params.offset ?? 0;
@@ -269,7 +289,7 @@ export default function piMemory(pi: ExtensionAPI): void {
       pinned: Type.Optional(Type.Boolean({ description: "Pin for automatic prompt injection" })),
     }),
     async execute(_id, params) {
-      if (!store) throw new Error("Memory store not initialized");
+      if (!store) throw unavailableError();
 
       const key = stripQuotes(params.key);
       const value = stripQuotes(params.value);
@@ -290,7 +310,7 @@ export default function piMemory(pi: ExtensionAPI): void {
       key: Type.String({ description: "Fact key to remove" }),
     }),
     async execute(_id, params) {
-      if (!store) throw new Error("Memory store not initialized");
+      if (!store) throw unavailableError();
 
       const key = stripQuotes(params.key);
       assertCurrentProjectKey(key);
@@ -308,7 +328,7 @@ export default function piMemory(pi: ExtensionAPI): void {
     parameters: Type.Object({}),
     outputSchema: MemoryStatsOutput,
     async execute() {
-      if (!store) throw new Error("Memory store not initialized");
+      if (!store) throw unavailableError();
 
       const stats = store.stats();
       const pinned = store.listPinned().length;
@@ -336,7 +356,7 @@ export default function piMemory(pi: ExtensionAPI): void {
       key: Type.Optional(Type.String({ description: "Fact key for pin or unpin" })),
     }),
     async execute(_id, params) {
-      if (!store) throw new Error("Memory store not initialized");
+      if (!store) throw unavailableError();
 
       const action = stripQuotes(params.action);
       const key = stripQuotes(params.key);

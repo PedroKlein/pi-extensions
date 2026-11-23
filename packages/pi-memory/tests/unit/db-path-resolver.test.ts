@@ -7,7 +7,12 @@ import { DbPathError, resolveDbPath } from "../../src/db-path-resolver.js";
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
-  return { ...actual, readFileSync: vi.fn(actual.readFileSync) };
+  return {
+    ...actual,
+    readFileSync: vi.fn(actual.readFileSync),
+    realpathSync: vi.fn(actual.realpathSync),
+    lstatSync: vi.fn(actual.lstatSync),
+  };
 });
 
 let root: string;
@@ -17,6 +22,8 @@ let agentDir: string;
 
 beforeEach(() => {
   vi.mocked(fs.readFileSync).mockClear();
+  vi.mocked(fs.realpathSync).mockClear();
+  vi.mocked(fs.lstatSync).mockClear();
   root = fs.mkdtempSync(join(tmpdir(), "pi-memory-path-"));
   home = join(root, "home");
   cwd = join(root, "project");
@@ -64,6 +71,65 @@ describe("agent-aware defaults (path calculation only)", () => {
     expect(path({ agentDir: alias })).toBe(join(home, ".pi", "memory", "memory.db"));
   });
 
+  it.each([
+    ".pi/agent-copy", "elsewhere/.pi/agent", "pico/agent", "hermes/agent", "pico-hermes-agent",
+  ])("does not match agent names or partial paths: %s", (relative) => {
+    const other = join(home, relative);
+    fs.mkdirSync(other, { recursive: true });
+    expect(path({ agentDir: other })).toBe(join(other, "memory", "memory.db"));
+  });
+
+  it.each(["EACCES", "EPERM", "ENOTDIR", "ELOOP", "EIO"])("rejects canonicalization %s without fallback", (code) => {
+    vi.mocked(fs.realpathSync).mockImplementationOnce(() => {
+      throw Object.assign(new Error("sensitive-path-error"), { code });
+    });
+    expect(() => path()).toThrow(new DbPathError(agentDir, code));
+  });
+
+  it("also rejects errors resolving the standard comparison path", () => {
+    fs.mkdirSync(agentDir, { recursive: true });
+    vi.mocked(fs.realpathSync).mockImplementationOnce((value) => {
+      vi.mocked(fs.realpathSync).mockImplementationOnce(() => {
+        throw Object.assign(new Error("sensitive-path-error"), { code: "EACCES" });
+      });
+      return String(value);
+    });
+    expect(() => path()).toThrow(new DbPathError(join(home, ".pi", "agent"), "EACCES"));
+  });
+
+  it.each(["leaf", "ancestor", "standard"])("rejects a dangling %s symlink", (kind) => {
+    const link = kind === "standard" ? join(home, ".pi", "agent") : join(root, "dangling");
+    fs.mkdirSync(resolve(link, ".."), { recursive: true });
+    fs.symlinkSync(join(root, "missing-target"), link);
+    const selected = kind === "standard" ? agentDir : kind === "ancestor" ? join(link, "agent") : link;
+    expect(() => path({ agentDir: selected })).toThrow(new DbPathError(link, "ENOENT"));
+  });
+
+  it("rejects non-ENOENT lstat errors while checking a missing path", () => {
+    vi.mocked(fs.lstatSync).mockImplementationOnce(() => {
+      throw Object.assign(new Error("sensitive-stat-error"), { code: "EPERM" });
+    });
+    expect(() => path({ isProjectTrusted: false })).toThrow(new DbPathError(agentDir, "EPERM"));
+  });
+
+  it("allows a missing leaf beneath a valid symlink ancestor", () => {
+    const target = join(root, "target");
+    const link = join(root, "valid-link");
+    fs.mkdirSync(target);
+    fs.symlinkSync(target, link);
+    expect(path({ agentDir: join(link, "uncreated-agent") }))
+      .toBe(join(link, "uncreated-agent", "memory", "memory.db"));
+  });
+
+  it("rejects actual ENOTDIR and symlink loops", () => {
+    const file = join(root, "file");
+    fs.writeFileSync(file, "not a directory");
+    expect(() => path({ agentDir: join(file, "agent") })).toThrow("ENOTDIR");
+    const loop = join(root, "loop");
+    fs.symlinkSync(loop, loop);
+    expect(() => path({ agentDir: loop })).toThrow("ELOOP");
+  });
+
   it("isolates two agents and keeps defaults independent of cwd", () => {
     const first = path();
     expect(first).toBe(join(agentDir, "memory", "memory.db"));
@@ -77,6 +143,13 @@ describe("project overrides", () => {
     const directory = kind === "absolute" ? join(root, "override") : "./.pi/memory";
     config({ "pi-memory": { localPath: directory } });
     expect(path()).toBe(join(resolve(cwd, directory), "memory.db"));
+  });
+
+  it.each(["standard", "custom"])("prioritizes localPath above the %s agent rule", (kind) => {
+    config({ "pi-memory": { localPath: "./selected" } });
+    const selected = kind === "standard" ? join(home, ".pi", "agent") : agentDir;
+    expect(path({ agentDir: selected })).toBe(join(cwd, "selected", "memory.db"));
+    expect(fs.realpathSync).not.toHaveBeenCalled();
   });
 
   it("uses CONFIG_DIR_NAME rather than a hardcoded directory", () => {
@@ -135,6 +208,12 @@ describe("invalid configuration never falls back or exposes contents", () => {
   it("rejects an actual directory in place of settings.json", () => {
     fs.mkdirSync(join(cwd, ".pi", "settings.json"));
     expect(() => path()).toThrow("EISDIR");
+  });
+
+  it("rejects a dangling settings ancestor instead of treating it as missing", () => {
+    fs.rmSync(join(cwd, ".pi"), { recursive: true });
+    fs.symlinkSync(join(root, "missing-config-directory"), join(cwd, ".pi"));
+    expect(() => path()).toThrow(new DbPathError(join(cwd, ".pi"), "ENOENT"));
   });
 
   it("rejects existing dangling settings symlinks instead of treating them as missing", () => {

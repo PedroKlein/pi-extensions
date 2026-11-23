@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { existsSync, mkdirSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
 export interface SemanticEntry {
@@ -36,12 +36,13 @@ export class MemoryStore {
 
   constructor(dbPath: string) {
     const directory = dirname(dbPath);
-    if (!existsSync(directory)) mkdirSync(directory, { recursive: true });
+    mkdirSync(directory, { recursive: true });
 
     this.db = new DatabaseSync(dbPath);
     try {
       this.db.exec("PRAGMA journal_mode = WAL");
       this.db.exec("PRAGMA busy_timeout = 5000");
+      this.db.exec("PRAGMA temp_store = MEMORY");
       this.migrate();
     } catch (error) {
       this.db.close();
@@ -71,10 +72,9 @@ export class MemoryStore {
       );
     `);
 
-    try {
+    const columns = this.db.prepare("PRAGMA table_info(semantic)").all();
+    if (!columns.some((column) => column.name === "pinned")) {
       this.db.exec("ALTER TABLE semantic ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0");
-    } catch {
-      // Existing databases already have this column.
     }
   }
 

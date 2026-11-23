@@ -1,6 +1,6 @@
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 export interface DbPathResolverOptions {
   agentDir: string;
@@ -16,7 +16,8 @@ export function errorType(error: unknown): string {
   if (error && typeof error === "object" && "code" in error) {
     const code = error.code;
     if (typeof code === "string" && [
-      "ENOENT", "EACCES", "EPERM", "EISDIR", "ENOTDIR", "ELOOP", "EIO", "ERR_SQLITE_ERROR",
+      "ENOENT", "EACCES", "EPERM", "EISDIR", "ENOTDIR", "ELOOP", "EIO", "ENOSPC",
+      "EROFS", "EMFILE", "ENFILE", "ENAMETOOLONG", "ERR_SQLITE_ERROR",
     ].includes(code)) return code;
   }
   if (error instanceof SyntaxError) return "SyntaxError";
@@ -35,12 +36,35 @@ function normalizeAgentDir(path: string, home: string): string {
   return resolve(path === "~" ? home : path.startsWith("~/") ? join(home, path.slice(2)) : path);
 }
 
+/** ENOENT is absence only if no existing path component is a dangling symlink. */
+function isMissingPath(path: string): boolean {
+  let stat: ReturnType<typeof lstatSync>;
+  try {
+    stat = lstatSync(path);
+  } catch (error) {
+    if (errorType(error) !== "ENOENT") throw new DbPathError(path, errorType(error));
+    const parent = dirname(path);
+    if (parent === path) throw new DbPathError(path, "ENOENT");
+    isMissingPath(parent);
+    return true;
+  }
+  if (stat.isSymbolicLink()) {
+    // lstat does not follow the final link; realpath must succeed for it to be valid.
+    try {
+      realpathSync(path);
+    } catch (error) {
+      throw new DbPathError(path, errorType(error));
+    }
+  }
+  return false;
+}
+
 function canonicalPath(path: string): string {
   try {
     return realpathSync(path);
-  } catch {
-    // Agent directories need not exist yet; lexical normalization still applies.
-    return path;
+  } catch (error) {
+    if (errorType(error) === "ENOENT" && isMissingPath(path)) return resolve(path);
+    throw new DbPathError(path, errorType(error));
   }
 }
 
@@ -69,15 +93,7 @@ function readProjectLocalPath(cwd: string, configDirName: string): string | unde
   try {
     content = readFileSync(settingsPath, "utf-8");
   } catch (error) {
-    if (errorType(error) === "ENOENT") {
-      // A dangling settings symlink is an existing, unreadable config, not absence.
-      try {
-        lstatSync(settingsPath);
-      } catch (statError) {
-        if (errorType(statError) === "ENOENT") return undefined;
-        throw new DbPathError(settingsPath, errorType(statError));
-      }
-    }
+    if (errorType(error) === "ENOENT" && isMissingPath(settingsPath)) return undefined;
     throw new DbPathError(settingsPath, errorType(error));
   }
 

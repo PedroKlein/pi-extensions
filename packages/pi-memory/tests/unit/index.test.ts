@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import * as fs from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
@@ -12,6 +14,11 @@ vi.mock("@earendil-works/pi-coding-agent", () => ({
   getAgentDir: vi.fn(),
 }));
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, mkdirSync: vi.fn(actual.mkdirSync), realpathSync: vi.fn(actual.realpathSync) };
+});
 
 const tempDirs: string[] = [];
 
@@ -376,6 +383,7 @@ describe("pi-memory extension surface", () => {
 
   it.each(["config", "database"])("clears old store/cache on %s failure without fallback or stale path", async (failure) => {
     const h = harness({ pinned: { key: "pref.editor", value: "Old pinned editor" } });
+    h.ctx.hasUI = true;
     const close = vi.spyOn(MemoryStore.prototype, "close");
     await h.start();
     expect((await h.applyPrompt({})).sections.memory).toContain("Old pinned editor");
@@ -411,6 +419,7 @@ describe("pi-memory extension surface", () => {
 
   it("closes a newly opened store when subsequent initialization fails", async () => {
     const h = harness();
+    h.ctx.hasUI = true;
     const close = vi.spyOn(MemoryStore.prototype, "close");
     vi.spyOn(MemoryStore.prototype, "listPinned").mockImplementationOnce(() => {
       throw new Error("sensitive-initialization-message");
@@ -424,6 +433,95 @@ describe("pi-memory extension surface", () => {
       .rejects.toThrow("Memory store not initialized");
     await h.shutdown();
     expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears state before reporting a previous-connection close failure", async () => {
+    const h = harness({ pinned: { key: "pref.editor", value: "Old editor" } });
+    await h.start();
+    const close = MemoryStore.prototype.close;
+    vi.spyOn(MemoryStore.prototype, "close").mockImplementationOnce(function () {
+      close.call(this);
+      throw Object.assign(new Error("sensitive-close-error"), { code: "EIO" });
+    });
+    const diagnostic = `${join(h.ctx.cwd, "memory", "memory.db")}: EIO`;
+    await expect(h.start()).rejects.toThrow(diagnostic);
+    expect((await h.applyPrompt({ memory: "stale" })).sections).toEqual({});
+    await expect(h.tools.get("memory_stats")!.execute("call", {}, undefined, undefined, h.ctx as never))
+      .rejects.toThrow(diagnostic);
+    await h.shutdown();
+  });
+
+  it.each([
+    ["tui", "mkdir"], ["rpc", "pragma"], ["json", "migration"], ["print", "permission"],
+    ["json", "canonical"], ["print", "open"], ["json", "config"],
+  ])("reports %s initialization %s failures and retains the safe diagnostic in every tool", async (mode, stage) => {
+    const h = harness({ pinned: { key: "pref.editor", value: "Old pinned editor" }, noOverride: true });
+    h.ctx.hasUI = mode === "tui" || mode === "rpc";
+    const close = vi.spyOn(MemoryStore.prototype, "close");
+    await h.start();
+    expect((await h.applyPrompt({})).sections.memory).toContain("Old pinned editor");
+    const dbPath = join(h.ctx.cwd, "agent", "memory", "memory.db");
+    const settings = join(h.ctx.cwd, ".pi", "settings.json");
+    let affectedPath = dbPath;
+    let code = "ERR_SQLITE_ERROR";
+    const failure = (code: string) => Object.assign(new Error("sensitive-initialization-marker"), { code });
+    const dbClose = vi.spyOn(DatabaseSync.prototype, "close");
+    if (stage === "mkdir" || stage === "permission") {
+      code = stage === "mkdir" ? "ENOSPC" : "EACCES";
+      vi.mocked(fs.mkdirSync).mockImplementationOnce(() => { throw failure(code); });
+    } else if (stage === "canonical") {
+      code = "EPERM";
+      affectedPath = join(h.ctx.cwd, "agent");
+      vi.mocked(fs.realpathSync).mockImplementationOnce(() => { throw failure(code); });
+    } else if (stage === "config") {
+      code = "SyntaxError";
+      affectedPath = settings;
+      writeFileSync(settings, "{ sensitive-initialization-marker");
+    } else if (stage === "open") {
+      const blocked = join(h.ctx.cwd, "blocked.db-directory");
+      mkdirSync(join(blocked, "memory.db"), { recursive: true });
+      writeFileSync(settings, JSON.stringify({ "pi-memory": { localPath: blocked } }));
+      affectedPath = join(blocked, "memory.db");
+    } else {
+      if (stage === "migration") {
+        // Remove pinned on the temporary DB to force a real ALTER on the next open.
+        const db = new DatabaseSync(dbPath);
+        db.exec("ALTER TABLE semantic DROP COLUMN pinned");
+        db.close();
+        dbClose.mockClear();
+      }
+      const exec = DatabaseSync.prototype.exec;
+      vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(function (sql) {
+        if (sql.includes(stage === "pragma" ? "PRAGMA journal_mode" : "ALTER TABLE")) throw failure(code);
+        return exec.call(this, sql);
+      });
+    }
+    const message = `pi-memory: failed to initialize: ${affectedPath}: ${code}`;
+    if (h.ctx.hasUI) {
+      await expect(h.start()).resolves.toBeUndefined();
+      expect(h.ctx.ui.notify).toHaveBeenLastCalledWith(message, "error");
+    } else {
+      h.ctx.ui.notify.mockClear();
+      await expect(h.start()).rejects.toThrow(message);
+      expect(h.ctx.ui.notify).not.toHaveBeenCalled();
+    }
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(() => close.mock.contexts[0].stats()).toThrow();
+    expect(dbClose).toHaveBeenCalledTimes(stage === "pragma" || stage === "migration" ? 2 : 1);
+    for (const db of dbClose.mock.contexts) expect(() => db.prepare("SELECT 1")).toThrow();
+    for (const name of h.toolNames) {
+      await expect(h.tools.get(name)!.execute("call", {}, undefined, undefined, h.ctx as never))
+        .rejects.toThrow(`Memory store not initialized: ${message}`);
+    }
+    expect((await h.applyPrompt({ rules: "stable", memory: "stale" })).sections).toEqual({ rules: "stable" });
+    // Recover without carrying the initialization diagnostic into the next session.
+    vi.restoreAllMocks();
+    rmSync(settings, { force: true });
+    await h.start();
+    await expect(h.tools.get("memory_stats")!.execute("call", {}, undefined, undefined, h.ctx as never)).resolves.toBeDefined();
+    await h.shutdown();
+    await expect(h.tools.get("memory_stats")!.execute("call", {}, undefined, undefined, h.ctx as never))
+      .rejects.toThrow(/^Memory store not initialized$/);
   });
 
   it("removes a stale memory section when there are no pinned memories", async () => {
